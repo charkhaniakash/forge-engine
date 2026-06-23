@@ -1,10 +1,11 @@
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Header, HTTPException, status, Depends
 from fastapi.responses import JSONResponse
 import structlog
 
 from src.config import settings
+from src.auth import verify_token, extract_token_from_header
 from src.llm.provider import LLMProvider
 
 # Configure structlog
@@ -45,6 +46,24 @@ async def trace_id_middleware(request: Request, call_next):
     return response
 
 
+def verify_agent_token(authorization: str = Header(None)) -> dict:
+    """Dependency to verify Bearer token on internal endpoints."""
+    if not authorization:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authorization header",
+        )
+    
+    token = extract_token_from_header(authorization)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authorization header format",
+        )
+    
+    return verify_token(token)
+
+
 @app.get("/health")
 async def health(request: Request):
     logger.info("health_check", trace_id=request.state.trace_id)
@@ -53,7 +72,6 @@ async def health(request: Request):
 
 @app.get("/readiness")
 async def readiness(request: Request):
-    # TODO: check Backend connectivity, etc.
     logger.info("readiness_check", trace_id=request.state.trace_id)
     return {"status": "ready"}
 
@@ -64,16 +82,27 @@ async def version(request: Request):
 
 
 @app.post("/v1/agent/plan")
-async def create_plan(request: Request):
+async def create_plan(
+    request: Request,
+    payload: dict,
+    token_payload: dict = Depends(verify_agent_token),
+):
     """
-    Stub endpoint for task planning.
-    In Phase 5, this becomes real.
+    Create a task plan. Requires valid Backend JWT.
+    Stub endpoint for Phase 0.
     """
-    logger.info("plan_request_received", trace_id=request.state.trace_id)
+    trace_id = request.state.trace_id
+    logger.info(
+        "plan_request_received",
+        trace_id=trace_id,
+        authenticated_as=token_payload.get("sub"),
+    )
+    
     return {
         "plan_id": "plan-stub-001",
         "status": "planning",
         "message": "Stub response — Phase 0",
+        "trace_id": trace_id,
     }
 
 

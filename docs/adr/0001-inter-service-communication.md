@@ -4,24 +4,29 @@
 
 ## Context
 
-Forge Engine is a two-service system: Backend (Go) and Agent (Python). They must communicate reliably and consistently.
+Forge Engine is a two-service system: Backend (Go) and Agent (Python). They must communicate reliably, securely, and consistently.
 
 ## Decision
 
-Use **REST over HTTP with JSON** for inter-service communication.
+Use **REST over HTTP with JSON** for inter-service communication, protected by **JWT (HS256)** authentication.
 
-- Simpler operational model than gRPC in Phase 0
-- Excellent tooling and debugging support
-- Request/response models codified in OpenAPI
-- Streaming support via Server-Sent Events (SSE) if needed later
+### Protocol Details
 
-## Internal API Contract
+1. **Transport:** HTTP/1.1 with JSON payloads
+2. **Auth:** JWT (HS256) signed by Backend, verified by Agent
+3. **Versioning:** All paths prefixed with `/v1/...`
+4. **Trace ID:** Every request/response carries `X-Trace-ID` header for correlation
+5. **Errors:** Always JSON with `error` field and appropriate HTTP status code
 
-All Go ↔ Python endpoints:
+### JWT Token Flow
 
-1. **Versioned paths:** `/v1/agent/...`, `/v1/backend/...`
-2. **Structured errors:** Always return JSON with `error` field
-3. **Trace ID propagation:** Every request/response carries `X-Trace-ID` header
-4. **Timeouts:** 30s default, configurable per endpoint
+1. Backend (Go) receives a user request
+2. Backend generates a signed JWT token (5-min expiry) containing:
+   - `sub: "backend"` (always Backend as issuer)
+   - `trace_id: "..."` (from X-Trace-ID header)
+   - `iat`, `exp` (issued-at, expiration)
+3. Backend sends token to Agent in `Authorization: Bearer <token>` header
+4. Agent verifies token signature using shared `JWT_SECRET`
+5. Agent rejects if token is expired or signature invalid (401 Unauthorized)
 
-Example:
+### Example: Backend → Agent Request

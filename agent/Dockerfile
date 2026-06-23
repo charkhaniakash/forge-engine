@@ -2,17 +2,18 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install uv for fast dependency installation
+# Install uv
 RUN pip install uv
 
-# Copy pyproject.toml
+# Copy project metadata
 COPY pyproject.toml .
 
-# Install dependencies
-RUN uv pip install --system-site-packages -r <(uv pip compile pyproject.toml)
+# Copy source code
+COPY src ./src
 
-# Copy source
-COPY src src
+# Install project and dependencies
+RUN uv pip install --system -e .
 
 EXPOSE 8000
+
 CMD ["python", "-m", "src.main"]

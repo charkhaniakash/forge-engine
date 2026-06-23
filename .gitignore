@@ -1,0 +1,26 @@
+# Backend
+backend/bin/
+backend/.env.local
+backend/*.db
+
+# Agent
+agent/.venv/
+agent/.env.local
+agent/__pycache__/
+agent/*.egg-info/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+
+# Docker
+.docker/

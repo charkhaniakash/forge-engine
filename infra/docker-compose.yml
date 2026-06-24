@@ -1,6 +1,7 @@
 version: "3.9"
 
 services:
+
   postgres:
     image: postgres:16-alpine
     container_name: forge-postgres
@@ -17,6 +18,10 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - forge-network
+
+
 
   redis:
     image: redis:7-alpine
@@ -28,6 +33,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - forge-network
 
   backend:
     build:

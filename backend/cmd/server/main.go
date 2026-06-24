@@ -10,6 +10,13 @@ import (
     "github.com/golang-jwt/jwt/v5"
     "github.com/joho/godotenv"
     "go.uber.org/zap"
+
+    "github.com/charkhaniakash/forge-engine/backend/internal/db"
+    "github.com/charkhaniakash/forge-engine/backend/internal/handlers"
+    "github.com/charkhaniakash/forge-engine/backend/internal/middleware"
+    "github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
+    "github.com/charkhaniakash/forge-engine/backend/internal/repository"
+    "github.com/gofiber/fiber/v2/middleware/cors"
 )
 
 func main() {
@@ -21,42 +28,74 @@ func main() {
     defer logger.Sync()
     sugar := logger.Sugar()
 
+    // Connect to DB
+    databaseURL := os.Getenv("DATABASE_URL")
+    if databaseURL == "" {
+        log.Fatal("DATABASE_URL not set")
+    }
+
+    dbConn, err := db.NewConnection(databaseURL)
+    if err != nil {
+        log.Fatalf("Database connection failed: %v", err)
+    }
+    defer dbConn.Close()
+
+    sugar.Info("Database connected")
+
+    // Initialize repositories
+    userRepo := repository.NewUserRepository(dbConn)
+    orgRepo := repository.NewOrgRepository(dbConn)
+    invitationRepo := repository.NewInvitationRepository(dbConn)
+
+    // Initialize handlers
+    authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
+    orgHandlers := handlers.NewOrgHandlers(orgRepo, invitationRepo, userRepo, sugar)
+
+    // Initialize rate limiter
+    limiter := ratelimit.NewLimiter(ratelimit.DefaultConfig())
+    _ = limiter // Phase 6: will actually use this
+
     // Create Fiber app
     app := fiber.New(fiber.Config{
         AppName: "Forge Engine Backend",
     })
 
+    // CORS middleware
+    app.Use(cors.New(cors.Config{
+        AllowOrigins: "http://localhost:5173",
+    }))
+
     // Middleware: trace ID
     app.Use(traceIDMiddleware())
-
-    // Health check
+    // Public endpoints
     app.Get("/health", func(c *fiber.Ctx) error {
-        return c.JSON(map[string]string{
-            "status": "ok",
-        })
+        return c.JSON(map[string]string{"status": "ok"})
     })
 
-    // Readiness check
     app.Get("/readiness", func(c *fiber.Ctx) error {
-        // TODO: check DB, Redis, Agent service connectivity
-        return c.JSON(map[string]string{
-            "status": "ready",
-        })
+        return c.JSON(map[string]string{"status": "ready"})
     })
 
-    // Version
     app.Get("/version", func(c *fiber.Ctx) error {
-        return c.JSON(map[string]string{
-            "version": "0.1.0",
-        })
+        return c.JSON(map[string]string{"version": "0.1.0"})
     })
 
-    // Internal: request Agent with JWT
+    // Auth endpoints (public)
+    app.Post("/v1/auth/signup", authHandlers.Signup)
+    app.Post("/v1/auth/login", authHandlers.Login)
+
+    // Protected endpoints
+    app.Post("/v1/orgs", middleware.RequireAuth(sugar), orgHandlers.CreateOrg)
+    app.Get("/v1/orgs", middleware.RequireAuth(sugar), orgHandlers.ListOrgs)
+    app.Get("/v1/orgs/:orgID", middleware.RequireAuth(sugar), orgHandlers.GetOrg)
+    app.Get("/v1/orgs/:orgID/members", middleware.RequireAuth(sugar), orgHandlers.ListMembers)
+    app.Post("/v1/orgs/:orgID/members/invite", middleware.RequireAuth(sugar), orgHandlers.InviteMember)
+
+    // Internal service endpoint (Phase 0 JWT)
     app.Post("/v1/backend/agent-request", func(c *fiber.Ctx) error {
         traceID := c.Locals("trace_id").(string)
         sugar.Infow("agent_request", "trace_id", traceID)
 
-        // Sign a token for Agent
         token, err := signAgentToken(traceID)
         if err != nil {
             sugar.Errorw("failed_to_sign_token", "error", err)
@@ -93,11 +132,11 @@ func traceIDMiddleware() fiber.Handler {
     }
 }
 
-// signAgentToken creates a signed JWT for Agent authentication
+// signAgentToken creates a signed JWT for Agent authentication (Phase 0)
 func signAgentToken(traceID string) (string, error) {
     secret := os.Getenv("JWT_SECRET")
     if secret == "" {
-        secret = "phase-0-insecure-default" // Only for local dev!
+        secret = "phase-0-insecure-default"
     }
 
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{

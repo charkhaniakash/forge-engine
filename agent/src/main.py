@@ -88,10 +88,16 @@ async def create_plan(
     token_payload: dict = Depends(verify_agent_token),
 ):
     """
-    Create a task plan. Requires valid Backend JWT.
-    Stub endpoint for Phase 0.
+    Create a task plan. Requires valid Backend JWT and org context.
+    Stub endpoint for Phase 1.
+    
+    Agent trusts org_id/user_id from Backend, never from client.
     """
     trace_id = request.state.trace_id
+    
+    # TODO: Phase 5 — real planning logic
+    # For now, agent just acknowledges the request with context
+    
     logger.info(
         "plan_request_received",
         trace_id=trace_id,
@@ -101,10 +107,9 @@ async def create_plan(
     return {
         "plan_id": "plan-stub-001",
         "status": "planning",
-        "message": "Stub response — Phase 0",
+        "message": "Stub response — Phase 1",
         "trace_id": trace_id,
     }
-
 
 if __name__ == "__main__":
     import uvicorn

@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD: forge
       POSTGRES_DB: forge
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -48,8 +48,14 @@ services:
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: debug
       JWT_SECRET: phase-0-insecure-default
+      # GitHub App credentials (Phase 2) - set these to enable GitHub integration
+      GITHUB_APP_ID: 4135365
+      GITHUB_WEBHOOK_SECRET: forge-engine-super-secret-2025
+      GITHUB_APP_PRIVATE_KEY_PATH: /app/secrets/github-private-key.pem
     ports:
       - "8080:8080"
+    volumes:
+      - ./secrets/github-private-key.pem:/app/secrets/github-private-key.pem:ro
     depends_on:
       postgres:
         condition: service_healthy

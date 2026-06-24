@@ -37,3 +37,8 @@ build/
 
 # Docker
 .docker/
+
+
+.env
+.env.local
+*.pem

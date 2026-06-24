@@ -12,6 +12,7 @@ import (
     "go.uber.org/zap"
 
     "github.com/charkhaniakash/forge-engine/backend/internal/db"
+    "github.com/charkhaniakash/forge-engine/backend/internal/github"
     "github.com/charkhaniakash/forge-engine/backend/internal/handlers"
     "github.com/charkhaniakash/forge-engine/backend/internal/middleware"
     "github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
@@ -46,10 +47,39 @@ func main() {
     userRepo := repository.NewUserRepository(dbConn)
     orgRepo := repository.NewOrgRepository(dbConn)
     invitationRepo := repository.NewInvitationRepository(dbConn)
+    githubInstallationRepo := repository.NewGitHubInstallationRepository(dbConn)
+    githubRepoRepo := repository.NewGitHubRepoRepository(dbConn)
 
     // Initialize handlers
     authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
     orgHandlers := handlers.NewOrgHandlers(orgRepo, invitationRepo, userRepo, sugar)
+
+    // Initialize GitHub components (Phase 2)
+    var appAuth *github.AppAuth
+    var githubClient *github.Client
+    var tokenCache *github.TokenCache
+    var githubHandlers *handlers.GitHubHandlers
+
+    if os.Getenv("GITHUB_APP_ID") != "" {
+        var err error
+        appAuth, err = github.NewAppAuth()
+        if err != nil {
+            sugar.Warnw("failed_to_init_github_app_auth", "error", err)
+        }
+
+        githubClient, err = github.NewClient()
+        if err != nil {
+            sugar.Warnw("failed_to_init_github_client", "error", err)
+        }
+
+        if appAuth != nil && githubClient != nil {
+            tokenCache = github.NewTokenCache(appAuth, githubClient, githubInstallationRepo, sugar)
+            githubHandlers = handlers.NewGitHubHandlers(githubInstallationRepo, githubRepoRepo, tokenCache, githubClient, sugar)
+            sugar.Info("GitHub integration initialized")
+        }
+    } else {
+        sugar.Info("GitHub App credentials not set - GitHub integration disabled")
+    }
 
     // Initialize rate limiter
     limiter := ratelimit.NewLimiter(ratelimit.DefaultConfig())
@@ -90,6 +120,16 @@ func main() {
     app.Get("/v1/orgs/:orgID", middleware.RequireAuth(sugar), orgHandlers.GetOrg)
     app.Get("/v1/orgs/:orgID/members", middleware.RequireAuth(sugar), orgHandlers.ListMembers)
     app.Post("/v1/orgs/:orgID/members/invite", middleware.RequireAuth(sugar), orgHandlers.InviteMember)
+
+    // GitHub endpoints (Phase 2)
+    if githubHandlers != nil {
+        // Public webhook endpoint
+        app.Post("/v1/github/webhook", githubHandlers.Webhook)
+        // Protected GitHub management endpoints
+        app.Post("/v1/github/installations/link", middleware.RequireAuth(sugar), githubHandlers.LinkInstallation)
+        app.Get("/v1/github/repos", middleware.RequireAuth(sugar), githubHandlers.ListRepos)
+        app.Post("/v1/github/sync", middleware.RequireAuth(sugar), githubHandlers.SyncRepos)
+    }
 
     // Internal service endpoint (Phase 0 JWT)
     app.Post("/v1/backend/agent-request", func(c *fiber.Ctx) error {

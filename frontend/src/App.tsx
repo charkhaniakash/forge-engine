@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import './App.css'
 
 interface AuthState {
@@ -6,6 +6,16 @@ interface AuthState {
   user: any
   org: any
   role: string | null
+}
+
+interface GitHubRepo {
+  id: string
+  repo_name: string
+  repo_full_name: string
+  repo_owner: string
+  default_branch: string
+  private: boolean
+  last_synced_at: string | null
 }
 
 export default function App() {
@@ -171,6 +181,81 @@ function LoginForm({ onSubmit, onCancel, loading, error }: any) {
 }
 
 function Dashboard({ user, org, role, token, onLogout }: any) {
+  const [repos, setRepos] = useState<GitHubRepo[]>([])
+  const [loadingRepos, setLoadingRepos] = useState(false)
+  const [githubError, setGithubError] = useState<string | null>(null)
+
+  const loadRepos = async () => {
+    setLoadingRepos(true)
+    setGithubError(null)
+    try {
+      const response = await fetch('http://localhost:8080/v1/github/repos', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setGithubError(data.error || 'Failed to load repos')
+        return
+      }
+      setRepos(data)
+    } catch (err: any) {
+      setGithubError(err.message)
+    } finally {
+      setLoadingRepos(false)
+    }
+  }
+
+  const handleLinkInstallation = async () => {
+    const installationIdInput = prompt('Enter GitHub Installation ID:')
+    if (!installationIdInput) return
+
+    setLoadingRepos(true)
+    setGithubError(null)
+    try {
+      const response = await fetch('http://localhost:8080/v1/github/installations/link', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ github_installation_id: parseInt(installationIdInput) }),
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setGithubError(data.error || 'Failed to link installation')
+        return
+      }
+      alert('Installation linked successfully!')
+      loadRepos()
+    } catch (err: any) {
+      setGithubError(err.message)
+    } finally {
+      setLoadingRepos(false)
+    }
+  }
+
+  const handleSyncRepos = async () => {
+    setLoadingRepos(true)
+    setGithubError(null)
+    try {
+      const response = await fetch('http://localhost:8080/v1/github/sync', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setGithubError(data.error || 'Failed to sync repos')
+        return
+      }
+      alert('Sync started! Check back in a moment.')
+      setTimeout(loadRepos, 3000)
+    } catch (err: any) {
+      setGithubError(err.message)
+    } finally {
+      setLoadingRepos(false)
+    }
+  }
+
   return (
     <div style={{ padding: '2rem', fontFamily: 'sans-serif', maxWidth: '800px', margin: '0 auto' }}>
       <h2>Dashboard</h2>
@@ -179,6 +264,42 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
         <p><strong>Organization:</strong> {org.name}</p>
         <p><strong>Role:</strong> {role}</p>
       </div>
+
+      <div style={{ marginBottom: '2rem' }}>
+        <h3>GitHub Integration (Phase 2)</h3>
+        {githubError && <div style={{ color: 'red', marginBottom: '1rem' }}>{githubError}</div>}
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+          <button onClick={handleLinkInstallation} disabled={loadingRepos}>
+            Link GitHub Installation
+          </button>
+          <button onClick={loadRepos} disabled={loadingRepos}>
+            Load Repos
+          </button>
+          <button onClick={handleSyncRepos} disabled={loadingRepos}>
+            Sync Repos
+          </button>
+        </div>
+
+        {loadingRepos && <p>Loading...</p>}
+
+        {repos.length > 0 && (
+          <div>
+            <h4>Connected Repositories ({repos.length})</h4>
+            <ul style={{ listStyle: 'none', padding: 0 }}>
+              {repos.map((repo) => (
+                <li key={repo.id} style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
+                  <strong>{repo.repo_full_name}</strong>
+                  <br />
+                  <small>Owner: {repo.repo_owner} | Branch: {repo.default_branch} | Private: {repo.private ? 'Yes' : 'No'}</small>
+                  {repo.last_synced_at && <br />}
+                  {repo.last_synced_at && <small>Last synced: {new Date(repo.last_synced_at).toLocaleString()}</small>}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
       <div>
         <button onClick={onLogout} style={{ backgroundColor: '#e74c3c', color: 'white' }}>Log Out</button>
       </div>

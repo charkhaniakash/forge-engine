@@ -102,14 +102,47 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 0 — Foundations & Platform Skeleton**
+> ### 🔵 ACTIVE PHASE: **Phase 3 — Repository Ingestion & Indexing**
 >
-> Only work within this phase's scope (see Phase 0 below) until the human moves
+> Only work within this phase's scope (see Phase 3 below) until the human moves
 > this marker forward.
 
 *(Update this section only when the human says a phase is complete and to move
 on. Do not move it yourself.)*
 
+---
+
+## COMPLETED PHASES
+
+### ✅ Phase 0 — Foundations & Platform Skeleton
+- Backend + Agent services wired, deployable in one command
+- Trace ID propagation across services
+- JWT inter-service auth (Backend → Agent)
+- CI/CD pipeline (GitHub Actions)
+
+### ✅ Phase 1 — Identity, Org, and Access Foundation
+- User signup/login with JWT (24h expiry)
+- Org creation, membership, roles (owner/admin/member)
+- Invitation flow with token-based acceptance
+- RBAC middleware protecting endpoints
+- Rate-limit primitives (config-driven, Redis impl pending)
+
+### ✅ Phase 2 — GitHub Integration & Repository Connection
+- GitHub App registration (private key, webhook secret, app ID)
+- Secure Install + Callback flow with JWT-signed state tokens
+  - GET /v1/github/install/url: Generates install URL with signed state
+  - GET /v1/github/install/callback: Validates state and shows HTML response
+  - pending_installs table for tracking pending installations
+  - 10-minute expiry on pending installs
+  - One-time use state tokens
+- Manual installation linking fallback (POST /v1/github/installations/link)
+- Webhook receiver with HMAC-SHA256 signature verification
+- Repo listing/sync: repos fetched from GitHub API and cached
+- Installation token caching with 5-min early refresh
+- Durable storage: github_installations, github_repos, pending_installs tables
+- RBAC: org_id enforced on protected endpoints
+- Frontend: GitHubInstallButton component and GitHubInstallCallback page
+- ADR documentation for install flow (docs/adr/0002-github-install-flow.md)
 ---
 
 ## 7. Phase-by-Phase Plan

@@ -1,4 +1,6 @@
 import { useState } from 'react'
+import { GitHubInstallButton } from './components/GitHubInstallButton'
+import { GitHubInstallCallback } from './pages/GitHubInstallCallback'
 import './App.css'
 
 interface AuthState {
@@ -25,9 +27,15 @@ export default function App() {
     org: null,
     role: null,
   })
-  const [screen, setScreen] = useState<'home' | 'signup' | 'login' | 'dashboard'>('home')
+  const [screen, setScreen] = useState<'home' | 'signup' | 'login' | 'dashboard' | 'callback'>('home')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Check if we're on the callback route
+  const isCallback = window.location.pathname === '/github/install/callback'
+  if (isCallback) {
+    return <GitHubInstallCallback />
+  }
 
   // Signup
   const handleSignup = async (email: string, password: string, name: string) => {
@@ -205,35 +213,6 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
     }
   }
 
-  const handleLinkInstallation = async () => {
-    const installationIdInput = prompt('Enter GitHub Installation ID:')
-    if (!installationIdInput) return
-
-    setLoadingRepos(true)
-    setGithubError(null)
-    try {
-      const response = await fetch('http://localhost:8080/v1/github/installations/link', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ github_installation_id: parseInt(installationIdInput) }),
-      })
-      const data = await response.json()
-      if (!response.ok) {
-        setGithubError(data.error || 'Failed to link installation')
-        return
-      }
-      alert('Installation linked successfully!')
-      loadRepos()
-    } catch (err: any) {
-      setGithubError(err.message)
-    } finally {
-      setLoadingRepos(false)
-    }
-  }
-
   const handleSyncRepos = async () => {
     setLoadingRepos(true)
     setGithubError(null)
@@ -268,10 +247,8 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
       <div style={{ marginBottom: '2rem' }}>
         <h3>GitHub Integration (Phase 2)</h3>
         {githubError && <div style={{ color: 'red', marginBottom: '1rem' }}>{githubError}</div>}
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-          <button onClick={handleLinkInstallation} disabled={loadingRepos}>
-            Link GitHub Installation
-          </button>
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
+          <GitHubInstallButton token={token} onError={(err) => setGithubError(err)} />
           <button onClick={loadRepos} disabled={loadingRepos}>
             Load Repos
           </button>

@@ -82,3 +82,13 @@ type GitHubRepo struct {
     CreatedAt       time.Time  `json:"created_at"`
     UpdatedAt       time.Time  `json:"updated_at"`
 }
+
+// PendingInstall represents a pending GitHub App installation awaiting webhook confirmation
+type PendingInstall struct {
+    ID         string    `json:"id"`
+    OrgID      string    `json:"org_id"`
+    StateToken string    `json:"state_token"`
+    CSRFToken  string    `json:"csrf_token"`
+    CreatedAt  time.Time `json:"created_at"`
+    ExpiresAt  time.Time `json:"expires_at"`
+}

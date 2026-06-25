@@ -50,8 +50,10 @@ services:
       JWT_SECRET: phase-0-insecure-default
       # GitHub App credentials (Phase 2) - set these to enable GitHub integration
       GITHUB_APP_ID: 4135365
+      GITHUB_APP_NAME: ForgeRepoSync-Akash
       GITHUB_WEBHOOK_SECRET: forge-engine-super-secret-2025
       GITHUB_APP_PRIVATE_KEY_PATH: /app/secrets/github-private-key.pem
+      GITHUB_INSTALL_STATE_SECRET: forge-engine-install-state-secret
     ports:
       - "8080:8080"
     volumes:

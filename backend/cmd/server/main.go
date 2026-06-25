@@ -49,6 +49,7 @@ func main() {
     invitationRepo := repository.NewInvitationRepository(dbConn)
     githubInstallationRepo := repository.NewGitHubInstallationRepository(dbConn)
     githubRepoRepo := repository.NewGitHubRepoRepository(dbConn)
+    pendingInstallRepo := repository.NewPendingInstallRepository(dbConn)
 
     // Initialize handlers
     authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -74,7 +75,28 @@ func main() {
 
         if appAuth != nil && githubClient != nil {
             tokenCache = github.NewTokenCache(appAuth, githubClient, githubInstallationRepo, sugar)
-            githubHandlers = handlers.NewGitHubHandlers(githubInstallationRepo, githubRepoRepo, tokenCache, githubClient, sugar)
+            
+            // Get GitHub App name and state secret
+            githubAppName := os.Getenv("GITHUB_APP_NAME")
+            if githubAppName == "" {
+                githubAppName = "forge-engine" // default
+            }
+            
+            stateSecret := os.Getenv("GITHUB_INSTALL_STATE_SECRET")
+            if stateSecret == "" {
+                stateSecret = os.Getenv("JWT_SECRET") // fallback to JWT_SECRET
+            }
+            
+            githubHandlers = handlers.NewGitHubHandlers(
+                githubInstallationRepo,
+                githubRepoRepo,
+                pendingInstallRepo,
+                tokenCache,
+                githubClient,
+                sugar,
+                githubAppName,
+                stateSecret,
+            )
             sugar.Info("GitHub integration initialized")
         }
     } else {
@@ -125,7 +147,10 @@ func main() {
     if githubHandlers != nil {
         // Public webhook endpoint
         app.Post("/v1/github/webhook", githubHandlers.Webhook)
+        // Public callback endpoint (GitHub redirects here)
+        app.Get("/v1/github/install/callback", githubHandlers.InstallCallback)
         // Protected GitHub management endpoints
+        app.Get("/v1/github/install/url", middleware.RequireAuth(sugar), githubHandlers.GetInstallURL)
         app.Post("/v1/github/installations/link", middleware.RequireAuth(sugar), githubHandlers.LinkInstallation)
         app.Get("/v1/github/repos", middleware.RequireAuth(sugar), githubHandlers.ListRepos)
         app.Post("/v1/github/sync", middleware.RequireAuth(sugar), githubHandlers.SyncRepos)

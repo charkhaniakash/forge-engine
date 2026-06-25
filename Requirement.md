@@ -224,6 +224,18 @@ credential or proxied path from Backend, never raw GitHub App keys.
 fetch a fresh installation token for any connected repo on demand; webhooks are
 verified and durably recorded.
 
+
+### Phase 2 — Hardening (added)
+
+Purpose: Operational and safety hardening to make the GitHub App install/callback/webhook flow production-ready before Phase 3 ingestion.
+Changes introduced:
+Webhook idempotency: webhook_deliveries table + repository to record delivery_id and drop duplicate deliveries.
+Pending install hardening: added state_token_hash, callback_seen, used_at columns (migration 004_pending_installs_harden.up.sql) and single‑use enforcement.
+Callback/Correlation flow: GET /v1/github/install/callback now validates signed state, marks pending install as callback_seen; installation.created webhook atomically correlates callback‑seen pending installs and inserts github_installations (transactional, marks pending install used).
+Recovery / relink: admin POST /v1/github/admin/relink (admin-only) to recreate missing github_installations for installs present on GitHub but absent locally.
+Operational docs & tests: added integration tests for install→callback→webhook→sync, and 0002-github-install-flow.md updated to reflect the flow.
+Why: prevents data loss after DB resets, avoids duplicate processing from webhook retries, and provides an operational recovery path. These are required before starting Phase 3 indexing work.
+
 ---
 
 ### Phase 3 — Repository Ingestion & Indexing

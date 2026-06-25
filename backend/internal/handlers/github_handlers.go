@@ -5,6 +5,7 @@ import (
 	// "crypto/hmac"
 	// "crypto/sha256"
 	// "encoding/hex"
+    "database/sql"
 	"fmt"
 	// "os"
 	"time"
@@ -18,35 +19,38 @@ import (
 )
 
 type GitHubHandlers struct {
-	installationRepo    *repository.GitHubInstallationRepository
-	repoRepo            *repository.GitHubRepoRepository
-	pendingInstallRepo  *repository.PendingInstallRepository
-	tokenCache          *github.TokenCache
-	client              *github.Client
-	logger              *zap.SugaredLogger
-	githubAppName       string
-	stateSecret         string
+    installationRepo    *repository.GitHubInstallationRepository
+    repoRepo            *repository.GitHubRepoRepository
+    pendingInstallRepo  *repository.PendingInstallRepository
+    tokenCache          *github.TokenCache
+    client              *github.Client
+    logger              *zap.SugaredLogger
+    githubAppName       string
+    stateSecret         string
+    webhookDeliveryRepo *repository.WebhookDeliveryRepository
 }
 
 func NewGitHubHandlers(
-	installationRepo *repository.GitHubInstallationRepository,
-	repoRepo *repository.GitHubRepoRepository,
-	pendingInstallRepo *repository.PendingInstallRepository,
-	tokenCache *github.TokenCache,
-	client *github.Client,
-	logger *zap.SugaredLogger,
-	githubAppName string,
-	stateSecret string,
+    installationRepo *repository.GitHubInstallationRepository,
+    repoRepo *repository.GitHubRepoRepository,
+    pendingInstallRepo *repository.PendingInstallRepository,
+    tokenCache *github.TokenCache,
+    client *github.Client,
+    logger *zap.SugaredLogger,
+    githubAppName string,
+    stateSecret string,
+    webhookDeliveryRepo *repository.WebhookDeliveryRepository,
 ) *GitHubHandlers {
 	return &GitHubHandlers{
-		installationRepo:   installationRepo,
-		repoRepo:           repoRepo,
-		pendingInstallRepo: pendingInstallRepo,
-		tokenCache:         tokenCache,
-		client:             client,
-		logger:             logger,
-		githubAppName:      githubAppName,
-		stateSecret:        stateSecret,
+		installationRepo:    installationRepo,
+		repoRepo:            repoRepo,
+		pendingInstallRepo:  pendingInstallRepo,
+		tokenCache:          tokenCache,
+		client:              client,
+		logger:              logger,
+		githubAppName:       githubAppName,
+		stateSecret:         stateSecret,
+		webhookDeliveryRepo: webhookDeliveryRepo,
 	}
 }
 
@@ -101,32 +105,80 @@ func (h *GitHubHandlers) handleInstallationEvent(c *fiber.Ctx, event *github.Ins
 	ctx := c.Context()
 
 	switch event.Action {
+
 	case "created":
-		// Installation created - try to correlate with pending install
 		h.logger.Infow("installation_created",
 			"github_installation_id", event.Installation.ID,
 			"github_account", event.Installation.Account.Login,
 			"trace_id", traceID,
 		)
 
-		// Try to find a pending install for this org
-		// Since we don't have the org_id in the webhook, we need to look for recent pending installs
-		// In a production system, you'd have a better correlation mechanism
-		// For now, we'll look for any recent pending install that hasn't expired
+		pendingInstall, err := h.pendingInstallRepo.GetByCallbackSeen(ctx)
+		if err == sql.ErrNoRows {
+			h.logger.Infow("callback_not_seen_yet",
+				"github_installation_id", event.Installation.ID,
+				"trace_id", traceID,
+			)
 
-		// Get all recent pending installs (last 15 minutes)
-		// This is a simplified approach - in production you'd have a more sophisticated correlation
-		// For now, we'll just create the installation if we can't correlate
-		// The manual LinkInstallation endpoint can still be used as a fallback
+			// GitHub may send webhook before callback.
+			// Don't fail the webhook.
+			return c.Status(200).JSON(fiber.Map{
+				"message": "waiting for callback",
+			})
+		}
 
-		// For this implementation, we'll skip auto-correlation and rely on the manual linking
-		// This is acceptable for the scope of this task
-		h.logger.Infow("installation_created_pending_correlation_skipped",
+		if err != nil {
+			h.logger.Errorw("failed_to_lookup_pending_install_for_webhook",
+				"error", err,
+				"trace_id", traceID,
+			)
+			return c.Status(500).JSON(fiber.Map{
+				"error": "failed to correlate installation",
+			})
+		}
+
+		if pendingInstall == nil {
+			h.logger.Infow("installation_created_no_matching_pending_install",
+				"github_installation_id", event.Installation.ID,
+				"trace_id", traceID,
+			)
+			return c.Status(200).JSON(fiber.Map{"message": "installation created but no callback-matched pending install found"})
+		}
+
+		installation, err := h.installationRepo.CreateInstallation(
+			ctx,
+			pendingInstall.OrgID,
+			event.Installation.ID,
+			event.Installation.Account.ID,
+			event.Installation.Account.Login,
+		)
+		if err != nil {
+			h.logger.Errorw("failed_to_create_installation_from_webhook",
+				"error", err,
+				"org_id", pendingInstall.OrgID,
+				"github_installation_id", event.Installation.ID,
+				"trace_id", traceID,
+			)
+			return c.Status(500).JSON(fiber.Map{"error": "failed to create installation"})
+		}
+
+		if err := h.pendingInstallRepo.MarkUsed(ctx, pendingInstall.ID); err != nil {
+			h.logger.Warnw("failed_to_mark_pending_install_used",
+				"error", err,
+				"pending_install_id", pendingInstall.ID,
+				"trace_id", traceID,
+			)
+		}
+
+		h.logger.Infow("installation_created_linked",
+			"installation_id", installation.ID,
+			"org_id", pendingInstall.OrgID,
 			"github_installation_id", event.Installation.ID,
 			"trace_id", traceID,
 		)
 
-		return c.Status(200).JSON(fiber.Map{"message": "installation created - use manual linking or implement correlation"})
+		go h.syncReposForInstallation(installation.ID, event.Installation.ID, traceID)
+		return c.Status(201).JSON(fiber.Map{"message": "installation linked"})
 
 	case "deleted":
 		// Installation deleted - remove from our system
@@ -388,141 +440,127 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 
 // GetInstallURL generates a GitHub App installation URL with a signed state token
 func (h *GitHubHandlers) GetInstallURL(c *fiber.Ctx) error {
-	traceID := c.Locals("trace_id").(string)
-	orgID := c.Locals("org_id").(string)
+    traceID := c.Locals("trace_id").(string)
+    orgID := c.Locals("org_id").(string)
 
-	ctx := c.Context()
+    ctx := c.Context()
 
-	// Create pending install record with 10 minute expiry
-	pendingInstall, err := h.pendingInstallRepo.CreatePendingInstall(ctx, orgID, 10*time.Minute)
-	if err != nil {
-		h.logger.Errorw("failed_to_create_pending_install",
-			"error", err,
-			"org_id", orgID,
-			"trace_id", traceID,
-		)
-		return c.Status(500).JSON(fiber.Map{"error": "failed to create pending install"})
-	}
+    pendingInstall, rawStateToken, err := h.pendingInstallRepo.CreatePendingInstall(ctx, orgID, 10*time.Minute)
+    if err != nil {
+        h.logger.Errorw("failed_to_create_pending_install",
+            "error", err,
+            "org_id", orgID,
+            "trace_id", traceID,
+        )
+        return c.Status(500).JSON(fiber.Map{"error": "failed to create pending install"})
+    }
 
-	// Create JWT state token containing org_id and state_token
-	claims := jwt.MapClaims{
-		"org_id":      orgID,
-		"state_token": pendingInstall.StateToken,
-		"exp":         pendingInstall.ExpiresAt.Unix(),
-		"iat":         time.Now().Unix(),
-	}
+    claims := jwt.MapClaims{
+        "org_id":      orgID,
+        "state_token": rawStateToken,
+        "exp":         pendingInstall.ExpiresAt.Unix(),
+        "iat":         time.Now().Unix(),
+    }
 
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signedState, err := token.SignedString([]byte(h.stateSecret))
-	if err != nil {
-		h.logger.Errorw("failed_to_sign_state_token",
-			"error", err,
-			"trace_id", traceID,
-		)
-		return c.Status(500).JSON(fiber.Map{"error": "failed to sign state token"})
-	}
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+    signedState, err := token.SignedString([]byte(h.stateSecret))
+    if err != nil {
+        h.logger.Errorw("failed_to_sign_state_token",
+            "error", err,
+            "trace_id", traceID,
+        )
+        return c.Status(500).JSON(fiber.Map{"error": "failed to sign state token"})
+    }
 
-	// Build the GitHub App install URL
-	// Format: https://github.com/apps/{APP_NAME}/installations/new?state={signed_state}
-	installURL := fmt.Sprintf("https://github.com/apps/%s/installations/new?state=%s", h.githubAppName, signedState)
+    installURL := fmt.Sprintf("https://github.com/apps/%s/installations/new?state=%s", h.githubAppName, signedState)
 
-	h.logger.Infow("install_url_generated",
-		"org_id", orgID,
-		"pending_install_id", pendingInstall.ID,
-		"trace_id", traceID,
-	)
+    h.logger.Infow("install_url_generated",
+        "org_id", orgID,
+        "pending_install_id", pendingInstall.ID,
+        "trace_id", traceID,
+    )
 
-	return c.JSON(fiber.Map{
-		"install_url": installURL,
-		"expires_at": pendingInstall.ExpiresAt,
-	})
+    return c.JSON(fiber.Map{
+        "install_url": installURL,
+        "expires_at":  pendingInstall.ExpiresAt,
+    })
 }
 
 // InstallCallback handles the GitHub App installation callback
 func (h *GitHubHandlers) InstallCallback(c *fiber.Ctx) error {
-	traceID := c.Locals("trace_id").(string)
-	state := c.Query("state")
+    traceID := c.Locals("trace_id").(string)
+    state := c.Query("state")
 
-	if state == "" {
-		h.logger.Warnw("callback_missing_state", "trace_id", traceID)
-		return h.renderCallbackPage(c, false, "Missing state parameter")
-	}
+    if state == "" {
+        h.logger.Warnw("callback_missing_state", "trace_id", traceID)
+        return h.renderCallbackPage(c, false, "Missing state parameter")
+    }
 
-	ctx := c.Context()
+    ctx := c.Context()
 
-	// Parse and validate the JWT state token
-	token, err := jwt.Parse(state, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(h.stateSecret), nil
-	})
+    token, err := jwt.Parse(state, func(token *jwt.Token) (interface{}, error) {
+        if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+            return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+        }
+        return []byte(h.stateSecret), nil
+    })
+    if err != nil || !token.Valid {
+        h.logger.Warnw("callback_invalid_jwt", "error", err, "trace_id", traceID)
+        return h.renderCallbackPage(c, false, "Invalid or expired state token")
+    }
 
-	if err != nil || !token.Valid {
-		h.logger.Warnw("callback_invalid_jwt", "error", err, "trace_id", traceID)
-		return h.renderCallbackPage(c, false, "Invalid or expired state token")
-	}
+    claims, ok := token.Claims.(jwt.MapClaims)
+    if !ok {
+        h.logger.Warnw("callback_invalid_claims", "trace_id", traceID)
+        return h.renderCallbackPage(c, false, "Invalid state token claims")
+    }
 
-	// Extract claims
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		h.logger.Warnw("callback_invalid_claims", "trace_id", traceID)
-		return h.renderCallbackPage(c, false, "Invalid state token claims")
-	}
+    orgID, ok := claims["org_id"].(string)
+    if !ok {
+        h.logger.Warnw("callback_missing_org_id", "trace_id", traceID)
+        return h.renderCallbackPage(c, false, "Missing org_id in state token")
+    }
 
-	orgID, ok := claims["org_id"].(string)
-	if !ok {
-		h.logger.Warnw("callback_missing_org_id", "trace_id", traceID)
-		return h.renderCallbackPage(c, false, "Missing org_id in state token")
-	}
+    stateToken, ok := claims["state_token"].(string)
+    if !ok {
+        h.logger.Warnw("callback_missing_state_token", "trace_id", traceID)
+        return h.renderCallbackPage(c, false, "Missing state token in state token")
+    }
 
-	stateToken, ok := claims["state_token"].(string)
-	if !ok {
-		h.logger.Warnw("callback_missing_state_token", "trace_id", traceID)
-		return h.renderCallbackPage(c, false, "Missing state_token in state token")
-	}
+    pendingInstall, err := h.pendingInstallRepo.ValidatePendingInstallByStateToken(ctx, stateToken)
+    if err != nil {
+        h.logger.Warnw("callback_invalid_pending_install",
+            "error", err,
+            "org_id", orgID,
+            "trace_id", traceID,
+        )
+        return h.renderCallbackPage(c, false, "Invalid or expired installation request")
+    }
 
-	// Validate the pending install exists and is not expired
-	pendingInstall, err := h.pendingInstallRepo.ValidatePendingInstall(ctx, stateToken)
-	if err != nil {
-		h.logger.Warnw("callback_invalid_pending_install",
-			"error", err,
-			"org_id", orgID,
-			"trace_id", traceID,
-		)
-		return h.renderCallbackPage(c, false, "Invalid or expired installation request")
-	}
+    if pendingInstall.OrgID != orgID {
+        h.logger.Warnw("callback_org_id_mismatch",
+            "pending_org_id", pendingInstall.OrgID,
+            "state_org_id", orgID,
+            "trace_id", traceID,
+        )
+        return h.renderCallbackPage(c, false, "Organization ID mismatch")
+    }
 
-	// Verify org_id matches
-	if pendingInstall.OrgID != orgID {
-		h.logger.Warnw("callback_org_id_mismatch",
-			"pending_org_id", pendingInstall.OrgID,
-			"state_org_id", orgID,
-			"trace_id", traceID,
-		)
-		return h.renderCallbackPage(c, false, "Organization ID mismatch")
-	}
-
-	// Mark the pending install as verified (delete it to prevent reuse)
-	if err := h.pendingInstallRepo.DeleteByStateToken(ctx, stateToken); err != nil {
-		h.logger.Warnw("callback_failed_to_delete_pending",
-			"error", err,
-			"trace_id", traceID,
-		)
-		// Continue anyway - the webhook will handle correlation
-	}
-
-	h.logger.Infow("callback_verified",
-		"org_id", orgID,
+	h.logger.Infow("marking_callback_seen",
 		"pending_install_id", pendingInstall.ID,
-		"trace_id", traceID,
 	)
+    if err := h.pendingInstallRepo.MarkCallbackSeen(ctx, pendingInstall.ID); err != nil {
+        h.logger.Warnw("mark_callback_seen_failed", "error", err, "trace_id", traceID)
+    }
 
-	// Return success page
-	// The actual installation correlation will happen via the webhook
-	return h.renderCallbackPage(c, true, "")
+    h.logger.Infow("callback_verified",
+        "org_id", orgID,
+        "pending_install_id", pendingInstall.ID,
+        "trace_id", traceID,
+    )
+
+    return h.renderCallbackPage(c, true, "")
 }
-
 // renderCallbackPage renders an HTML response for the callback
 func (h *GitHubHandlers) renderCallbackPage(c *fiber.Ctx, success bool, errorMessage string) error {
 	if success {

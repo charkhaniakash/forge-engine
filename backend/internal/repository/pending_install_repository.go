@@ -1,165 +1,261 @@
 package repository
 
 import (
-	"context"
-	"crypto/rand"
-	"database/sql"
-	"encoding/hex"
-	"errors"
-	"time"
+    "context"
+    "crypto/rand"
+    "crypto/sha256"
+    "database/sql"
+    "encoding/hex"
+    "errors"
+    "time"
 
-	"github.com/charkhaniakash/forge-engine/backend/internal/models"
-	"github.com/google/uuid"
+    "github.com/charkhaniakash/forge-engine/backend/internal/models"
+    "github.com/google/uuid"
 )
 
-// PendingInstallRepository handles pending GitHub installation records
 type PendingInstallRepository struct {
-	db *sql.DB
+    db *sql.DB
 }
 
-// NewPendingInstallRepository creates a new pending install repository
+func hashStateToken(state string) string {
+    h := sha256.Sum256([]byte(state))
+    return hex.EncodeToString(h[:])
+}
+
 func NewPendingInstallRepository(db *sql.DB) *PendingInstallRepository {
-	return &PendingInstallRepository{db: db}
+    return &PendingInstallRepository{db: db}
 }
 
-// CreatePendingInstall creates a new pending install record with a state token
-func (r *PendingInstallRepository) CreatePendingInstall(
-	ctx context.Context,
-	orgID string,
-	expiresIn time.Duration,
-) (*models.PendingInstall, error) {
-	id := uuid.New().String()
-	now := time.Now()
-	expiresAt := now.Add(expiresIn)
+func (r *PendingInstallRepository) MarkCallbackSeen(ctx context.Context, id string) error {
+    res, err := r.db.ExecContext(ctx,
+        `UPDATE pending_installs
+         SET callback_seen = true
+         WHERE id = $1 AND callback_seen = false`,
+        id,
+    )
+    if err != nil {
+        return err
+    }
 
-	// Generate state token (32 bytes = 64 hex chars)
-	stateTokenBytes := make([]byte, 32)
-	if _, err := rand.Read(stateTokenBytes); err != nil {
-		return nil, err
-	}
-	stateToken := hex.EncodeToString(stateTokenBytes)
+    rows, err := res.RowsAffected()
+    if err != nil {
+        return err
+    }
 
-	// Generate CSRF token (16 bytes = 32 hex chars)
-	csrfTokenBytes := make([]byte, 16)
-	if _, err := rand.Read(csrfTokenBytes); err != nil {
-		return nil, err
-	}
-	csrfToken := hex.EncodeToString(csrfTokenBytes)
+    if rows == 0 {
+        return fmt.Errorf("no pending_install updated for id=%s", id)
+    }
 
-	query := `
-		INSERT INTO pending_installs (id, org_id, state_token, csrf_token, created_at, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING id, org_id, state_token, csrf_token, created_at, expires_at
-	`
-
-	var pendingInstall models.PendingInstall
-	err := r.db.QueryRowContext(ctx, query, id, orgID, stateToken, csrfToken, now, expiresAt).Scan(
-		&pendingInstall.ID,
-		&pendingInstall.OrgID,
-		&pendingInstall.StateToken,
-		&pendingInstall.CSRFToken,
-		&pendingInstall.CreatedAt,
-		&pendingInstall.ExpiresAt,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &pendingInstall, nil
+    return nil
 }
 
-// GetByStateToken retrieves a pending install by state token
+func (r *PendingInstallRepository) ValidatePendingInstallByStateToken(ctx context.Context, stateToken string) (*models.PendingInstall, error) {
+    return r.ValidatePendingInstall(ctx, stateToken)
+}
+
+func (r *PendingInstallRepository) MarkUsed(ctx context.Context, id string) error {
+    _, err := r.db.ExecContext(ctx,
+        `UPDATE pending_installs SET used_at = NOW() WHERE id = $1 AND used_at IS NULL`,
+        id,
+    )
+    return err
+}
+
+func (r *PendingInstallRepository) MarkPendingInstallUsed(ctx context.Context, id string) error {
+    return r.MarkUsed(ctx, id)
+}
+
+func (r *PendingInstallRepository) GetByCallbackSeen(ctx context.Context) (*models.PendingInstall, error) {
+    query := `
+        SELECT id, org_id, state_token_hash, csrf_token, created_at, expires_at
+        FROM pending_installs
+        WHERE callback_seen = true
+          AND used_at IS NULL
+          AND expires_at > NOW()
+        ORDER BY created_at DESC
+        LIMIT 1
+    `
+    var p models.PendingInstall
+    var stateHash string
+    err := r.db.QueryRowContext(ctx, query).Scan(
+        &p.ID,
+        &p.OrgID,
+        &stateHash,
+        &p.CSRFToken,
+        &p.CreatedAt,
+        &p.ExpiresAt,
+    )
+    if err != nil {
+        return nil, err
+    }
+    return &p, nil
+}
+
+func (r *PendingInstallRepository) GetPendingInstallForCallback(ctx context.Context) (*models.PendingInstall, error) {
+    return r.GetByCallbackSeen(ctx)
+}
+
+func (r *PendingInstallRepository) ValidatePendingInstallByHash(ctx context.Context, stateHash string) (*models.PendingInstall, error) {
+    query := `
+        SELECT id, org_id, state_token_hash, csrf_token, created_at, expires_at
+        FROM pending_installs
+        WHERE state_token_hash = $1
+    `
+    var p models.PendingInstall
+    var storedHash string
+    err := r.db.QueryRowContext(ctx, query, stateHash).Scan(
+        &p.ID,
+        &p.OrgID,
+        &storedHash,
+        &p.CSRFToken,
+        &p.CreatedAt,
+        &p.ExpiresAt,
+    )
+    if err != nil {
+        return nil, err
+    }
+
+    if time.Now().After(p.ExpiresAt) {
+        _ = r.DeleteByStateTokenHash(ctx, storedHash)
+        return nil, ErrPendingInstallExpired
+    }
+    return &p, nil
+}
+
+func (r *PendingInstallRepository) DeleteByStateTokenHash(ctx context.Context, stateTokenHash string) error {
+    _, err := r.db.ExecContext(ctx,
+        `DELETE FROM pending_installs WHERE state_token_hash = $1`,
+        stateTokenHash,
+    )
+    return err
+}
+
+func (r *PendingInstallRepository) CreatePendingInstall(ctx context.Context, orgID string, expiresIn time.Duration) (*models.PendingInstall, string, error) {
+    id := uuid.New().String()
+    now := time.Now()
+    expiresAt := now.Add(expiresIn)
+
+    stateTokenBytes := make([]byte, 32)
+    if _, err := rand.Read(stateTokenBytes); err != nil {
+        return nil, "", err
+    }
+    stateToken := hex.EncodeToString(stateTokenBytes)
+    stateTokenHash := hashStateToken(stateToken)
+
+    csrfTokenBytes := make([]byte, 16)
+    if _, err := rand.Read(csrfTokenBytes); err != nil {
+        return nil, "", err
+    }
+    csrfToken := hex.EncodeToString(csrfTokenBytes)
+
+    query := `
+        INSERT INTO pending_installs (
+            id,
+            org_id,
+            state_token,
+            state_token_hash,
+            csrf_token,
+            created_at,
+            expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, org_id, state_token, csrf_token, created_at, expires_at
+    `
+    var pendingInstall models.PendingInstall
+    err := r.db.QueryRowContext(ctx, query,
+        id,
+        orgID,
+        stateToken,
+        stateTokenHash,
+        csrfToken,
+        now,
+        expiresAt,
+    ).Scan(
+        &pendingInstall.ID,
+        &pendingInstall.OrgID,
+        &pendingInstall.StateToken,
+        &pendingInstall.CSRFToken,
+        &pendingInstall.CreatedAt,
+        &pendingInstall.ExpiresAt,
+    )
+    if err != nil {
+        return nil, "", err
+    }
+
+    return &pendingInstall, stateToken, nil
+}
+
 func (r *PendingInstallRepository) GetByStateToken(ctx context.Context, stateToken string) (*models.PendingInstall, error) {
-	query := `
-		SELECT id, org_id, state_token, csrf_token, created_at, expires_at
-		FROM pending_installs
-		WHERE state_token = $1
-	`
-
-	var pendingInstall models.PendingInstall
-	err := r.db.QueryRowContext(ctx, query, stateToken).Scan(
-		&pendingInstall.ID,
-		&pendingInstall.OrgID,
-		&pendingInstall.StateToken,
-		&pendingInstall.CSRFToken,
-		&pendingInstall.CreatedAt,
-		&pendingInstall.ExpiresAt,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &pendingInstall, nil
+    query := `
+        SELECT id, org_id, state_token, csrf_token, created_at, expires_at
+        FROM pending_installs
+        WHERE state_token = $1
+    `
+    var pendingInstall models.PendingInstall
+    err := r.db.QueryRowContext(ctx, query, stateToken).Scan(
+        &pendingInstall.ID,
+        &pendingInstall.OrgID,
+        &pendingInstall.StateToken,
+        &pendingInstall.CSRFToken,
+        &pendingInstall.CreatedAt,
+        &pendingInstall.ExpiresAt,
+    )
+    if err != nil {
+        return nil, err
+    }
+    return &pendingInstall, nil
 }
 
-// GetByOrgID retrieves a pending install by org ID
 func (r *PendingInstallRepository) GetByOrgID(ctx context.Context, orgID string) (*models.PendingInstall, error) {
-	query := `
-		SELECT id, org_id, state_token, csrf_token, created_at, expires_at
-		FROM pending_installs
-		WHERE org_id = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`
-
-	var pendingInstall models.PendingInstall
-	err := r.db.QueryRowContext(ctx, query, orgID).Scan(
-		&pendingInstall.ID,
-		&pendingInstall.OrgID,
-		&pendingInstall.StateToken,
-		&pendingInstall.CSRFToken,
-		&pendingInstall.CreatedAt,
-		&pendingInstall.ExpiresAt,
-	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return &pendingInstall, nil
+    query := `
+        SELECT id, org_id, state_token, csrf_token, created_at, expires_at
+        FROM pending_installs
+        WHERE org_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
+    `
+    var pendingInstall models.PendingInstall
+    err := r.db.QueryRowContext(ctx, query, orgID).Scan(
+        &pendingInstall.ID,
+        &pendingInstall.OrgID,
+        &pendingInstall.StateToken,
+        &pendingInstall.CSRFToken,
+        &pendingInstall.CreatedAt,
+        &pendingInstall.ExpiresAt,
+    )
+    if err != nil {
+        return nil, err
+    }
+    return &pendingInstall, nil
 }
 
-// DeletePendingInstall deletes a pending install record
 func (r *PendingInstallRepository) DeletePendingInstall(ctx context.Context, id string) error {
-	query := `DELETE FROM pending_installs WHERE id = $1`
-	_, err := r.db.ExecContext(ctx, query, id)
-	return err
+    _, err := r.db.ExecContext(ctx, `DELETE FROM pending_installs WHERE id = $1`, id)
+    return err
 }
 
-// DeleteByStateToken deletes a pending install by state token
 func (r *PendingInstallRepository) DeleteByStateToken(ctx context.Context, stateToken string) error {
-	query := `DELETE FROM pending_installs WHERE state_token = $1`
-	_, err := r.db.ExecContext(ctx, query, stateToken)
-	return err
+    _, err := r.db.ExecContext(ctx, `DELETE FROM pending_installs WHERE state_token = $1`, stateToken)
+    return err
 }
 
-// DeleteExpired deletes all expired pending install records
 func (r *PendingInstallRepository) DeleteExpired(ctx context.Context) error {
-	query := `DELETE FROM pending_installs WHERE expires_at < NOW()`
-	_, err := r.db.ExecContext(ctx, query)
-	return err
+    _, err := r.db.ExecContext(ctx, `DELETE FROM pending_installs WHERE expires_at < NOW()`)
+    return err
 }
 
-// ValidatePendingInstall checks if a pending install is valid and not expired
 func (r *PendingInstallRepository) ValidatePendingInstall(ctx context.Context, stateToken string) (*models.PendingInstall, error) {
-	pendingInstall, err := r.GetByStateToken(ctx, stateToken)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if expired
-	if time.Now().After(pendingInstall.ExpiresAt) {
-		// Clean up expired record
-		_ = r.DeleteByStateToken(ctx, stateToken)
-		return nil, ErrPendingInstallExpired
-	}
-
-	return pendingInstall, nil
+    pendingInstall, err := r.GetByStateToken(ctx, stateToken)
+    if err != nil {
+        return nil, err
+    }
+    if time.Now().After(pendingInstall.ExpiresAt) {
+        _ = r.DeleteByStateToken(ctx, stateToken)
+        return nil, ErrPendingInstallExpired
+    }
+    return pendingInstall, nil
 }
 
-// Custom errors
 var (
-	ErrPendingInstallExpired = errors.New("pending install has expired")
+    ErrPendingInstallExpired = errors.New("pending install has expired")
 )

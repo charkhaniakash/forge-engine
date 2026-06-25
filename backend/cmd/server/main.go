@@ -50,6 +50,7 @@ func main() {
     githubInstallationRepo := repository.NewGitHubInstallationRepository(dbConn)
     githubRepoRepo := repository.NewGitHubRepoRepository(dbConn)
     pendingInstallRepo := repository.NewPendingInstallRepository(dbConn)
+    webhookDeliveryRepo := repository.NewWebhookDeliveryRepository(dbConn)
 
     // Initialize handlers
     authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -96,6 +97,7 @@ func main() {
                 sugar,
                 githubAppName,
                 stateSecret,
+                webhookDeliveryRepo,
             )
             sugar.Info("GitHub integration initialized")
         }

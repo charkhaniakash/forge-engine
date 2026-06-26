@@ -192,6 +192,7 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
   const [repos, setRepos] = useState<GitHubRepo[]>([])
   const [loadingRepos, setLoadingRepos] = useState(false)
   const [githubError, setGithubError] = useState<string | null>(null)
+  const [installationMissing, setInstallationMissing] = useState(false)
 
   const loadRepos = async () => {
     setLoadingRepos(true)
@@ -216,6 +217,7 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
   const handleSyncRepos = async () => {
     setLoadingRepos(true)
     setGithubError(null)
+    setInstallationMissing(false)
     try {
       const response = await fetch('http://localhost:8080/v1/github/sync', {
         method: 'POST',
@@ -223,10 +225,15 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
       })
       const data = await response.json()
       if (!response.ok) {
-        setGithubError(data.error || 'Failed to sync repos')
+        if (response.status === 404) {
+          // No installation found — show the recovery UI
+          setInstallationMissing(true)
+          setGithubError(data.error || 'No GitHub installation found')
+        } else {
+          setGithubError(data.error || 'Failed to sync repos')
+        }
         return
       }
-      alert('Sync started! Check back in a moment.')
       setTimeout(loadRepos, 3000)
     } catch (err: any) {
       setGithubError(err.message)
@@ -246,14 +253,29 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
 
       <div style={{ marginBottom: '2rem' }}>
         <h3>GitHub Integration (Phase 2)</h3>
-        {githubError && <div style={{ color: 'red', marginBottom: '1rem' }}>{githubError}</div>}
-        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center' }}>
+
+        {githubError && (
+          <div style={{ color: '#cf222e', marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#ffebe9', borderRadius: '4px', border: '1px solid #ff818266' }}>
+            {githubError}
+          </div>
+        )}
+
+        {installationMissing && (
+          <div style={{ marginBottom: '1rem', padding: '1rem', backgroundColor: '#fff8c5', borderRadius: '4px', border: '1px solid #d4a72c66' }}>
+            <strong>GitHub App connection lost.</strong>
+            <p style={{ margin: '0.5rem 0 0' }}>
+              Your database was reset but the GitHub App is still installed. Click <strong>"Install GitHub App"</strong> below — GitHub will redirect back with your installation ID and the connection will be restored automatically. You will not need to reinstall.
+            </p>
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', alignItems: 'center', flexWrap: 'wrap' }}>
           <GitHubInstallButton token={token} onError={(err) => setGithubError(err)} />
           <button onClick={loadRepos} disabled={loadingRepos}>
             Load Repos
           </button>
           <button onClick={handleSyncRepos} disabled={loadingRepos}>
-            Sync Repos
+            {loadingRepos ? 'Working…' : 'Sync Repos'}
           </button>
         </div>
 

@@ -98,6 +98,7 @@ func main() {
                 githubAppName,
                 stateSecret,
                 webhookDeliveryRepo,
+                appAuth,
             )
             sugar.Info("GitHub integration initialized")
         }

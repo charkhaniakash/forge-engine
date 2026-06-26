@@ -27,26 +27,11 @@ func NewPendingInstallRepository(db *sql.DB) *PendingInstallRepository {
 }
 
 func (r *PendingInstallRepository) MarkCallbackSeen(ctx context.Context, id string) error {
-    res, err := r.db.ExecContext(ctx,
-        `UPDATE pending_installs
-         SET callback_seen = true
-         WHERE id = $1 AND callback_seen = false`,
+    _, err := r.db.ExecContext(ctx,
+        `UPDATE pending_installs SET callback_seen = true WHERE id = $1 AND callback_seen = false`,
         id,
     )
-    if err != nil {
-        return err
-    }
-
-    rows, err := res.RowsAffected()
-    if err != nil {
-        return err
-    }
-
-    if rows == 0 {
-        return fmt.Errorf("no pending_install updated for id=%s", id)
-    }
-
-    return nil
+    return err
 }
 
 func (r *PendingInstallRepository) ValidatePendingInstallByStateToken(ctx context.Context, stateToken string) (*models.PendingInstall, error) {
@@ -75,6 +60,7 @@ func (r *PendingInstallRepository) GetByCallbackSeen(ctx context.Context) (*mode
         ORDER BY created_at DESC
         LIMIT 1
     `
+
     var p models.PendingInstall
     var stateHash string
     err := r.db.QueryRowContext(ctx, query).Scan(
@@ -86,6 +72,9 @@ func (r *PendingInstallRepository) GetByCallbackSeen(ctx context.Context) (*mode
         &p.ExpiresAt,
     )
     if err != nil {
+        if errors.Is(err, sql.ErrNoRows) {
+            return nil, nil
+        }
         return nil, err
     }
     return &p, nil

@@ -26,6 +26,10 @@ func (r *WebhookDeliveryRepository) IsDeliveryProcessed(ctx context.Context, del
 }
 
 func (r *WebhookDeliveryRepository) RecordDelivery(ctx context.Context, deliveryID, eventType string) error {
-    _, err := r.db.ExecContext(ctx, `INSERT INTO webhook_deliveries (delivery_id, event_type) VALUES ($1, $2)`, deliveryID, eventType)
+    _, err := r.db.ExecContext(ctx, `
+        INSERT INTO webhook_deliveries (delivery_id, event_type)
+        VALUES ($1, $2)
+        ON CONFLICT (delivery_id) DO NOTHING
+    `, deliveryID, eventType)
     return err
 }

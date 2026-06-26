@@ -172,3 +172,64 @@ func ParseWebhookEvent(payload []byte, eventType string) (interface{}, error) {
 		return nil, fmt.Errorf("unsupported event type: %s", eventType)
 	}
 }
+
+
+func (c *Client) GetInstallationByID(appJWT string, installationID int64) (*Installation, error) {
+	url := fmt.Sprintf("%s/app/installations/%d", c.baseURL, installationID)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create installation lookup request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+appJWT)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to lookup installation: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to lookup installation: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var installation Installation
+	if err := json.NewDecoder(resp.Body).Decode(&installation); err != nil {
+		return nil, fmt.Errorf("failed to decode installation response: %w", err)
+	}
+
+	return &installation, nil
+}
+
+// ListAppInstallations returns all active installations for this GitHub App.
+// Used during recovery to find installations that exist on GitHub but not locally.
+func (c *Client) ListAppInstallations(appJWT string) ([]*Installation, error) {
+	url := fmt.Sprintf("%s/app/installations", c.baseURL)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create list installations request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+appJWT)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list app installations: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("failed to list app installations: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var installations []*Installation
+	if err := json.NewDecoder(resp.Body).Decode(&installations); err != nil {
+		return nil, fmt.Errorf("failed to decode installations response: %w", err)
+	}
+
+	return installations, nil
+}

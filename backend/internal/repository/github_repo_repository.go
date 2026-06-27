@@ -204,3 +204,31 @@ func (r *GitHubRepoRepository) DeleteByInstallationID(ctx context.Context, insta
 	_, err := r.db.ExecContext(ctx, query, installationID)
 	return err
 }
+
+// GetByID retrieves a repo by its internal UUID.
+func (r *GitHubRepoRepository) GetByID(ctx context.Context, id string) (*models.GitHubRepo, error) {
+	query := `
+		SELECT id, installation_id, github_repo_id, repo_name, repo_full_name, repo_owner, default_branch, private, last_synced_at, last_commit_sha, created_at, updated_at
+		FROM github_repos
+		WHERE id = $1
+	`
+	var repo models.GitHubRepo
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&repo.ID,
+		&repo.InstallationID,
+		&repo.GitHubRepoID,
+		&repo.RepoName,
+		&repo.RepoFullName,
+		&repo.RepoOwner,
+		&repo.DefaultBranch,
+		&repo.Private,
+		&repo.LastSyncedAt,
+		&repo.LastCommitSHA,
+		&repo.CreatedAt,
+		&repo.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &repo, nil
+}

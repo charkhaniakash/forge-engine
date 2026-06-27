@@ -92,3 +92,25 @@ type PendingInstall struct {
     CreatedAt  time.Time `json:"created_at"`
     ExpiresAt  time.Time `json:"expires_at"`
 }
+
+// IngestionJob represents one attempt to index a repository at a specific commit SHA.
+// The (repo_id, commit_sha) pair is the logical snapshot key.
+// Retrieval (Phase 4+) must only read code_chunks where the associated job has
+// status = "done".
+type IngestionJob struct {
+    ID              string     `json:"id"`
+    RepoID          string     `json:"repo_id"`
+    CommitSHA       string     `json:"commit_sha"`
+    TriggerType     string     `json:"trigger_type"` // installation_sync | push | manual
+    Status          string     `json:"status"`        // queued | running | done | failed | superseded
+    ProgressStage   *string    `json:"progress_stage,omitempty"` // cloning | parsing | chunking | embedding | persisting | completed
+    QueuedAt        time.Time  `json:"queued_at"`
+    StartedAt       *time.Time `json:"started_at,omitempty"`
+    FinishedAt      *time.Time `json:"finished_at,omitempty"`
+    WorkerID        *string    `json:"worker_id,omitempty"`
+    TotalChunks     *int       `json:"total_chunks,omitempty"`
+    ProcessedChunks int        `json:"processed_chunks"`
+    Error           *string    `json:"error,omitempty"`
+    CreatedAt       time.Time  `json:"created_at"`
+    UpdatedAt       time.Time  `json:"updated_at"`
+}

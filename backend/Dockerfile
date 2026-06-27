@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 
@@ -16,7 +16,9 @@ RUN CGO_ENABLED=0 GOOS=linux go build -o bin/server ./cmd/server
 
 # Final image
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+# ca-certificates: for HTTPS calls to GitHub API
+# git: for the ingestion cloner (go/internal/ingestion/cloner.go uses os/exec git)
+RUN apk --no-cache add ca-certificates git
 WORKDIR /root/
 
 COPY --from=builder /app/bin/server .

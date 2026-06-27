@@ -3,7 +3,7 @@ version: "3.9"
 services:
 
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:pg16
     container_name: forge-postgres
     environment:
       POSTGRES_USER: forge
@@ -48,16 +48,21 @@ services:
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: debug
       JWT_SECRET: phase-0-insecure-default
-      # GitHub App credentials (Phase 2) - set these to enable GitHub integration
+      # GitHub App credentials (Phase 2)
       GITHUB_APP_ID: 4135365
       GITHUB_APP_NAME: ForgeRepoSync-Akash
       GITHUB_WEBHOOK_SECRET: forge-engine-super-secret-2025
       GITHUB_APP_PRIVATE_KEY_PATH: /app/secrets/github-private-key.pem
       GITHUB_INSTALL_STATE_SECRET: forge-engine-install-state-secret
+      # Phase 3 — ingestion worker
+      # This path must match the agent's mount point exactly.
+      CLONE_BASE_DIR: /tmp/forge-clones
+      WORKER_CONCURRENCY: 2
     ports:
       - "8080:8080"
     volumes:
       - ./secrets/github-private-key.pem:/app/secrets/github-private-key.pem:ro
+      - clone_storage:/tmp/forge-clones
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,10 +81,24 @@ services:
       BACKEND_URL: http://backend:8080
       LOG_LEVEL: debug
       JWT_SECRET: phase-0-insecure-default
+      # Phase 3 — database (for direct pgvector writes)
+      DATABASE_URL: postgresql://forge:forge@postgres:5432/forge
+      # Phase 3 — embeddings (Gemini is the default provider)
+      EMBEDDING_PROVIDER: gemini
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      EMBEDDING_MODEL: models/text-embedding-004
+      EMBEDDING_DIMENSIONS: 768
+      EMBEDDING_BATCH_SIZE: 32
+      CHUNK_TOKEN_LIMIT: 512
     ports:
       - "8000:8000"
+    volumes:
+      - clone_storage:/tmp/forge-clones:ro
     depends_on:
-      - backend
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_started
     networks:
       - forge-network
 
@@ -101,6 +120,7 @@ services:
 
 volumes:
   postgres_data:
+  clone_storage:
 
 networks:
   forge-network:

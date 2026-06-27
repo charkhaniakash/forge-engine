@@ -15,49 +15,55 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/github"
+	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 )
 
 type GitHubHandlers struct {
-    installationRepo    *repository.GitHubInstallationRepository
-    repoRepo            *repository.GitHubRepoRepository
-    pendingInstallRepo  *repository.PendingInstallRepository
-    webhookDeliveryRepo *repository.WebhookDeliveryRepository
-    tokenCache          *github.TokenCache
-    client              *github.Client
-    appAuth             *github.AppAuth
-    logger              *zap.SugaredLogger
-    githubAppName       string
-    stateSecret         string
+	installationRepo    *repository.GitHubInstallationRepository
+	repoRepo            *repository.GitHubRepoRepository
+	pendingInstallRepo  *repository.PendingInstallRepository
+	webhookDeliveryRepo *repository.WebhookDeliveryRepository
+	jobRepo             *repository.IngestionJobRepository
+	tokenCache          *github.TokenCache
+	client              *github.Client
+	appAuth             *github.AppAuth
+	worker              *ingestion.JobWorker // nil if ingestion not initialised
+	logger              *zap.SugaredLogger
+	githubAppName       string
+	stateSecret         string
 }
 
 func NewGitHubHandlers(
-    installationRepo *repository.GitHubInstallationRepository,
-    repoRepo *repository.GitHubRepoRepository,
-    pendingInstallRepo *repository.PendingInstallRepository,
-    tokenCache *github.TokenCache,
-    client *github.Client,
-    logger *zap.SugaredLogger,
-    githubAppName string,
-    stateSecret string,
-    webhookDeliveryRepo *repository.WebhookDeliveryRepository,
-    appAuth *github.AppAuth,
+	installationRepo *repository.GitHubInstallationRepository,
+	repoRepo *repository.GitHubRepoRepository,
+	pendingInstallRepo *repository.PendingInstallRepository,
+	tokenCache *github.TokenCache,
+	client *github.Client,
+	logger *zap.SugaredLogger,
+	githubAppName string,
+	stateSecret string,
+	webhookDeliveryRepo *repository.WebhookDeliveryRepository,
+	appAuth *github.AppAuth,
+	jobRepo *repository.IngestionJobRepository,
+	worker *ingestion.JobWorker,
 ) *GitHubHandlers {
-    return &GitHubHandlers{
-        installationRepo:    installationRepo,
-        repoRepo:            repoRepo,
-        pendingInstallRepo:  pendingInstallRepo,
-        webhookDeliveryRepo: webhookDeliveryRepo,
-        tokenCache:          tokenCache,
-        client:              client,
-        appAuth:             appAuth,
-        logger:              logger,
-        githubAppName:       githubAppName,
-        stateSecret:         stateSecret,
-    }
+	return &GitHubHandlers{
+		installationRepo:    installationRepo,
+		repoRepo:            repoRepo,
+		pendingInstallRepo:  pendingInstallRepo,
+		webhookDeliveryRepo: webhookDeliveryRepo,
+		jobRepo:             jobRepo,
+		tokenCache:          tokenCache,
+		client:              client,
+		appAuth:             appAuth,
+		worker:              worker,
+		logger:              logger,
+		githubAppName:       githubAppName,
+		stateSecret:         stateSecret,
+	}
 }
-
 // Webhook handles GitHub webhook events
 func (h *GitHubHandlers) Webhook(c *fiber.Ctx) error {
     traceID := c.Locals("trace_id").(string)
@@ -113,6 +119,8 @@ func (h *GitHubHandlers) Webhook(c *fiber.Ctx) error {
         return h.handleInstallationEvent(c, event.(*github.InstallationEvent), traceID)
     case "installation_repositories":
         return h.handleInstallationRepositoriesEvent(c, event.(*github.InstallationEvent), traceID)
+    case "push":
+        return h.handlePushEvent(c, event.(*github.PushEvent), traceID)
     default:
         h.logger.Infow("webhook_unhandled_event", "event_type", eventType, "trace_id", traceID)
         return c.Status(200).JSON(fiber.Map{"message": "event received but not handled"})
@@ -498,10 +506,10 @@ func (h *GitHubHandlers) recoverInstallationForOrg(ctx context.Context, orgID st
 }
 
 // syncReposForInstallation syncs repositories from GitHub for an installation
+// and enqueues an ingestion job for each repo that was synced.
 func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubInstallationID int64, traceID string) {
 	ctx := context.Background()
 
-	// Get installation token
 	token, err := h.tokenCache.GetInstallationToken(ctx, githubInstallationID)
 	if err != nil {
 		h.logger.Errorw("failed_to_get_installation_token",
@@ -512,7 +520,6 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 		return
 	}
 
-	// List repos from GitHub
 	githubRepos, err := h.client.ListInstallationRepos(token, githubInstallationID)
 	if err != nil {
 		h.logger.Errorw("failed_to_list_github_repos",
@@ -523,13 +530,12 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 		return
 	}
 
-	// Sync repos to database
+	var syncedRepoIDs []string
+
 	for _, ghRepo := range githubRepos {
-		// Check if repo already exists
 		existing, err := h.repoRepo.GetByGitHubRepoID(ctx, ghRepo.ID)
 		if err != nil {
-			// Create new repo
-			_, err := h.repoRepo.CreateRepo(
+			created, err := h.repoRepo.CreateRepo(
 				ctx,
 				installationID,
 				ghRepo.ID,
@@ -551,16 +557,16 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 				"repo_full_name", ghRepo.FullName,
 				"trace_id", traceID,
 			)
+			syncedRepoIDs = append(syncedRepoIDs, created.ID)
 		} else {
-			// Update existing repo
-			err := h.repoRepo.UpdateSyncInfo(ctx, existing.ID, "")
-			if err != nil {
+			if err := h.repoRepo.UpdateSyncInfo(ctx, existing.ID, ""); err != nil {
 				h.logger.Errorw("failed_to_update_repo",
 					"error", err,
 					"repo_full_name", ghRepo.FullName,
 					"trace_id", traceID,
 				)
 			}
+			syncedRepoIDs = append(syncedRepoIDs, existing.ID)
 		}
 	}
 
@@ -569,6 +575,9 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 		"repo_count", len(githubRepos),
 		"trace_id", traceID,
 	)
+
+	// Enqueue an ingestion job for each synced repo.
+	h.enqueueInstallationSyncJobs(syncedRepoIDs, traceID)
 }
 
 // GetInstallURL generates a GitHub App installation URL with a signed state token
@@ -864,4 +873,75 @@ func (h *GitHubHandlers) renderCallbackPage(c *fiber.Ctx, success bool, errorMes
     </div>
 </body>
 </html>`)
+}
+
+// handlePushEvent handles push webhook events by enqueuing an ingestion job
+// for the repo. If the worker is not initialised, the event is acknowledged
+// and ignored gracefully.
+func (h *GitHubHandlers) handlePushEvent(c *fiber.Ctx, event *github.PushEvent, traceID string) error {
+	ctx := c.Context()
+
+	// Ignore branch deletions — After is all-zeros on delete.
+	if event.After == "0000000000000000000000000000000000000000" || event.HeadCommit == nil {
+		return c.Status(200).JSON(fiber.Map{"message": "push ignored (branch deletion)"})
+	}
+
+	commitSHA := event.After
+
+	// Look up the local repo record by GitHub repo ID.
+	repo, err := h.repoRepo.GetByGitHubRepoID(ctx, event.Repository.ID)
+	if err != nil {
+		h.logger.Warnw("push_repo_not_found",
+			"github_repo_id", event.Repository.ID,
+			"full_name", event.Repository.FullName,
+			"trace_id", traceID,
+		)
+		return c.Status(200).JSON(fiber.Map{"message": "repo not connected, push ignored"})
+	}
+
+	if h.worker == nil || h.jobRepo == nil {
+		h.logger.Warnw("push_ingestion_disabled",
+			"repo_id", repo.ID,
+			"commit_sha", commitSHA,
+			"trace_id", traceID,
+		)
+		return c.Status(200).JSON(fiber.Map{"message": "ingestion not initialised"})
+	}
+
+	if err := h.worker.EnqueueForRepo(ctx, h.jobRepo, repo.ID, commitSHA, "push"); err != nil {
+		h.logger.Errorw("push_enqueue_failed",
+			"repo_id", repo.ID,
+			"commit_sha", commitSHA,
+			"error", err,
+			"trace_id", traceID,
+		)
+		return c.Status(500).JSON(fiber.Map{"error": "failed to enqueue ingestion job"})
+	}
+
+	h.logger.Infow("push_ingestion_enqueued",
+		"repo_id", repo.ID,
+		"commit_sha", commitSHA,
+		"ref", event.Ref,
+		"trace_id", traceID,
+	)
+
+	return c.Status(200).JSON(fiber.Map{"message": "ingestion job enqueued"})
+}
+
+// enqueueInstallationSyncJobs enqueues an ingestion job for every repo that was
+// just synced during an installation sync. Call after the DB upsert loop.
+func (h *GitHubHandlers) enqueueInstallationSyncJobs(repoIDs []string, traceID string) {
+	if h.worker == nil || h.jobRepo == nil {
+		return
+	}
+	ctx := context.Background()
+	for _, repoID := range repoIDs {
+		if err := h.worker.EnqueueForRepo(ctx, h.jobRepo, repoID, "", "installation_sync"); err != nil {
+			h.logger.Warnw("installation_sync_enqueue_failed",
+				"repo_id", repoID,
+				"error", err,
+				"trace_id", traceID,
+			)
+		}
+	}
 }

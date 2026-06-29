@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
@@ -219,6 +218,22 @@ func (w *JobWorker) processJob(ctx context.Context, jobID string, workerID strin
 	// Always clean up the clone directory, success or failure.
 	defer w.cloner.Cleanup(cloneResult.Dir)
 
+	// ── 7a. Write the resolved commit SHA back to the job row ────────────────
+	// When the job was enqueued with an empty commitSHA (manual trigger with
+	// no last_commit_sha on the repo), the clone resolves the actual HEAD SHA.
+	// We must persist this so qa_sessions.commit_sha is never empty.
+	if cloneResult.CommitSHA != job.CommitSHA && cloneResult.CommitSHA != "" {
+		if err := w.jobRepo.UpdateCommitSHA(ctx, jobID, cloneResult.CommitSHA); err != nil {
+			log.Warnw("update_commit_sha_failed", "error", err,
+				"resolved_sha", cloneResult.CommitSHA)
+			// Non-fatal: continue with the clone, but log the issue.
+		} else {
+			log.Infow("commit_sha_resolved",
+				"original_sha", job.CommitSHA,
+				"resolved_sha", cloneResult.CommitSHA)
+		}
+	}
+
 	// ── 7. Supersede check #2: after clone, before calling the Agent ─────────
 	// We do NOT check again after this point (e.g. mid-embedding) — stopping
 	// mid-embedding leaves partial state. See ADR 0004.
@@ -305,17 +320,12 @@ func (w *JobWorker) processJob(ctx context.Context, jobID string, workerID strin
 
 // signToken creates a short-lived JWT for the Backend→Agent call (ADR 0001).
 func (w *JobWorker) signToken(traceID string) (string, error) {
-	secret := w.jwtSecret
-	if secret == "" {
-		secret = "phase-0-insecure-default"
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+	return SignJWT(map[string]interface{}{
 		"sub":      "backend",
 		"trace_id": traceID,
 		"iat":      time.Now().Unix(),
 		"exp":      time.Now().Add(30 * time.Minute).Unix(),
-	})
-	return token.SignedString([]byte(secret))
+	}, w.jwtSecret)
 }
 
 // hostname returns the system hostname, falling back to "unknown".

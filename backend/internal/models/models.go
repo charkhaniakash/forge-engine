@@ -93,6 +93,38 @@ type PendingInstall struct {
     ExpiresAt  time.Time `json:"expires_at"`
 }
 
+// QASession represents a multi-turn Q&A conversation scoped to a single
+// (repo_id, commit_sha) snapshot. The snapshot is pinned at session creation;
+// subsequent questions in the session always retrieve against the same commit.
+// workspace_id is NULL in Phase 4 and will be populated by a later phase.
+type QASession struct {
+    ID          string     `json:"id"`
+    RepoID      string     `json:"repo_id"`
+    OrgID       string     `json:"org_id"`
+    UserID      string     `json:"user_id"`
+    CommitSHA   string     `json:"commit_sha"`
+    Title       *string    `json:"title,omitempty"`
+    WorkspaceID *string    `json:"workspace_id,omitempty"` // Phase 5+
+    CreatedAt   time.Time  `json:"created_at"`
+    UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// QAMessage is a single turn in a QASession.
+// role is "user" or "assistant".
+// Citations is a JSONB array of rich citation objects — populated for
+// assistant messages only, NULL for user messages.
+type QAMessage struct {
+    ID         string      `json:"id"`
+    SessionID  string      `json:"session_id"`
+    Role       string      `json:"role"` // user | assistant
+    Content    string      `json:"content"`
+    Citations  interface{} `json:"citations,omitempty"` // []Citation JSONB
+    TokenCount *int        `json:"token_count,omitempty"`
+    Model      *string     `json:"model,omitempty"`
+    RequestID  *string     `json:"request_id,omitempty"`
+    CreatedAt  time.Time   `json:"created_at"`
+}
+
 // IngestionJob represents one attempt to index a repository at a specific commit SHA.
 // The (repo_id, commit_sha) pair is the logical snapshot key.
 // Retrieval (Phase 4+) must only read code_chunks where the associated job has

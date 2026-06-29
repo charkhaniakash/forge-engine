@@ -316,7 +316,7 @@ Changes implemented:
 
 ---
 
-### Phase 3 — Embedding Provider Abstraction
+### Phase 3 — Embedding Provider Abstraction (Extended)
 
 **Why this exists:**
 The ingestion pipeline must not be coupled to any single embedding vendor. Providers change their APIs, pricing, and availability. Different deployments may require different models (OpenAI for cloud, Ollama for on-premise, Gemini as an alternative). The abstraction makes the pipeline provider-agnostic so adding a new provider never requires changes to ingestion logic.
@@ -389,21 +389,47 @@ agent/src/ingestion/
 **Objective:** Users ask natural-language questions about a repo and get
 accurate, cited, streamed answers.
 
-**In scope:** retrieval pipeline (vector search + symbol-graph expansion +
-re-ranking), grounded answer generation with citations, multi-turn session
-context, token-streamed delivery.
+**Agreed architecture (see implementation):**
 
-**Out of scope:** task creation, planning, code editing.
+- Sessions are pinned to `commit_sha` at creation time — every question in the session retrieves against the same snapshot. A banner is shown when a newer index is available.
+- `qa_sessions.workspace_id` is NULL in Phase 4 and reserved for Phase 5+ workspace grouping.
+- Go resolves the latest done `commit_sha` from `ingestion_jobs` and passes it to the Agent — the Agent never queries job tables directly.
+- Agent retrieval pipeline: `embed → VectorCandidateGenerator(top_k=50) → MetadataFilter → Reranker(cosine+keyword) → DiversitySelector(max_per_file=3, keep=15) → LinearContextAssembler(budget=4096)`.
+- `RetrievalScope` is a runtime-only construct (never stored in DB) — `qa_sessions` keeps plain `repo_id` + `commit_sha` columns.
+- `CandidateGenerator` accepts `RetrievalScope` (not bare repo_id) — future multi-repo search passes multiple pairs without changing the interface.
+- NDJSON event schema: `{"v":1, "event":"token|done|error", "seq":N, "request_id":"..."}` — versioned from day one.
+- `LLMStreamer` emits an opaque `payload: dict` in the done event — Q&A sets `payload={"citations":[...]}`. Future capabilities (planning, code-gen) set their own payload without changing the streamer.
+- Reusable core lives in `src/core/` (RetrievalEngine, ContextAssembler, LLMStreamer). Q&A-specific code lives in `src/qa/`.
+- `RetrievalResult` carries diagnostics (timing_ms, candidate_count, filtered_count, reranked_count, final_count) logged as a structured `retrieval_trace` event for future observability.
+- Snapshot retention: Go owns GC lifecycle. Sessions reference `commit_sha` as a GC anchor — chunks for a snapshot are never deleted while a session references that SHA.
+- All retrieval tuning knobs (candidate_k, rerank_k, etc.) are config-driven via `RETRIEVAL__*` env vars; runtime-configurable DB config is Phase 13.
 
-**Backend (Go):** Q&A session persistence, proxies requests to Agent, relays
-streamed tokens over WebSocket, enforces repo-readiness + access control.
+**In scope:**
+- `qa_sessions` + `qa_messages` tables (migration 007)
+- `QARepository`: session + message CRUD
+- `AgentQAClient`: POST `/v1/agent/qa` + NDJSON stream reader
+- REST endpoints: create session, list sessions, get session, ask, WebSocket stream
+- `RetrievalEngine` composing 4 stages
+- `VectorCandidateGenerator`, `MetadataFilter`, `Reranker`, `DiversitySelector`, `LinearContextAssembler`
+- `ChatProvider` protocol + OpenAI/Gemini/Anthropic implementations
+- `QAPipeline`: embed → retrieve → assemble → prompt → stream
+- `QAPanel` frontend: session list, chat UI, citation tags, WebSocket streaming
+- Nested config: `EmbeddingConfig`, `ChatConfig`, `RetrievalConfig`
 
-**Agent (Python):** hybrid retrieval, context assembly within token budget,
-prompt construction, LLM call + streaming, citation extraction, conversation
-memory/summarization.
+**Out of scope:** hybrid retrieval, symbol graph expansion, WebSocket reconnect/replay (Phase 11), cost tracking (Phase 13), multi-repo sessions, LangGraph.
 
-**Definition of Done:** A user asks a question on an indexed repo and gets a
-streamed, cited, grounded answer; sessions persist and resume.
+**Backend (Go):** session/message persistence, auth gate, repo-readiness check, WS hub, answer persistence on done event.
+
+**Agent (Python):** embed, retrieve, assemble, prompt, stream. Stateless — never writes sessions or messages.
+
+**Definition of Done:**
+1. A user asks a question on an indexed repo and gets a streamed, cited, grounded answer
+2. Sessions persist and resume with full message history
+3. Sessions are pinned to the commit SHA they were created against
+4. Citations include chunk_id, file_path, start_line, end_line, language, chunk_type, symbol_name
+5. Token events stream in real time via WebSocket; answer persists in DB on completion
+6. Retrieval pipeline logs a `retrieval_trace` event with full diagnostics per request
+7. All retrieval tuning is configurable without code changes
 
 ---
 

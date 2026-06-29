@@ -70,6 +70,20 @@ func (r *IngestionJobRepository) GetLatestForRepo(ctx context.Context, repoID st
 	return scanJob(row)
 }
 
+// UpdateCommitSHA writes the resolved commit SHA back to the job row.
+// Called by the worker after git clone resolves the actual HEAD SHA —
+// which may differ from the SHA stored at enqueue time when the job
+// was triggered with an empty commitSHA (e.g. manual trigger).
+// This resolved SHA is what gets stored in qa_sessions.commit_sha.
+func (r *IngestionJobRepository) UpdateCommitSHA(ctx context.Context, id string, commitSHA string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE ingestion_jobs
+		SET commit_sha = $2, updated_at = NOW()
+		WHERE id = $1
+	`, id, commitSHA)
+	return err
+}
+
 // GetLatestDoneForRepo returns the most recent successfully completed job for a repo.
 // Phase 4 retrieval should use this to find the live queryable snapshot.
 func (r *IngestionJobRepository) GetLatestDoneForRepo(ctx context.Context, repoID string) (*models.IngestionJob, error) {
@@ -237,3 +251,30 @@ func scanJob(row *sql.Row) (*models.IngestionJob, error) {
 }
 
 var ErrJobSuperseded = fmt.Errorf("job has been superseded by a newer ingestion")
+
+// BackfillCommitSHAFromChunks updates ingestion_jobs.commit_sha for jobs that
+// were completed before the UpdateCommitSHA fix was added. It queries code_chunks
+// to find the actual commit_sha for each done job with an empty commit_sha.
+func (r *IngestionJobRepository) BackfillCommitSHAFromChunks(ctx context.Context) (int, error) {
+	query := `
+		UPDATE ingestion_jobs ij
+		SET commit_sha = cc.commit_sha, updated_at = NOW()
+		FROM (
+			SELECT DISTINCT job_id, commit_sha
+			FROM code_chunks
+			WHERE commit_sha IS NOT NULL
+		) cc
+		WHERE ij.id = cc.job_id
+		  AND ij.status = 'done'
+		  AND ij.commit_sha = ''
+	`
+	result, err := r.db.ExecContext(ctx, query)
+	if err != nil {
+		return 0, err
+	}
+	n, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}

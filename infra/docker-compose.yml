@@ -71,34 +71,57 @@ services:
     networks:
       - forge-network
 
+
   agent:
     build:
       context: ../agent
       dockerfile: Dockerfile
     container_name: forge-agent
+
+    # Load environment variables from agent/.env
+    env_file:
+      - ../agent/.env.local.example
+
     environment:
       AGENT_PORT: 8000
       BACKEND_URL: http://backend:8080
       LOG_LEVEL: debug
       JWT_SECRET: phase-0-insecure-default
+
       # Phase 3 — database (for direct pgvector writes)
       DATABASE_URL: postgresql://forge:forge@postgres:5432/forge
-      # Phase 3 — embeddings (Gemini via google-genai SDK, v1 endpoint)
-      EMBEDDING_PROVIDER: gemini
-      GEMINI_API_KEY: ${GEMINI_API_KEY}
-      EMBEDDING_MODEL: gemini-embedding-001
-      EMBEDDING_DIMENSIONS: 3072
-      EMBEDDING_BATCH_SIZE: 32
+
+      # Phase 3 — embeddings
+      EMBEDDING__PROVIDER: gemini
+      EMBEDDING__MODEL: gemini-embedding-001
+      EMBEDDING__DIMENSIONS: 3072
+      EMBEDDING__BATCH_SIZE: 32
       CHUNK_TOKEN_LIMIT: 512
+
+      # Phase 4 — chat
+      CHAT__PROVIDER: gemini
+      CHAT__MODEL: gemini-2.5-flash
+
+      # Phase 4 — retrieval
+      RETRIEVAL__CANDIDATE_K: 50
+      RETRIEVAL__RERANK_K: 15
+      RETRIEVAL__FINAL_K: 8
+      RETRIEVAL__MAX_CHUNKS_PER_FILE: 3
+      RETRIEVAL__CONTEXT_TOKEN_BUDGET: 4096
+      RETRIEVAL__HISTORY_TURNS: 6
+
     ports:
       - "8000:8000"
+
     volumes:
       - clone_storage:/tmp/forge-clones:ro
+
     depends_on:
       postgres:
         condition: service_healthy
       backend:
         condition: service_started
+
     networks:
       - forge-network
 

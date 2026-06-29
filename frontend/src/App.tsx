@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { GitHubInstallButton } from './components/GitHubInstallButton'
 import { GitHubInstallCallback } from './pages/GitHubInstallCallback'
+import { QAPanel } from './components/QAPanel'
 import './App.css'
 
 interface AuthState {
@@ -232,6 +233,7 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
   const [githubError, setGithubError] = useState<string | null>(null)
   const [installationMissing, setInstallationMissing] = useState(false)
   const [indexStatuses, setIndexStatuses] = useState<Record<string, IndexStatus>>({})
+  const [activeQARepo, setActiveQARepo] = useState<GitHubRepo | null>(null)
 
   const loadRepos = async () => {
     setLoadingRepos(true)
@@ -411,6 +413,16 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
                         Error: {job.error}
                       </div>
                     )}
+                    {idxStatus?.status === 'done' && (
+                      <div style={{ marginTop: '0.5rem' }}>
+                        <button
+                          onClick={() => setActiveQARepo(activeQARepo?.id === repo.id ? null : repo)}
+                          style={{ fontSize: '12px', padding: '2px 8px', background: activeQARepo?.id === repo.id ? '#dbeafe' : undefined }}
+                        >
+                          {activeQARepo?.id === repo.id ? 'Close Q&A' : '💬 Ask'}
+                        </button>
+                      </div>
+                    )}
                   </li>
                 )
               })}
@@ -418,6 +430,20 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
           </div>
         )}
       </div>
+
+      {/* Phase 4 — Q&A panel */}
+      {activeQARepo && (
+        <div style={{ marginBottom: '2rem' }}>
+          <h3 style={{ marginBottom: '0.5rem' }}>
+            💬 Ask about {activeQARepo.repo_full_name}
+          </h3>
+          <QAPanel
+            repoID={activeQARepo.id}
+            repoName={activeQARepo.repo_full_name}
+            token={token}
+          />
+        </div>
+      )}
 
       <div>
         <button onClick={onLogout} style={{ backgroundColor: '#e74c3c', color: 'white' }}>Log Out</button>

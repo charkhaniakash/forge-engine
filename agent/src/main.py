@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 
 from src.auth import extract_token_from_header, verify_token
 from src.ingestion.router import router as ingestion_router
+from src.qa.router import router as qa_router
 
 # Configure structlog — structured JSON, ISO timestamps, trace ID on every line.
 structlog.configure(
@@ -81,6 +82,10 @@ async def version():
 # ── Phase 3 — ingestion ───────────────────────────────────────────────────────
 # POST /v1/agent/ingest  (streaming NDJSON — see ingestion/router.py)
 app.include_router(ingestion_router)
+
+# ── Phase 4 — Q&A ────────────────────────────────────────────────────────────
+# POST /v1/agent/qa  (streaming NDJSON — see qa/router.py)
+app.include_router(qa_router)
 
 
 # ── Phase 5 stub — planning (not yet implemented) ─────────────────────────────

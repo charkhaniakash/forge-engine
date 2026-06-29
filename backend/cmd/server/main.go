@@ -10,6 +10,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/websocket/v2"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
@@ -70,6 +71,7 @@ func main() {
 	pendingInstallRepo := repository.NewPendingInstallRepository(dbConn)
 	webhookDeliveryRepo := repository.NewWebhookDeliveryRepository(dbConn)
 	ingestionJobRepo := repository.NewIngestionJobRepository(dbConn)
+	qaRepo := repository.NewQARepository(dbConn)
 
 	// ── Auth handlers ─────────────────────────────────────────────────────────
 	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -82,6 +84,7 @@ func main() {
 	var jobWorker *ingestion.JobWorker
 	var githubHandlers *handlers.GitHubHandlers
 	var ingestionHandlers *handlers.IngestionHandlers
+	var qaHandlers *handlers.QAHandlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -169,6 +172,17 @@ func main() {
 				sugar,
 			)
 
+			// ── QA handlers (Phase 4) ─────────────────────────────────────────
+			agentQAClient := ingestion.NewAgentQAClient(agentURL, jwtSecret)
+			qaHandlers = handlers.NewQAHandlers(
+				qaRepo,
+				ingestionJobRepo,
+				githubRepoRepo,
+				agentQAClient,
+				jwtSecret,
+				sugar,
+			)
+
 			sugar.Info("GitHub integration and ingestion worker initialised")
 		}
 	} else {
@@ -230,6 +244,21 @@ func main() {
 		// Phase 3 — ingestion status and manual trigger
 		app.Get("/v1/github/repos/:repoID/index/status", middleware.RequireAuth(sugar), ingestionHandlers.GetIndexStatus)
 		app.Post("/v1/github/repos/:repoID/index/trigger", middleware.RequireAuth(sugar), ingestionHandlers.TriggerIndex)
+	}
+
+	if qaHandlers != nil {
+		// Phase 4 — Q&A sessions
+		app.Post("/v1/repos/:repoID/qa/sessions", middleware.RequireAuth(sugar), qaHandlers.CreateSession)
+		app.Get("/v1/repos/:repoID/qa/sessions", middleware.RequireAuth(sugar), qaHandlers.ListSessions)
+		app.Get("/v1/repos/:repoID/qa/sessions/:sessionID", middleware.RequireAuth(sugar), qaHandlers.GetSession)
+		app.Post("/v1/repos/:repoID/qa/sessions/:sessionID/ask", middleware.RequireAuth(sugar), qaHandlers.Ask)
+		// WebSocket — upgrade check (with inline JWT auth) runs first, then the WS handler.
+		// RequireAuth is NOT used here because browsers cannot send Authorization headers
+		// on WebSocket upgrades; the token is validated from the ?token= query parameter.
+		app.Get("/v1/repos/:repoID/qa/sessions/:sessionID/stream",
+			qaHandlers.StreamUpgrade,
+			websocket.New(qaHandlers.StreamWS),
+		)
 	}
 
 	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────

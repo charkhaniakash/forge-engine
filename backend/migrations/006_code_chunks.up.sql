@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS code_chunks (
 
     -- Embeddings
     embedding_model  VARCHAR(128),
-    embedding        vector(3072),  -- Gemini embedding model
+    embedding        vector(768),   -- Gemini text-embedding-004
 
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

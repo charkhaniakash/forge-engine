@@ -19,6 +19,10 @@ import psycopg2.extras
 from src.config import settings
 from src.ingestion.parser.base import ParsedChunk
 
+import structlog
+
+logger = structlog.get_logger()
+
 # Register UUID adapter so we can pass uuid.UUID objects directly.
 psycopg2.extras.register_uuid()
 
@@ -50,35 +54,48 @@ def write_chunks(
         f"chunks ({len(chunks)}) and embeddings ({len(embeddings)}) length mismatch"
     )
 
+    with_embeddings = sum(1 for e in embeddings if e)
+    without_embeddings = len(embeddings) - with_embeddings
+    logger.info(
+        "vector_store_write_start",
+        total=len(chunks),
+        with_embeddings=with_embeddings,
+        without_embeddings=without_embeddings,
+        job_id=job_id,
+    )
+
     rows = []
     for chunk, embedding in zip(chunks, embeddings):
         # pgvector expects the vector as a Python list of floats.
-        # NULL is stored when embedding is empty (e.g. API timeout on that batch).
+        # NULL is stored when embedding is empty (e.g. API error on that batch).
         emb_value = embedding if embedding else None
+        emb_model = settings.embedding_model if emb_value else None
 
         rows.append((
-            str(uuid.uuid4()),        # id
-            repo_id,                  # repo_id
-            job_id,                   # job_id
-            commit_sha,               # commit_sha
-            chunk.file_path,          # file_path
-            chunk.language,           # language
-            chunk.start_line,         # start_line
-            chunk.end_line,           # end_line
-            chunk.chunk_type,         # chunk_type
-            chunk.name,               # name (nullable)
-            chunk.content,            # content
-            chunk.token_count,        # token_count (nullable)
-            chunk.parser_name,        # parser_name
-            chunk.parser_version,     # parser_version
-            settings.embedding_model if emb_value else None,  # embedding_model
-            emb_value,                # embedding (nullable vector)
+            str(uuid.uuid4()),   # id
+            repo_id,             # repo_id
+            job_id,              # job_id
+            commit_sha,          # commit_sha
+            chunk.file_path,     # file_path
+            chunk.language,      # language
+            chunk.start_line,    # start_line
+            chunk.end_line,      # end_line
+            chunk.chunk_type,    # chunk_type
+            chunk.name,          # name (nullable)
+            chunk.content,       # content
+            chunk.token_count,   # token_count (nullable)
+            chunk.parser_name,   # parser_name
+            chunk.parser_version,# parser_version
+            emb_model,           # embedding_model (NULL when no embedding)
+            emb_value,           # embedding (nullable vector)
         ))
 
     conn = _get_connection()
     try:
         with conn:
             with conn.cursor() as cur:
+                # The ::vector cast is required — psycopg2 passes Python lists
+                # as arrays, and pgvector needs an explicit cast to vector.
                 psycopg2.extras.execute_values(
                     cur,
                     """
@@ -92,14 +109,28 @@ def write_chunks(
                     """,
                     rows,
                     template=(
-                        "%s, %s, %s, %s, "
-                        "%s, %s, %s, %s, "
-                        "%s, %s, %s, %s, "
-                        "%s, %s, "
-                        "%s, %s::vector"
+                        "(%s, %s, %s, %s,"
+                        " %s, %s, %s, %s,"
+                        " %s, %s, %s, %s,"
+                        " %s, %s,"
+                        " %s, %s::vector)"
                     ),
                 )
+        logger.info(
+            "vector_store_write_done",
+            rows_inserted=len(rows),
+            with_embeddings=with_embeddings,
+            job_id=job_id,
+        )
         return len(rows)
+    except Exception as exc:
+        logger.error(
+            "vector_store_write_failed",
+            error=str(exc),
+            job_id=job_id,
+            total=len(rows),
+        )
+        raise
     finally:
         conn.close()
 

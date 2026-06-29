@@ -505,8 +505,9 @@ func (h *GitHubHandlers) recoverInstallationForOrg(ctx context.Context, orgID st
 	return installation, nil
 }
 
-// syncReposForInstallation syncs repositories from GitHub for an installation
-// and enqueues an ingestion job for each repo that was synced.
+// syncReposForInstallation syncs repositories from GitHub for an installation.
+// This only syncs repository metadata — it does NOT trigger ingestion.
+// Ingestion must be triggered explicitly via the Index button or push webhooks.
 func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubInstallationID int64, traceID string) {
 	ctx := context.Background()
 
@@ -576,8 +577,8 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 		"trace_id", traceID,
 	)
 
-	// Enqueue an ingestion job for each synced repo.
-	h.enqueueInstallationSyncJobs(syncedRepoIDs, traceID)
+	// Note: We do NOT enqueue ingestion jobs here.
+	// Ingestion must be triggered explicitly via the Index button or push webhooks.
 }
 
 // GetInstallURL generates a GitHub App installation URL with a signed state token
@@ -926,22 +927,4 @@ func (h *GitHubHandlers) handlePushEvent(c *fiber.Ctx, event *github.PushEvent, 
 	)
 
 	return c.Status(200).JSON(fiber.Map{"message": "ingestion job enqueued"})
-}
-
-// enqueueInstallationSyncJobs enqueues an ingestion job for every repo that was
-// just synced during an installation sync. Call after the DB upsert loop.
-func (h *GitHubHandlers) enqueueInstallationSyncJobs(repoIDs []string, traceID string) {
-	if h.worker == nil || h.jobRepo == nil {
-		return
-	}
-	ctx := context.Background()
-	for _, repoID := range repoIDs {
-		if err := h.worker.EnqueueForRepo(ctx, h.jobRepo, repoID, "", "installation_sync"); err != nil {
-			h.logger.Warnw("installation_sync_enqueue_failed",
-				"repo_id", repoID,
-				"error", err,
-				"trace_id", traceID,
-			)
-		}
-	}
 }

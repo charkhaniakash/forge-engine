@@ -255,6 +255,7 @@ func (w *JobWorker) processJob(ctx context.Context, jobID string, workerID strin
 
 	var lastProcessed, lastTotal int
 	var finalTotalChunks int
+	var agentError error
 
 	err = w.agentClient.Ingest(ingestCtx, ingestReq, agentToken, func(event ProgressEvent) {
 		switch event.Event {
@@ -276,6 +277,7 @@ func (w *JobWorker) processJob(ctx context.Context, jobID string, workerID strin
 			log.Infow("agent_ingest_done", "total_chunks", finalTotalChunks)
 
 		case "error":
+			agentError = fmt.Errorf("agent error: %s", event.Message)
 			log.Errorw("agent_ingest_error", "message", event.Message)
 		}
 	})
@@ -283,6 +285,12 @@ func (w *JobWorker) processJob(ctx context.Context, jobID string, workerID strin
 	if err != nil {
 		log.Errorw("agent_ingest_failed", "error", err)
 		_ = w.jobRepo.MarkFailed(ctx, jobID, fmt.Sprintf("agent ingest failed: %v", err))
+		return
+	}
+
+	if agentError != nil {
+		log.Errorw("agent_ingest_failed", "error", agentError)
+		_ = w.jobRepo.MarkFailed(ctx, jobID, agentError.Error())
 		return
 	}
 

@@ -125,7 +125,7 @@ func main() {
 				}
 			}
 
-			cloner := ingestion.NewCloner(cloneBaseDir)
+			cloner := ingestion.NewCloner(cloneBaseDir, sugar)
 			agentClient := ingestion.NewAgentClient(agentURL, jwtSecret)
 
 			jobWorker = ingestion.NewJobWorker(ingestion.WorkerConfig{

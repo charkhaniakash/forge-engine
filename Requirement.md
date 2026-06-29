@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 3 — Repository Ingestion & Indexing**
+> ### 🔵 ACTIVE PHASE: **Phase 4 — Retrieval & Q&A**
 >
-> Only work within this phase's scope (see Phase 3 below) until the human moves
+> Only work within this phase's scope (see Phase 4 below) until the human moves
 > this marker forward.
 
 *(Update this section only when the human says a phase is complete and to move
@@ -152,6 +152,28 @@ on. Do not move it yourself.)*
 - RelinkInstallation endpoint removed: superseded by the two automated recovery paths above
 - Frontend: recovery banner shown when sync returns 404
 - ADR 0003: defer LangGraph adoption documented
+
+### ✅ Phase 3 — Repository Ingestion & Indexing
+- Database: ingestion_jobs table with lifecycle tracking (queued/running/done/failed/superseded)
+- Database: code_chunks table with pgvector extension for embeddings
+- Go: JobWorker with Redis queue (BLPOP), goroutine pool with configurable concurrency
+- Go: Cloner for git clone via os/exec with credential helper
+- Go: AgentClient for streaming HTTP calls to Python agent
+- Go: IngestionJobRepository for job CRUD and supersede logic
+- Go: Push webhook handler enqueues ingestion jobs on push events
+- Go: Installation sync auto-enqueues ingestion jobs for all synced repos
+- Agent: POST /v1/agent/ingest endpoint with streaming NDJSON progress
+- Agent: Tree-sitter parsers for Python and JavaScript, line-based fallback
+- Agent: Token-budget-aware chunker with tiktoken (cl100k_base encoding)
+- Agent: Embedder with provider abstraction (OpenAI/Anthropic)
+- Agent: Vector store writer for direct pgvector writes
+- Frontend: Index status API (GET /v1/github/repos/:repoID/index/status)
+- Frontend: Manual trigger (POST /v1/github/repos/:repoID/index/trigger)
+- Frontend: Job progress panel showing stage, processed/total chunks, progress bar
+- ADR 0004: Clone ownership and ingestion contract documented
+- Supersede logic: worker checks status before clone and after clone only
+- Retrieval gates on job status = 'done' (partial repos never queryable)
+- Snapshot model: (repo_id, commit_sha) as immutable snapshot key
 
 ---
 

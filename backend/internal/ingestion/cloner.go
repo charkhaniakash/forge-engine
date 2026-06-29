@@ -1,6 +1,7 @@
 package ingestion
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"go.uber.org/zap"
 )
 
 // Cloner clones a GitHub repository to a temporary directory using an
@@ -18,6 +21,7 @@ import (
 // directly — that contract is enforced by ADR 0004.
 type Cloner struct {
 	baseDir string // root temp directory for all clones, e.g. /tmp/forge-clones
+	logger  *zap.SugaredLogger
 }
 
 // CloneResult holds the local path and metadata for a successful clone.
@@ -28,11 +32,11 @@ type CloneResult struct {
 
 // NewCloner creates a Cloner that stores clones under baseDir.
 // If baseDir is empty, os.TempDir()/forge-clones is used.
-func NewCloner(baseDir string) *Cloner {
+func NewCloner(baseDir string, logger *zap.SugaredLogger) *Cloner {
 	if baseDir == "" {
 		baseDir = filepath.Join(os.TempDir(), "forge-clones")
 	}
-	return &Cloner{baseDir: baseDir}
+	return &Cloner{baseDir: baseDir, logger: logger}
 }
 
 // Clone checks out the repository at the given commitSHA into a uniquely named
@@ -46,24 +50,33 @@ func (c *Cloner) Clone(ctx context.Context, cloneURL string, commitSHA string, t
 		return nil, fmt.Errorf("failed to create clone base dir: %w", err)
 	}
 
-	// Unique directory per job: <baseDir>/<sha>-<timestamp>
-	shortSHA := commitSHA
-	if len(shortSHA) > 8 {
-		shortSHA = shortSHA[:8]
+	// Build a safe directory name.
+	// commitSHA may be empty for manual triggers — use "head" as placeholder.
+	// Prefix with "clone-" so the path never starts with a hyphen, which git
+	// would misinterpret as a flag (causing exit 128 with no useful output).
+	shaLabel := "head"
+	if len(commitSHA) >= 8 {
+		shaLabel = commitSHA[:8]
+	} else if commitSHA != "" {
+		shaLabel = commitSHA
 	}
-	dirName := fmt.Sprintf("%s-%d", shortSHA, time.Now().UnixNano())
+	dirName := fmt.Sprintf("clone-%s-%d", shaLabel, time.Now().UnixNano())
 	dir := filepath.Join(c.baseDir, dirName)
 
+	c.logger.Infow("clone_starting",
+		"dir", dir,
+		"commit_sha", commitSHA,
+		"sha_label", shaLabel,
+	)
+
 	// Inject the token via GIT_ASKPASS so it never touches ~/.netrc or git config.
-	// The helper script prints the token when git asks for a password.
 	askPassScript, cleanup, err := writeAskPassScript(token)
 	if err != nil {
 		return nil, fmt.Errorf("failed to write askpass script: %w", err)
 	}
 	defer cleanup()
 
-	// Shallow clone at depth 1 to keep disk usage minimal.
-	// We fetch only the specific commit SHA after the shallow clone.
+	// Shallow clone — depth=1, only the default branch.
 	cloneArgs := []string{
 		"clone",
 		"--depth=1",
@@ -72,41 +85,77 @@ func (c *Cloner) Clone(ctx context.Context, cloneURL string, commitSHA string, t
 		dir,
 	}
 
-	if err := runGit(ctx, askPassScript, cloneArgs...); err != nil {
+	c.logger.Infow("git_clone_starting",
+		"dir", dir,
+		"args", strings.Join(cloneArgs[1:len(cloneArgs)-1], " "), // omit URL (contains token)
+	)
+
+	if err := c.runGit(ctx, askPassScript, cloneArgs...); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("git clone failed: %w", err)
 	}
 
-	// If the requested commitSHA is not HEAD (e.g. a push event for a specific
-	// commit), fetch and checkout that exact commit.
-	head, err := getHEAD(ctx, dir)
+	c.logger.Infow("git_clone_succeeded", "dir", dir)
+
+	// Read HEAD from the cloned repo.
+	head, err := c.getHEAD(ctx, dir)
 	if err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("failed to read HEAD after clone: %w", err)
 	}
 
+	c.logger.Infow("git_head_resolved", "dir", dir, "head", head)
+
+	// If a specific commit was requested and it differs from HEAD, fetch and
+	// check it out. This handles push-triggered jobs where the SHA is known.
 	if commitSHA != "" && !strings.HasPrefix(head, commitSHA) && !strings.HasPrefix(commitSHA, head) {
-		// Fetch the specific commit (shallow clones don't have it by default).
-		if err := runGit(ctx, askPassScript, "-C", dir, "fetch", "--depth=1", "origin", commitSHA); err != nil {
+		c.logger.Infow("git_fetch_specific_commit",
+			"dir", dir,
+			"commit_sha", commitSHA,
+			"current_head", head,
+		)
+
+		if err := c.runGit(ctx, askPassScript, "-C", dir, "fetch", "--depth=1", "origin", commitSHA); err != nil {
 			_ = os.RemoveAll(dir)
 			return nil, fmt.Errorf("git fetch %s failed: %w", commitSHA, err)
 		}
-		if err := runGit(ctx, askPassScript, "-C", dir, "checkout", commitSHA); err != nil {
+
+		if err := c.runGit(ctx, askPassScript, "-C", dir, "checkout", commitSHA); err != nil {
 			_ = os.RemoveAll(dir)
 			return nil, fmt.Errorf("git checkout %s failed: %w", commitSHA, err)
 		}
-		head = commitSHA
+
+		// Re-read HEAD after checkout so we return the resolved full SHA.
+		head, err = c.getHEAD(ctx, dir)
+		if err != nil {
+			_ = os.RemoveAll(dir)
+			return nil, fmt.Errorf("failed to read HEAD after checkout: %w", err)
+		}
+
+		c.logger.Infow("git_checkout_succeeded",
+			"dir", dir,
+			"head", head,
+		)
 	}
 
-	// Resolve full SHA if we only have a short one.
+	// If head is still short (e.g. because commitSHA was short), resolve to full.
 	if len(head) < 40 {
-		full, err := getHEAD(ctx, dir)
-		if err == nil {
+		if full, err := c.getHEAD(ctx, dir); err == nil {
 			head = full
 		}
 	}
 
-	return &CloneResult{Dir: dir, CommitSHA: strings.TrimSpace(head)}, nil
+	result := &CloneResult{
+		Dir:       dir,
+		CommitSHA: strings.TrimSpace(head),
+	}
+
+	c.logger.Infow("clone_complete",
+		"dir", result.Dir,
+		"commit_sha", result.CommitSHA,
+	)
+
+	return result, nil
 }
 
 // Cleanup removes the clone directory. Safe to call with an empty path or a
@@ -115,31 +164,74 @@ func (c *Cloner) Cleanup(dir string) {
 	if dir == "" {
 		return
 	}
-	_ = os.RemoveAll(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		c.logger.Warnw("clone_cleanup_failed", "dir", dir, "error", err)
+	} else {
+		c.logger.Infow("clone_cleanup_done", "dir", dir)
+	}
 }
 
-// runGit runs a git command with the GIT_ASKPASS env set.
-func runGit(ctx context.Context, askPassScript string, args ...string) error {
+// runGit executes a git command with GIT_ASKPASS injected. It captures both
+// stdout and stderr and includes them in any error message.
+func (c *Cloner) runGit(ctx context.Context, askPassScript string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Env = append(os.Environ(),
 		"GIT_ASKPASS="+askPassScript,
-		"GIT_TERMINAL_PROMPT=0", // never block waiting for interactive input
+		"GIT_TERMINAL_PROMPT=0",
 	)
-	out, err := cmd.CombinedOutput()
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return fmt.Errorf("%w\noutput: %s", err, string(out))
+		c.logger.Errorw("git_command_failed",
+			"args", args,
+			"exit_code", cmd.ProcessState.ExitCode(),
+			"stdout", strings.TrimSpace(stdout.String()),
+			"stderr", strings.TrimSpace(stderr.String()),
+		)
+		return fmt.Errorf(
+			"git %s: %w\nstdout: %s\nstderr: %s",
+			args[0], err,
+			strings.TrimSpace(stdout.String()),
+			strings.TrimSpace(stderr.String()),
+		)
 	}
+
 	return nil
 }
 
 // getHEAD returns the full commit SHA of HEAD in the given repo directory.
-func getHEAD(ctx context.Context, dir string) (string, error) {
+// It captures stderr so that failures include the actual git error message
+// rather than just "exit status 128".
+func (c *Cloner) getHEAD(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "HEAD")
-	out, err := cmd.Output()
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
 	if err != nil {
-		return "", fmt.Errorf("rev-parse HEAD: %w", err)
+		c.logger.Errorw("git_rev_parse_failed",
+			"dir", dir,
+			"exit_code", cmd.ProcessState.ExitCode(),
+			"stderr", strings.TrimSpace(stderr.String()),
+		)
+		return "", fmt.Errorf(
+			"rev-parse HEAD in %s: %w\nstderr: %s",
+			dir, err,
+			strings.TrimSpace(stderr.String()),
+		)
 	}
-	return strings.TrimSpace(string(out)), nil
+
+	sha := strings.TrimSpace(stdout.String())
+	if sha == "" {
+		return "", fmt.Errorf("rev-parse HEAD in %s returned empty output", dir)
+	}
+	return sha, nil
 }
 
 // writeAskPassScript writes a temporary shell script that prints the token
@@ -149,7 +241,6 @@ func writeAskPassScript(token string) (string, func(), error) {
 	if err != nil {
 		return "", nil, err
 	}
-	// The script ignores its argument (the prompt) and just echoes the token.
 	script := fmt.Sprintf("#!/bin/sh\necho '%s'\n", strings.ReplaceAll(token, "'", "'\\''"))
 	if _, err := f.WriteString(script); err != nil {
 		_ = f.Close()

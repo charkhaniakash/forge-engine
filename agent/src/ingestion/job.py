@@ -98,6 +98,8 @@ def _parse_file(abs_path: str, rel_path: str) -> list[ParsedChunk]:
     """Read and parse a single file. Never raises."""
     try:
         source = Path(abs_path).read_text(encoding="utf-8", errors="replace")
+        # Remove NUL characters which cause PostgreSQL errors
+        source = source.replace("\x00", "")
     except Exception:
         return []
 
@@ -178,16 +180,55 @@ def run_ingestion(
         batch_size = settings.embedding_batch_size
         persisted = 0
 
+        log.info(
+            "embedding_stage_start",
+            total_chunks=total_chunks,
+            batch_size=batch_size,
+            total_batches=(total_chunks + batch_size - 1) // batch_size,
+            provider=settings.embedding_provider,
+            model=settings.embedding_model,
+        )
+
         for batch_start in range(0, total_chunks, batch_size):
             batch = all_chunks[batch_start : batch_start + batch_size]
             texts = [c.content for c in batch]
+            batch_num = batch_start // batch_size + 1
 
-            # Embed — on failure write NULLs so content is preserved.
+            log.info(
+                "embedding_batch_start",
+                batch_num=batch_num,
+                batch_size=len(batch),
+                batch_start=batch_start,
+            )
+
             try:
                 vectors = embedder.embed_batch(texts)
+                log.info(
+                    "embedding_batch_success",
+                    batch_num=batch_num,
+                    vectors_returned=len(vectors),
+                    dims=len(vectors[0]) if vectors else 0,
+                )
             except Exception as exc:
-                log.warning("embedding_batch_failed", error=str(exc), batch_start=batch_start)
-                vectors = [[] for _ in batch]
+                # Log the full error so it's visible in agent logs, then
+                # fail the job immediately — writing 1137 NULL embeddings
+                # is worse than failing fast and retrying.
+                log.error(
+                    "embedding_batch_failed",
+                    batch_num=batch_num,
+                    batch_start=batch_start,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                yield emit({
+                    "event": "error",
+                    "message": (
+                        f"Embedding failed at batch {batch_num} "
+                        f"(chunks {batch_start}–{batch_start + len(batch)}): "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                })
+                return
 
             # Persist this batch immediately (incremental writes per ADR 0004).
             try:
@@ -196,8 +237,13 @@ def run_ingestion(
                 )
                 persisted += written
             except Exception as exc:
-                log.error("persist_batch_failed", error=str(exc), batch_start=batch_start)
-                yield emit({"event": "error", "message": f"persist failed at batch {batch_start}: {exc}"})
+                log.error(
+                    "persist_batch_failed",
+                    batch_num=batch_num,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+                yield emit({"event": "error", "message": f"persist failed at batch {batch_num}: {exc}"})
                 return
 
             yield emit({

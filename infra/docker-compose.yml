@@ -83,11 +83,11 @@ services:
       JWT_SECRET: phase-0-insecure-default
       # Phase 3 — database (for direct pgvector writes)
       DATABASE_URL: postgresql://forge:forge@postgres:5432/forge
-      # Phase 3 — embeddings (Gemini is the default provider)
+      # Phase 3 — embeddings (Gemini via google-genai SDK, v1 endpoint)
       EMBEDDING_PROVIDER: gemini
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      EMBEDDING_MODEL: models/text-embedding-004
-      EMBEDDING_DIMENSIONS: 768
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      EMBEDDING_MODEL: gemini-embedding-001
+      EMBEDDING_DIMENSIONS: 3072
       EMBEDDING_BATCH_SIZE: 32
       CHUNK_TOKEN_LIMIT: 512
     ports:

@@ -21,19 +21,19 @@ class Settings(BaseSettings):
     # The model identifier sent to the provider API and stored in
     # code_chunks.embedding_model. Must match the provider's model names.
     #
-    # Gemini defaults:  models/text-embedding-004 (768-dim)
-    # OpenAI:           text-embedding-3-small (1536-dim)
+    # Gemini:  gemini-embedding-001 (1536-dim) — current recommended model
+    # OpenAI:  text-embedding-3-small (1536-dim)
     #
     # ⚠️  All chunks for a repository must use the same embedding model.
     #     Changing this after a repository has been indexed requires running
     #     a re-index job for every affected repository.
-    embedding_model: str = "models/text-embedding-004"
+    embedding_model: str = "gemini-embedding-001"
 
     # Output dimension of the embedding model.
     # Must match the vector(N) column type in code_chunks.
-    # Gemini text-embedding-004 = 768 dims.
+    # gemini-embedding-001 = 1536 dims (matches pgvector column default).
     # Changing this requires a database migration.
-    embedding_dimensions: int = 768
+    embedding_dimensions: int = 1536
 
     # Number of texts per embed() call. Each provider handles this internally.
     embedding_batch_size: int = 32

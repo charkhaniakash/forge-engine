@@ -172,3 +172,37 @@ func (r *GitHubInstallationRepository) DeleteInstallation(ctx context.Context, i
 	_, err := r.db.ExecContext(ctx, query, id)
 	return err
 }
+
+// GetByID retrieves a GitHub installation by its internal UUID.
+func (r *GitHubInstallationRepository) GetByID(ctx context.Context, id string) (*models.GitHubInstallation, error) {
+	query := `
+		SELECT id, org_id, github_installation_id, github_account_id, github_account_login, access_token, token_expires_at, created_at, updated_at
+		FROM github_installations
+		WHERE id = $1
+	`
+	var accessToken sql.NullString
+	var tokenExpiresAt sql.NullTime
+	var installation models.GitHubInstallation
+
+	err := r.db.QueryRowContext(ctx, query, id).Scan(
+		&installation.ID,
+		&installation.OrgID,
+		&installation.GitHubInstallationID,
+		&installation.GitHubAccountID,
+		&installation.GitHubAccountLogin,
+		&accessToken,
+		&tokenExpiresAt,
+		&installation.CreatedAt,
+		&installation.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if accessToken.Valid {
+		installation.AccessToken = accessToken.String
+	}
+	if tokenExpiresAt.Valid {
+		installation.TokenExpiresAt = &tokenExpiresAt.Time
+	}
+	return &installation, nil
+}

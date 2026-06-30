@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 3 — Repository Ingestion & Indexing**
+> ### 🔵 ACTIVE PHASE: **Phase 5 — Task Creation & Implementation Planning**
 >
-> Only work within this phase's scope (see Phase 3 below) until the human moves
+> Only work within this phase's scope (see Phase 5 below) until the human moves
 > this marker forward.
 
 *(Update this section only when the human says a phase is complete and to move
@@ -131,7 +131,7 @@ on. Do not move it yourself.)*
 - GitHub App registration (private key, webhook secret, app ID)
 - Secure Install + Callback flow with JWT-signed state tokens
   - GET /v1/github/install/url: Generates install URL with signed state
-  - GET /v1/github/install/callback: Validates state and shows HTML response
+  - GET /v1/github/install/callback: Validates state, reads installation_id from query params, upserts github_installations record immediately
   - pending_installs table for tracking pending installations
   - 10-minute expiry on pending installs
   - One-time use state tokens
@@ -143,6 +143,65 @@ on. Do not move it yourself.)*
 - RBAC: org_id enforced on protected endpoints
 - Frontend: GitHubInstallButton component and GitHubInstallCallback page
 - ADR documentation for install flow (docs/adr/0002-github-install-flow.md)
+
+### ✅ Phase 2 — Hardening
+- Webhook idempotency: webhook_deliveries table + ON CONFLICT DO NOTHING deduplication
+- Pending install hardening: state_token_hash, callback_seen, used_at columns (migration 004)
+- Callback correlation: InstallCallback reads installation_id from GitHub redirect, upserts github_installations immediately via GitHub API — covers both fresh install and DB-loss recovery
+- SyncRepos auto-recovery: when no local installation record exists, calls ListAppInstallations to find and recreate the record automatically
+- RelinkInstallation endpoint removed: superseded by the two automated recovery paths above
+- Frontend: recovery banner shown when sync returns 404
+- ADR 0003: defer LangGraph adoption documented
+
+### ✅ Phase 5 — Task Creation & Implementation Planning
+- Database: work_items table — type, intent, status state machine, approval_status enum, approval_policy JSONB
+- Database: plans table — immutable append-only versions, schema_version v1, is_active flag, created_by field
+- Migration 008: work_items + plans with correct indexes and constraints
+- Go: WorkItemRepository — full state machine transitions (StartPlanning, MarkPlanReady, Approve, ResetForReplan, Cancel, GetByIDInternal)
+- Go: AgentPlanClient — POST /v1/agent/plan streaming NDJSON client (thinking/plan/error events)
+- Go: TaskHandlers — 9 endpoints (create, list, get, list-plans, update-plan, approve, replan, cancel, WS stream)
+- Go: Approval gate — hard-enforced server-side; status cannot advance to plan_approved without approval_status = approved
+- Go: Plan validation — JSON schema check + dependency cycle detection before any plan is persisted
+- Go: Planning goroutine — background dispatch, thinking events fanned to WebSocket in real time
+- Agent: Planner Protocol — interface for all planning implementations (plan_type, planner_id, async generate())
+- Agent: PlannerRegistry — factory pattern; Phase 5 registers ImplementationPlanner only
+- Agent: ImplementationPlanner — JSON-mode LLM call, PlanBody validation, one retry on failure
+- Agent: PlanValidator — deterministic: required fields, duplicate IDs, depends_on refs, cycle detection
+- Agent: PlanningPipeline — 7-stage async generator: intent→retrieval→impact→arch→constraint(noop)→generate→emit
+- Agent: RetrievalProfile — named profiles (qa, planning); planning uses k=120, include_tests=True, budget=8192
+- Agent: RetrievalEngine — updated to accept optional RetrievalProfile; backward-compatible (Q&A unchanged)
+- Agent: ChatProviders — updated to accept response_format for JSON mode (OpenAI/Gemini/Anthropic)
+- Agent: POST /v1/agent/plan — streaming NDJSON router; replaces Phase 5 stub
+- Frontend: TaskPanel — task list, intent input, live planning progress, plan viewer with step editing
+- Frontend: PlanView — steps with risk badges, affected files, edit/reorder/delete, approve button
+- Frontend: App.tsx — ⚡ Tasks button per indexed repo, TaskPanel mount
+- Plan Schema v1: schema_version, plan_type, planner_id, intent_summary, risks, assumptions, affected_files, steps
+- PlanStep: id, stable_id, order, depends_on[], title, description, type, affected_files, estimated_risk, user_edited, metadata
+- Approval policy: JSONB field; Phase 5 always_require_human; extensible for Phase 12 auto-approve rules
+- WorkItem composition: parent_id + template_id nullable columns reserved for future sub-tasks / templates
+
+---
+- Database: ingestion_jobs table with lifecycle tracking (queued/running/done/failed/superseded)
+- Database: code_chunks table with pgvector extension for embeddings
+- Go: JobWorker with Redis queue (BLPOP), goroutine pool with configurable concurrency
+- Go: Cloner for git clone via os/exec with credential helper
+- Go: AgentClient for streaming HTTP calls to Python agent
+- Go: IngestionJobRepository for job CRUD and supersede logic
+- Go: Push webhook handler enqueues ingestion jobs on push events
+- Go: Installation sync auto-enqueues ingestion jobs for all synced repos
+- Agent: POST /v1/agent/ingest endpoint with streaming NDJSON progress
+- Agent: Tree-sitter parsers for Python and JavaScript, line-based fallback
+- Agent: Token-budget-aware chunker with tiktoken (cl100k_base encoding)
+- Agent: Embedder with provider abstraction (OpenAI/Anthropic)
+- Agent: Vector store writer for direct pgvector writes
+- Frontend: Index status API (GET /v1/github/repos/:repoID/index/status)
+- Frontend: Manual trigger (POST /v1/github/repos/:repoID/index/trigger)
+- Frontend: Job progress panel showing stage, processed/total chunks, progress bar
+- ADR 0004: Clone ownership and ingestion contract documented
+- Supersede logic: worker checks status before clone and after clone only
+- Retrieval gates on job status = 'done' (partial repos never queryable)
+- Snapshot model: (repo_id, commit_sha) as immutable snapshot key
+
 ---
 
 ## 7. Phase-by-Phase Plan
@@ -228,39 +287,127 @@ verified and durably recorded.
 ### Phase 2 — Hardening (added)
 
 Purpose: Operational and safety hardening to make the GitHub App install/callback/webhook flow production-ready before Phase 3 ingestion.
-Changes introduced:
-Webhook idempotency: webhook_deliveries table + repository to record delivery_id and drop duplicate deliveries.
-Pending install hardening: added state_token_hash, callback_seen, used_at columns (migration 004_pending_installs_harden.up.sql) and single‑use enforcement.
-Callback/Correlation flow: GET /v1/github/install/callback now validates signed state, marks pending install as callback_seen; installation.created webhook atomically correlates callback‑seen pending installs and inserts github_installations (transactional, marks pending install used).
-Recovery / relink: admin POST /v1/github/admin/relink (admin-only) to recreate missing github_installations for installs present on GitHub but absent locally.
-Operational docs & tests: added integration tests for install→callback→webhook→sync, and 0002-github-install-flow.md updated to reflect the flow.
-Why: prevents data loss after DB resets, avoids duplicate processing from webhook retries, and provides an operational recovery path. These are required before starting Phase 3 indexing work.
+
+Changes implemented:
+- Webhook idempotency: `webhook_deliveries` table + `ON CONFLICT DO NOTHING` deduplication
+- Pending install hardening: `state_token_hash`, `callback_seen`, `used_at` columns (migration 004) with single-use enforcement
+- Callback/Correlation flow: `GET /v1/github/install/callback` now reads `installation_id` from GitHub's redirect query params and immediately upserts the `github_installations` record via the GitHub API — covers both fresh install and DB-loss recovery without requiring a new webhook
+- `SyncRepos` auto-recovery: when no local installation record exists, calls `GET /app/installations` to find and recreate the record automatically
+- `RelinkInstallation` endpoint removed: superseded entirely by the two automated recovery paths above
+- Frontend: recovery banner shown when sync returns 404
+- ADR 0003: defer LangGraph adoption documented
 
 ---
 
 ### Phase 3 — Repository Ingestion & Indexing
 
-**Objective:** Turn a connected repo into something queryable: cloned, parsed,
-chunked, embedded.
+**Objective:** Turn a connected repo into something queryable: cloned, parsed, chunked, embedded.
 
-**In scope:** clone-on-connect job, AST parsing (start with 2–3 languages),
-function/class-level chunking, embeddings + vector store, symbol/dependency
-graph, incremental re-index on push, job progress visible to user.
+**Agreed architecture (see ADR 0004):**
 
-**Out of scope:** Q&A, planning, code editing — this phase only builds the index,
-it doesn't use it yet.
+- Go clones the repo using the installation token. The Agent never calls git.
+- Go passes the read-only clone path to the Agent via `POST /v1/agent/ingest`.
+- The Agent streams NDJSON progress events back on the HTTP response.
+- Go reads the stream, updates job state in DB, fans out to frontend via WebSocket.
+- The frontend only talks to Go. It never knows the Agent exists.
+- Retrieval (Phase 4+) only reads chunks where `ingestion_jobs.status = 'done'`.
+- Rapid pushes: older jobs are marked `superseded`; worker checks before clone and after clone only (not during embedding).
+- Every successful ingestion is treated as an immutable snapshot keyed by `(repo_id, commit_sha)`.
 
-**Backend (Go):** orchestrates ingestion job lifecycle and state, manages
-ephemeral clone storage, triggers re-index on push webhooks (debounced), emits
-progress events.
+**In scope:**
+- `ingestion_jobs` table: `trigger_type`, `status` (queued/running/done/failed/superseded), `progress_stage`, `queued_at`, `started_at`, `finished_at`, `worker_id`, `total_chunks`, `processed_chunks`, `error`
+- `code_chunks` table: `repo_id`, `job_id`, `commit_sha`, `file_path`, `language`, `chunk_type`, `name`, `start_line`, `end_line`, `content`, `token_count`, `embedding_model`, `embedding` (vector, nullable), `parser_name`, `parser_version`
+- pgvector extension; ivfflat index on embedding column
+- Go: `JobWorker` (goroutine pool, Redis BLPOP), `Cloner` (git clone via os/exec), `AgentClient` (streaming HTTP), `IngestionJobRepository`, status endpoints, push webhook → enqueue
+- Agent: `POST /v1/agent/ingest` (streaming NDJSON), tree-sitter parsing (Python + JS/TS + line-based fallback), chunker (token-budget aware), embedder (provider abstraction, batched), vector store writer (psycopg2 direct)
+- ADR 0004 documenting the clone ownership and ingestion contract
+- Job status API: `GET /v1/github/repos/:repoID/index/status`
+- Manual trigger: `POST /v1/github/repos/:repoID/index/trigger`
+- Frontend: job progress panel showing stage + percentage
 
-**Agent (Python):** executes cloning logic (or operates on a Backend-provided
-read-only path — decide and record as ADR), AST parsing, chunking, embedding
-generation, symbol/dependency graph construction.
+**Out of scope:** Q&A, retrieval, planning, code editing, dependency graph, LangGraph, symbol table as first-class entity, generative LLM calls, `repo_index_heads` table.
 
-**Definition of Done:** A versioned, queryable index (symbols + embeddings +
-dependency graph) exists per repo, tied to a commit SHA, updates incrementally
-on push, with real-time progress shown to the user.
+**Backend (Go):** job lifecycle, queue, clone, agent HTTP client, status persistence, push webhook debounce, WebSocket fan-out, clone cleanup.
+
+**Agent (Python):** parse, chunk, embed, write `code_chunks`, stream NDJSON progress. Never calls git. Never writes to the filesystem.
+
+**Definition of Done:**
+1. Connecting a repo triggers an ingestion job automatically
+2. A push to a connected repo triggers a re-index job (debounced by SHA; older jobs marked superseded)
+3. `code_chunks` rows exist for the repo tied to the indexed commit SHA, with embeddings stored in pgvector
+4. A cosine similarity query against `code_chunks` returns relevant chunks
+5. Job status (queued → running → done/failed/superseded) is visible via API with stage and progress
+6. Real-time progress is visible in the frontend (stage label + processed/total counts)
+7. Partially indexed repos are never queryable (retrieval gates on `status = 'done'`)
+8. The Agent never calls git, subprocess, or writes outside the database
+
+---
+
+### Phase 3 — Embedding Provider Abstraction (Extended)
+
+**Why this exists:**
+The ingestion pipeline must not be coupled to any single embedding vendor. Providers change their APIs, pricing, and availability. Different deployments may require different models (OpenAI for cloud, Ollama for on-premise, Gemini as an alternative). The abstraction makes the pipeline provider-agnostic so adding a new provider never requires changes to ingestion logic.
+
+**Design:**
+A Strategy Pattern is used. `EmbeddingProvider` (abstract base class in `agent/src/ingestion/embedding/base.py`) defines the contract:
+
+```python
+class EmbeddingProvider(ABC):
+    @property
+    @abstractmethod
+    def model_name(self) -> str: ...   # stored in code_chunks.embedding_model
+
+    @abstractmethod
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+```
+
+The ingestion pipeline (`job.py`) imports only `embedder.embed_batch()` — a thin shim that delegates to the active provider. No provider-specific code or conditionals exist outside `factory.py`.
+
+**Supported providers:**
+
+| `EMBEDDING_PROVIDER` | Class | Default model | Dimensions |
+|---|---|---|---|
+| `openai` (default) | `OpenAIEmbeddingProvider` | `text-embedding-3-small` | 1536 |
+| `gemini` | `GeminiEmbeddingProvider` | `models/text-embedding-004` | 768 |
+
+**Configuration variables:**
+
+| Variable | Description | Default |
+|---|---|---|
+| `EMBEDDING_PROVIDER` | Provider name (`openai`, `gemini`) | `openai` |
+| `EMBEDDING_MODEL` | Model identifier sent to the provider API | `text-embedding-3-small` |
+| `EMBEDDING_DIMENSIONS` | Vector dimension (must match DB column type) | `1536` |
+| `EMBEDDING_BATCH_SIZE` | Texts per `embed()` call | `32` |
+| `OPENAI_API_KEY` | Required when `EMBEDDING_PROVIDER=openai` | — |
+| `GEMINI_API_KEY` | Required when `EMBEDDING_PROVIDER=gemini` | — |
+
+**How to add a new provider (e.g. Voyage AI):**
+1. Create `agent/src/ingestion/embedding/voyage_provider.py` implementing `EmbeddingProvider`.
+2. Add an entry to `_REGISTRY` in `factory.py`:
+   ```python
+   "voyage": (lambda: _make_voyage(),),
+   ```
+3. Add `_make_voyage()` in `factory.py` that reads the API key from `settings`.
+4. Set `EMBEDDING_PROVIDER=voyage` in the environment.
+5. No other files change.
+
+**Critical constraint — model consistency per repository:**
+All `code_chunks` rows for a given repository must be generated by the same embedding model. Changing `EMBEDDING_PROVIDER` or `EMBEDDING_MODEL` after a repository has been indexed produces vectors in an incompatible space — cosine similarity queries will return meaningless results. Switching models requires:
+1. Deleting all `code_chunks` rows for the affected repositories (`DELETE FROM code_chunks WHERE repo_id = $1`).
+2. Re-triggering an ingestion job (`POST /v1/github/repos/:repoID/index/trigger`).
+The `embedding_model` column on every `code_chunks` row records which model produced it, making it possible to identify which repositories need re-indexing after a model change.
+
+**File layout:**
+```
+agent/src/ingestion/embedding/
+  __init__.py          — exports EmbeddingProvider, get_embedding_provider
+  base.py              — abstract EmbeddingProvider
+  openai_provider.py   — OpenAI implementation
+  gemini_provider.py   — Google Gemini implementation
+  factory.py           — sole selection point; reads EMBEDDING_PROVIDER
+agent/src/ingestion/
+  embedder.py          — public shim: embed_batch() delegates to factory
+```
 
 ---
 
@@ -269,21 +416,47 @@ on push, with real-time progress shown to the user.
 **Objective:** Users ask natural-language questions about a repo and get
 accurate, cited, streamed answers.
 
-**In scope:** retrieval pipeline (vector search + symbol-graph expansion +
-re-ranking), grounded answer generation with citations, multi-turn session
-context, token-streamed delivery.
+**Agreed architecture (see implementation):**
 
-**Out of scope:** task creation, planning, code editing.
+- Sessions are pinned to `commit_sha` at creation time — every question in the session retrieves against the same snapshot. A banner is shown when a newer index is available.
+- `qa_sessions.workspace_id` is NULL in Phase 4 and reserved for Phase 5+ workspace grouping.
+- Go resolves the latest done `commit_sha` from `ingestion_jobs` and passes it to the Agent — the Agent never queries job tables directly.
+- Agent retrieval pipeline: `embed → VectorCandidateGenerator(top_k=50) → MetadataFilter → Reranker(cosine+keyword) → DiversitySelector(max_per_file=3, keep=15) → LinearContextAssembler(budget=4096)`.
+- `RetrievalScope` is a runtime-only construct (never stored in DB) — `qa_sessions` keeps plain `repo_id` + `commit_sha` columns.
+- `CandidateGenerator` accepts `RetrievalScope` (not bare repo_id) — future multi-repo search passes multiple pairs without changing the interface.
+- NDJSON event schema: `{"v":1, "event":"token|done|error", "seq":N, "request_id":"..."}` — versioned from day one.
+- `LLMStreamer` emits an opaque `payload: dict` in the done event — Q&A sets `payload={"citations":[...]}`. Future capabilities (planning, code-gen) set their own payload without changing the streamer.
+- Reusable core lives in `src/core/` (RetrievalEngine, ContextAssembler, LLMStreamer). Q&A-specific code lives in `src/qa/`.
+- `RetrievalResult` carries diagnostics (timing_ms, candidate_count, filtered_count, reranked_count, final_count) logged as a structured `retrieval_trace` event for future observability.
+- Snapshot retention: Go owns GC lifecycle. Sessions reference `commit_sha` as a GC anchor — chunks for a snapshot are never deleted while a session references that SHA.
+- All retrieval tuning knobs (candidate_k, rerank_k, etc.) are config-driven via `RETRIEVAL__*` env vars; runtime-configurable DB config is Phase 13.
 
-**Backend (Go):** Q&A session persistence, proxies requests to Agent, relays
-streamed tokens over WebSocket, enforces repo-readiness + access control.
+**In scope:**
+- `qa_sessions` + `qa_messages` tables (migration 007)
+- `QARepository`: session + message CRUD
+- `AgentQAClient`: POST `/v1/agent/qa` + NDJSON stream reader
+- REST endpoints: create session, list sessions, get session, ask, WebSocket stream
+- `RetrievalEngine` composing 4 stages
+- `VectorCandidateGenerator`, `MetadataFilter`, `Reranker`, `DiversitySelector`, `LinearContextAssembler`
+- `ChatProvider` protocol + OpenAI/Gemini/Anthropic implementations
+- `QAPipeline`: embed → retrieve → assemble → prompt → stream
+- `QAPanel` frontend: session list, chat UI, citation tags, WebSocket streaming
+- Nested config: `EmbeddingConfig`, `ChatConfig`, `RetrievalConfig`
 
-**Agent (Python):** hybrid retrieval, context assembly within token budget,
-prompt construction, LLM call + streaming, citation extraction, conversation
-memory/summarization.
+**Out of scope:** hybrid retrieval, symbol graph expansion, WebSocket reconnect/replay (Phase 11), cost tracking (Phase 13), multi-repo sessions, LangGraph.
 
-**Definition of Done:** A user asks a question on an indexed repo and gets a
-streamed, cited, grounded answer; sessions persist and resume.
+**Backend (Go):** session/message persistence, auth gate, repo-readiness check, WS hub, answer persistence on done event.
+
+**Agent (Python):** embed, retrieve, assemble, prompt, stream. Stateless — never writes sessions or messages.
+
+**Definition of Done:**
+1. A user asks a question on an indexed repo and gets a streamed, cited, grounded answer
+2. Sessions persist and resume with full message history
+3. Sessions are pinned to the commit SHA they were created against
+4. Citations include chunk_id, file_path, start_line, end_line, language, chunk_type, symbol_name
+5. Token events stream in real time via WebSocket; answer persists in DB on completion
+6. Retrieval pipeline logs a `retrieval_trace` event with full diagnostics per request
+7. All retrieval tuning is configurable without code changes
 
 ---
 

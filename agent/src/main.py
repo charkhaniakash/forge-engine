@@ -1,14 +1,15 @@
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Header, HTTPException, status, Depends
-from fastapi.responses import JSONResponse
+
 import structlog
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 
-from src.config import settings
-from src.auth import verify_token, extract_token_from_header
-from src.llm.provider import LLMProvider
+from src.auth import extract_token_from_header, verify_token
+from src.ingestion.router import router as ingestion_router
+from src.qa.router import router as qa_router
+from src.planning.router import router as planning_router
 
-# Configure structlog
+# Configure structlog — structured JSON, ISO timestamps, trace ID on every line.
 structlog.configure(
     processors=[
         structlog.processors.TimeStamper(fmt="iso"),
@@ -23,10 +24,8 @@ logger = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("agent.startup")
     yield
-    # Shutdown
     logger.info("agent.shutdown")
 
 
@@ -47,22 +46,22 @@ async def trace_id_middleware(request: Request, call_next):
 
 
 def verify_agent_token(authorization: str = Header(None)) -> dict:
-    """Dependency to verify Bearer token on internal endpoints."""
+    """FastAPI dependency — verifies the Backend-issued Bearer JWT."""
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authorization header",
         )
-    
     token = extract_token_from_header(authorization)
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authorization header format",
         )
-    
     return verify_token(token)
 
+
+# ── Utility endpoints (Phase 0) ───────────────────────────────────────────────
 
 @app.get("/health")
 async def health(request: Request):
@@ -77,47 +76,25 @@ async def readiness(request: Request):
 
 
 @app.get("/version")
-async def version(request: Request):
+async def version():
     return {"version": "0.1.0"}
 
 
-@app.post("/v1/agent/plan")
-async def create_plan(
-    request: Request,
-    payload: dict,
-    token_payload: dict = Depends(verify_agent_token),
-):
-    """
-    Create a task plan. Requires valid Backend JWT and org context.
-    Stub endpoint for Phase 1.
-    
-    Agent trusts org_id/user_id from Backend, never from client.
-    """
-    trace_id = request.state.trace_id
-    
-    # TODO: Phase 5 — real planning logic
-    # For now, agent just acknowledges the request with context
-    
-    logger.info(
-        "plan_request_received",
-        trace_id=trace_id,
-        authenticated_as=token_payload.get("sub"),
-    )
-    
-    return {
-        "plan_id": "plan-stub-001",
-        "status": "planning",
-        "message": "Stub response — Phase 1",
-        "trace_id": trace_id,
-    }
+# ── Phase 3 — ingestion ───────────────────────────────────────────────────────
+# POST /v1/agent/ingest  (streaming NDJSON — see ingestion/router.py)
+app.include_router(ingestion_router)
+
+# ── Phase 4 — Q&A ────────────────────────────────────────────────────────────
+# POST /v1/agent/qa  (streaming NDJSON — see qa/router.py)
+app.include_router(qa_router)
+
+# ── Phase 5 — Planning ────────────────────────────────────────────────────────
+# POST /v1/agent/plan  (streaming NDJSON — see planning/router.py)
+app.include_router(planning_router)
+
 
 if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("AGENT_PORT", 8000))
-    uvicorn.run(
-        "src.main:app",
-        host="0.0.0.0",
-        port=port,
-        reload=True,
-    )
+    uvicorn.run("src.main:app", host="0.0.0.0", port=port, reload=True)

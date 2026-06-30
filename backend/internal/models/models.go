@@ -2,6 +2,7 @@ package models
 
 import (
     "database/sql"
+    "encoding/json"
     "time"
 )
 
@@ -91,4 +92,118 @@ type PendingInstall struct {
     CSRFToken  string    `json:"csrf_token"`
     CreatedAt  time.Time `json:"created_at"`
     ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// QASession represents a multi-turn Q&A conversation scoped to a single
+// (repo_id, commit_sha) snapshot. The snapshot is pinned at session creation;
+// subsequent questions in the session always retrieve against the same commit.
+// workspace_id is NULL in Phase 4 and will be populated by a later phase.
+type QASession struct {
+    ID          string     `json:"id"`
+    RepoID      string     `json:"repo_id"`
+    OrgID       string     `json:"org_id"`
+    UserID      string     `json:"user_id"`
+    CommitSHA   string     `json:"commit_sha"`
+    Title       *string    `json:"title,omitempty"`
+    WorkspaceID *string    `json:"workspace_id,omitempty"` // Phase 5+
+    CreatedAt   time.Time  `json:"created_at"`
+    UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+// QAMessage is a single turn in a QASession.
+// role is "user" or "assistant".
+// Citations is a JSONB array of rich citation objects — populated for
+// assistant messages only, NULL for user messages.
+type QAMessage struct {
+    ID         string      `json:"id"`
+    SessionID  string      `json:"session_id"`
+    Role       string      `json:"role"` // user | assistant
+    Content    string      `json:"content"`
+    Citations  interface{} `json:"citations,omitempty"` // []Citation JSONB
+    TokenCount *int        `json:"token_count,omitempty"`
+    Model      *string     `json:"model,omitempty"`
+    RequestID  *string     `json:"request_id,omitempty"`
+    CreatedAt  time.Time   `json:"created_at"`
+}
+
+// WorkItem is the central unit of engineering work in the autonomous platform.
+// It represents a user's intent that flows through planning, approval, and execution.
+//
+// Phase 5 only populates type='task'. parent_id and template_id are reserved
+// for future sub-task composition and task templates.
+//
+// Ownership rules:
+//   - Go owns all status transitions. The Agent never writes to work_items.
+//   - The approval gate is enforced by Go: status cannot advance past
+//     'plan_approved' without approval_status IN ('approved', 'auto_approved').
+type WorkItem struct {
+	ID             string          `json:"id"`
+	RepoID         string          `json:"repo_id"`
+	OrgID          string          `json:"org_id"`
+	UserID         string          `json:"user_id"`
+	ParentID       *string         `json:"parent_id,omitempty"`   // Phase 5: always nil
+	TemplateID     *string         `json:"template_id,omitempty"` // Phase 5: always nil
+	Type           string          `json:"type"`                  // "task" in Phase 5
+	Intent         string          `json:"intent"`                // raw user input
+	Status         string          `json:"status"`                // see state machine below
+	ApprovalStatus string          `json:"approval_status"`       // pending_review|approved|auto_approved|blocked|changes_requested
+	ApprovalPolicy json.RawMessage `json:"approval_policy"`       // {"type":"always_require_human"} in Phase 5
+	Error          *string         `json:"error,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+}
+
+// WorkItemStatuses enumerates the valid work_items.status values.
+// Transitions are enforced by WorkItemRepository methods — no direct SQL updates.
+const (
+	WorkItemStatusDraft          = "draft"
+	WorkItemStatusPlanning       = "planning"
+	WorkItemStatusPlanningFailed = "planning_failed"
+	WorkItemStatusPlanReady      = "plan_ready"
+	WorkItemStatusPlanApproved   = "plan_approved"
+	WorkItemStatusExecuting      = "executing" // Phase 7+
+	WorkItemStatusDone           = "done"
+	WorkItemStatusFailed         = "failed"
+	WorkItemStatusCancelled      = "cancelled"
+)
+
+// Plan is an immutable, versioned implementation plan for a WorkItem.
+// Plans are append-only: each re-plan creates a new version row.
+// The body field contains the full PlanSchema v1 object — the central
+// execution contract consumed by every phase from 5 onward.
+//
+// See docs/schemas/plan_v1.json for the canonical schema definition.
+type Plan struct {
+	ID           string          `json:"id"`
+	WorkItemID   string          `json:"work_item_id"`
+	Version      int             `json:"version"`
+	SchemaVersion string         `json:"schema_version"` // "v1"
+	PlanType     string          `json:"plan_type"`      // "implementation"
+	PlannerID    string          `json:"planner_id"`     // "implementation_planner_v1"
+	Body         json.RawMessage `json:"body"`           // full PlanSchema v1
+	IsActive     bool            `json:"is_active"`
+	CreatedBy    string          `json:"created_by"` // "agent" | "user_edit"
+	CreatedAt    time.Time       `json:"created_at"`
+}
+
+// IngestionJob represents one attempt to index a repository at a specific commit SHA.
+// The (repo_id, commit_sha) pair is the logical snapshot key.
+// Retrieval (Phase 4+) must only read code_chunks where the associated job has
+// status = "done".
+type IngestionJob struct {
+    ID              string     `json:"id"`
+    RepoID          string     `json:"repo_id"`
+    CommitSHA       string     `json:"commit_sha"`
+    TriggerType     string     `json:"trigger_type"` // installation_sync | push | manual
+    Status          string     `json:"status"`        // queued | running | done | failed | superseded
+    ProgressStage   *string    `json:"progress_stage,omitempty"` // cloning | parsing | chunking | embedding | persisting | completed
+    QueuedAt        time.Time  `json:"queued_at"`
+    StartedAt       *time.Time `json:"started_at,omitempty"`
+    FinishedAt      *time.Time `json:"finished_at,omitempty"`
+    WorkerID        *string    `json:"worker_id,omitempty"`
+    TotalChunks     *int       `json:"total_chunks,omitempty"`
+    ProcessedChunks int        `json:"processed_chunks"`
+    Error           *string    `json:"error,omitempty"`
+    CreatedAt       time.Time  `json:"created_at"`
+    UpdatedAt       time.Time  `json:"updated_at"`
 }

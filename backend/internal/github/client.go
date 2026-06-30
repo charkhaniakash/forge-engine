@@ -168,9 +168,36 @@ func ParseWebhookEvent(payload []byte, eventType string) (interface{}, error) {
 			return nil, fmt.Errorf("failed to parse installation event: %w", err)
 		}
 		return &event, nil
+	case "push":
+		var event PushEvent
+		if err := json.Unmarshal(payload, &event); err != nil {
+			return nil, fmt.Errorf("failed to parse push event: %w", err)
+		}
+		return &event, nil
 	default:
 		return nil, fmt.Errorf("unsupported event type: %s", eventType)
 	}
+}
+
+// PushEvent represents a GitHub push webhook event.
+// Only the fields needed by the ingestion pipeline are mapped.
+type PushEvent struct {
+	Ref        string      `json:"ref"`         // e.g. "refs/heads/main"
+	After      string      `json:"after"`       // HEAD commit SHA after the push
+	Repository PushRepo    `json:"repository"`
+	HeadCommit *PushCommit `json:"head_commit"` // nil on branch deletion
+}
+
+// PushRepo contains the subset of repository fields needed from a push event.
+type PushRepo struct {
+	ID       int64  `json:"id"`
+	FullName string `json:"full_name"`
+}
+
+// PushCommit contains the head commit metadata from a push event.
+type PushCommit struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
 }
 
 

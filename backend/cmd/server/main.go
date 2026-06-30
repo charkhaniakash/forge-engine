@@ -1,218 +1,334 @@
 package main
 
 import (
-    "fmt"
-    "log"
-    "os"
-    "time"
+	"context"
+	"fmt"
+	"log"
+	"os"
+	"strconv"
+	"time"
 
-    "github.com/gofiber/fiber/v2"
-    "github.com/golang-jwt/jwt/v5"
-    "github.com/joho/godotenv"
-    "go.uber.org/zap"
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/websocket/v2"
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 
-    "github.com/charkhaniakash/forge-engine/backend/internal/db"
-    "github.com/charkhaniakash/forge-engine/backend/internal/github"
-    "github.com/charkhaniakash/forge-engine/backend/internal/handlers"
-    "github.com/charkhaniakash/forge-engine/backend/internal/middleware"
-    "github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
-    "github.com/charkhaniakash/forge-engine/backend/internal/repository"
-    "github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/charkhaniakash/forge-engine/backend/internal/db"
+	"github.com/charkhaniakash/forge-engine/backend/internal/github"
+	"github.com/charkhaniakash/forge-engine/backend/internal/handlers"
+	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
+	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
+	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
+	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 )
 
 func main() {
-    // Load env
-    godotenv.Load(".env.local")
+	godotenv.Load(".env.local")
 
-    // Init logger
-    logger, _ := zap.NewProduction()
-    defer logger.Sync()
-    sugar := logger.Sugar()
+	logger, _ := zap.NewProduction()
+	defer logger.Sync()
+	sugar := logger.Sugar()
 
-    // Connect to DB
-    databaseURL := os.Getenv("DATABASE_URL")
-    if databaseURL == "" {
-        log.Fatal("DATABASE_URL not set")
-    }
+	// ── Database ──────────────────────────────────────────────────────────────
+	databaseURL := os.Getenv("DATABASE_URL")
+	if databaseURL == "" {
+		log.Fatal("DATABASE_URL not set")
+	}
+	dbConn, err := db.NewConnection(databaseURL)
+	if err != nil {
+		log.Fatalf("Database connection failed: %v", err)
+	}
+	defer dbConn.Close()
+	sugar.Info("Database connected")
 
-    dbConn, err := db.NewConnection(databaseURL)
-    if err != nil {
-        log.Fatalf("Database connection failed: %v", err)
-    }
-    defer dbConn.Close()
+	// ── Redis ─────────────────────────────────────────────────────────────────
+	redisURL := os.Getenv("REDIS_URL")
+	if redisURL == "" {
+		redisURL = "redis://localhost:6379/0"
+	}
+	redisOpts, err := redis.ParseURL(redisURL)
+	if err != nil {
+		log.Fatalf("Invalid REDIS_URL: %v", err)
+	}
+	redisClient := redis.NewClient(redisOpts)
+	defer redisClient.Close()
 
-    sugar.Info("Database connected")
+	if err := redisClient.Ping(context.Background()).Err(); err != nil {
+		sugar.Warnw("redis_ping_failed", "error", err)
+	} else {
+		sugar.Info("Redis connected")
+	}
 
-    // Initialize repositories
-    userRepo := repository.NewUserRepository(dbConn)
-    orgRepo := repository.NewOrgRepository(dbConn)
-    invitationRepo := repository.NewInvitationRepository(dbConn)
-    githubInstallationRepo := repository.NewGitHubInstallationRepository(dbConn)
-    githubRepoRepo := repository.NewGitHubRepoRepository(dbConn)
-    pendingInstallRepo := repository.NewPendingInstallRepository(dbConn)
-    webhookDeliveryRepo := repository.NewWebhookDeliveryRepository(dbConn)
+	// ── Repositories ─────────────────────────────────────────────────────────
+	userRepo := repository.NewUserRepository(dbConn)
+	orgRepo := repository.NewOrgRepository(dbConn)
+	invitationRepo := repository.NewInvitationRepository(dbConn)
+	githubInstallationRepo := repository.NewGitHubInstallationRepository(dbConn)
+	githubRepoRepo := repository.NewGitHubRepoRepository(dbConn)
+	pendingInstallRepo := repository.NewPendingInstallRepository(dbConn)
+	webhookDeliveryRepo := repository.NewWebhookDeliveryRepository(dbConn)
+	ingestionJobRepo := repository.NewIngestionJobRepository(dbConn)
+	qaRepo := repository.NewQARepository(dbConn)
+	workItemRepo := repository.NewWorkItemRepository(dbConn)
 
-    // Initialize handlers
-    authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
-    orgHandlers := handlers.NewOrgHandlers(orgRepo, invitationRepo, userRepo, sugar)
+	// ── Auth handlers ─────────────────────────────────────────────────────────
+	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
+	orgHandlers := handlers.NewOrgHandlers(orgRepo, invitationRepo, userRepo, sugar)
 
-    // Initialize GitHub components (Phase 2)
-    var appAuth *github.AppAuth
-    var githubClient *github.Client
-    var tokenCache *github.TokenCache
-    var githubHandlers *handlers.GitHubHandlers
+	// ── GitHub App + ingestion worker ─────────────────────────────────────────
+	var appAuth *github.AppAuth
+	var githubClient *github.Client
+	var tokenCache *github.TokenCache
+	var jobWorker *ingestion.JobWorker
+	var githubHandlers *handlers.GitHubHandlers
+	var ingestionHandlers *handlers.IngestionHandlers
+	var qaHandlers *handlers.QAHandlers
+	var taskHandlers *handlers.TaskHandlers
 
-    if os.Getenv("GITHUB_APP_ID") != "" {
-        var err error
-        appAuth, err = github.NewAppAuth()
-        if err != nil {
-            sugar.Warnw("failed_to_init_github_app_auth", "error", err)
-        }
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "phase-0-insecure-default"
+	}
 
-        githubClient, err = github.NewClient()
-        if err != nil {
-            sugar.Warnw("failed_to_init_github_client", "error", err)
-        }
+	if os.Getenv("GITHUB_APP_ID") != "" {
+		appAuth, err = github.NewAppAuth()
+		if err != nil {
+			sugar.Warnw("failed_to_init_github_app_auth", "error", err)
+		}
 
-        if appAuth != nil && githubClient != nil {
-            tokenCache = github.NewTokenCache(appAuth, githubClient, githubInstallationRepo, sugar)
-            
-            // Get GitHub App name and state secret
-            githubAppName := os.Getenv("GITHUB_APP_NAME")
-            if githubAppName == "" {
-                githubAppName = "forge-engine" // default
-            }
-            
-            stateSecret := os.Getenv("GITHUB_INSTALL_STATE_SECRET")
-            if stateSecret == "" {
-                stateSecret = os.Getenv("JWT_SECRET") // fallback to JWT_SECRET
-            }
-            
-            githubHandlers = handlers.NewGitHubHandlers(
-                githubInstallationRepo,
-                githubRepoRepo,
-                pendingInstallRepo,
-                tokenCache,
-                githubClient,
-                sugar,
-                githubAppName,
-                stateSecret,
-                webhookDeliveryRepo,
-                appAuth,
-            )
-            sugar.Info("GitHub integration initialized")
-        }
-    } else {
-        sugar.Info("GitHub App credentials not set - GitHub integration disabled")
-    }
+		githubClient, err = github.NewClient()
+		if err != nil {
+			sugar.Warnw("failed_to_init_github_client", "error", err)
+		}
 
-    // Initialize rate limiter
-    limiter := ratelimit.NewLimiter(ratelimit.DefaultConfig())
-    _ = limiter // Phase 6: will actually use this
+		if appAuth != nil && githubClient != nil {
+			tokenCache = github.NewTokenCache(appAuth, githubClient, githubInstallationRepo, sugar)
 
-    // Create Fiber app
-    app := fiber.New(fiber.Config{
-        AppName: "Forge Engine Backend",
-    })
+			githubAppName := os.Getenv("GITHUB_APP_NAME")
+			if githubAppName == "" {
+				githubAppName = "forge-engine"
+			}
+			stateSecret := os.Getenv("GITHUB_INSTALL_STATE_SECRET")
+			if stateSecret == "" {
+				stateSecret = jwtSecret
+			}
 
-    // CORS middleware
-    app.Use(cors.New(cors.Config{
-        AllowOrigins: "http://localhost:5173",
-    }))
+			// ── Ingestion worker (Phase 3) ────────────────────────────────────
+			agentURL := os.Getenv("AGENT_URL")
+			if agentURL == "" {
+				agentURL = "http://agent:8000"
+			}
+			cloneBaseDir := os.Getenv("CLONE_BASE_DIR") // defaults to /tmp/forge-clones
 
-    // Middleware: trace ID
-    app.Use(traceIDMiddleware())
-    // Public endpoints
-    app.Get("/health", func(c *fiber.Ctx) error {
-        return c.JSON(map[string]string{"status": "ok"})
-    })
+			workerConcurrency := 2
+			if v := os.Getenv("WORKER_CONCURRENCY"); v != "" {
+				if n, err := strconv.Atoi(v); err == nil && n > 0 {
+					workerConcurrency = n
+				}
+			}
 
-    app.Get("/readiness", func(c *fiber.Ctx) error {
-        return c.JSON(map[string]string{"status": "ready"})
-    })
+			cloner := ingestion.NewCloner(cloneBaseDir, sugar)
+			agentClient := ingestion.NewAgentClient(agentURL, jwtSecret)
 
-    app.Get("/version", func(c *fiber.Ctx) error {
-        return c.JSON(map[string]string{"version": "0.1.0"})
-    })
+			jobWorker = ingestion.NewJobWorker(ingestion.WorkerConfig{
+				Redis:       redisClient,
+				JobRepo:     ingestionJobRepo,
+				InstallRepo: githubInstallationRepo,
+				RepoRepo:    githubRepoRepo,
+				TokenCache:  tokenCache,
+				Cloner:      cloner,
+				AgentClient: agentClient,
+				Logger:      sugar,
+				JWTSecret:   jwtSecret,
+				Concurrency: workerConcurrency,
+			})
 
-    // Auth endpoints (public)
-    app.Post("/v1/auth/signup", authHandlers.Signup)
-    app.Post("/v1/auth/login", authHandlers.Login)
+			// Start worker pool in background; cancelled on server shutdown.
+			workerCtx, workerCancel := context.WithCancel(context.Background())
+			defer workerCancel()
+			go jobWorker.Start(workerCtx)
+			sugar.Infow("ingestion_worker_started", "concurrency", workerConcurrency)
 
-    // Protected endpoints
-    app.Post("/v1/orgs", middleware.RequireAuth(sugar), orgHandlers.CreateOrg)
-    app.Get("/v1/orgs", middleware.RequireAuth(sugar), orgHandlers.ListOrgs)
-    app.Get("/v1/orgs/:orgID", middleware.RequireAuth(sugar), orgHandlers.GetOrg)
-    app.Get("/v1/orgs/:orgID/members", middleware.RequireAuth(sugar), orgHandlers.ListMembers)
-    app.Post("/v1/orgs/:orgID/members/invite", middleware.RequireAuth(sugar), orgHandlers.InviteMember)
+			githubHandlers = handlers.NewGitHubHandlers(
+				githubInstallationRepo,
+				githubRepoRepo,
+				pendingInstallRepo,
+				tokenCache,
+				githubClient,
+				sugar,
+				githubAppName,
+				stateSecret,
+				webhookDeliveryRepo,
+				appAuth,
+				ingestionJobRepo,
+				jobWorker,
+			)
 
-    // GitHub endpoints (Phase 2)
-    if githubHandlers != nil {
-        // Public webhook endpoint
-        app.Post("/v1/github/webhook", githubHandlers.Webhook)
-        // Public callback endpoint (GitHub redirects here)
-        app.Get("/v1/github/install/callback", githubHandlers.InstallCallback)
-        // Protected GitHub management endpoints
-        app.Get("/v1/github/install/url", middleware.RequireAuth(sugar), githubHandlers.GetInstallURL)
-        app.Post("/v1/github/installations/link", middleware.RequireAuth(sugar), githubHandlers.LinkInstallation)
-        app.Get("/v1/github/repos", middleware.RequireAuth(sugar), githubHandlers.ListRepos)
-        app.Post("/v1/github/sync", middleware.RequireAuth(sugar), githubHandlers.SyncRepos)
-    }
+			ingestionHandlers = handlers.NewIngestionHandlers(
+				ingestionJobRepo,
+				githubRepoRepo,
+				jobWorker,
+				sugar,
+			)
 
-    // Internal service endpoint (Phase 0 JWT)
-    app.Post("/v1/backend/agent-request", func(c *fiber.Ctx) error {
-        traceID := c.Locals("trace_id").(string)
-        sugar.Infow("agent_request", "trace_id", traceID)
+			// ── QA handlers (Phase 4) ─────────────────────────────────────────
+			agentQAClient := ingestion.NewAgentQAClient(agentURL, jwtSecret)
+			qaHandlers = handlers.NewQAHandlers(
+				qaRepo,
+				ingestionJobRepo,
+				githubRepoRepo,
+				agentQAClient,
+				jwtSecret,
+				sugar,
+			)
 
-        token, err := signAgentToken(traceID)
-        if err != nil {
-            sugar.Errorw("failed_to_sign_token", "error", err)
-            return c.Status(500).JSON(map[string]string{"error": "token_generation_failed"})
-        }
+			// ── Task handlers (Phase 5) ───────────────────────────────────────
+			agentPlanClient := ingestion.NewAgentPlanClient(agentURL, jwtSecret)
+			taskHandlers = handlers.NewTaskHandlers(
+				workItemRepo,
+				ingestionJobRepo,
+				agentPlanClient,
+				jwtSecret,
+				sugar,
+			)
 
-        return c.JSON(map[string]string{
-            "token":    token,
-            "trace_id": traceID,
-        })
-    })
+			sugar.Info("GitHub integration and ingestion worker initialised")
+		}
+	} else {
+		sugar.Info("GITHUB_APP_ID not set — GitHub integration and ingestion disabled")
+	}
 
-    port := os.Getenv("BACKEND_PORT")
-    if port == "" {
-        port = "8080"
-    }
+	// ── Rate limiter (stubbed until Phase 6) ─────────────────────────────────
+	limiter := ratelimit.NewLimiter(ratelimit.DefaultConfig())
+	_ = limiter
 
-    sugar.Infof("Backend listening on :%s", port)
-    if err := app.Listen(":" + port); err != nil {
-        log.Fatalf("Failed to start server: %v", err)
-    }
+	// ── Fiber app ─────────────────────────────────────────────────────────────
+	app := fiber.New(fiber.Config{AppName: "Forge Engine Backend"})
+
+	app.Use(cors.New(cors.Config{
+		AllowOrigins: os.Getenv("CORS_ORIGINS"),
+	}))
+	if os.Getenv("CORS_ORIGINS") == "" {
+		app.Use(cors.New(cors.Config{AllowOrigins: "http://localhost:5173"}))
+	}
+
+	app.Use(traceIDMiddleware())
+
+	// ── Public endpoints ──────────────────────────────────────────────────────
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ok"})
+	})
+	app.Get("/readiness", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ready"})
+	})
+	app.Get("/version", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"version": "0.1.0"})
+	})
+
+	// ── Auth ──────────────────────────────────────────────────────────────────
+	app.Post("/v1/auth/signup", authHandlers.Signup)
+	app.Post("/v1/auth/login", authHandlers.Login)
+
+	// ── Org management ────────────────────────────────────────────────────────
+	app.Post("/v1/orgs", middleware.RequireAuth(sugar), orgHandlers.CreateOrg)
+	app.Get("/v1/orgs", middleware.RequireAuth(sugar), orgHandlers.ListOrgs)
+	app.Get("/v1/orgs/:orgID", middleware.RequireAuth(sugar), orgHandlers.GetOrg)
+	app.Get("/v1/orgs/:orgID/members", middleware.RequireAuth(sugar), orgHandlers.ListMembers)
+	app.Post("/v1/orgs/:orgID/members/invite", middleware.RequireAuth(sugar), orgHandlers.InviteMember)
+
+	// ── GitHub + ingestion endpoints ──────────────────────────────────────────
+	if githubHandlers != nil {
+		// Public (GitHub → backend)
+		app.Post("/v1/github/webhook", githubHandlers.Webhook)
+		app.Get("/v1/github/install/callback", githubHandlers.InstallCallback)
+
+		// Protected (frontend → backend)
+		app.Get("/v1/github/install/url", middleware.RequireAuth(sugar), githubHandlers.GetInstallURL)
+		app.Post("/v1/github/installations/link", middleware.RequireAuth(sugar), githubHandlers.LinkInstallation)
+		app.Get("/v1/github/repos", middleware.RequireAuth(sugar), githubHandlers.ListRepos)
+		app.Post("/v1/github/sync", middleware.RequireAuth(sugar), githubHandlers.SyncRepos)
+	}
+
+	if ingestionHandlers != nil {
+		// Phase 3 — ingestion status and manual trigger
+		app.Get("/v1/github/repos/:repoID/index/status", middleware.RequireAuth(sugar), ingestionHandlers.GetIndexStatus)
+		app.Post("/v1/github/repos/:repoID/index/trigger", middleware.RequireAuth(sugar), ingestionHandlers.TriggerIndex)
+	}
+
+	if qaHandlers != nil {
+		// Phase 4 — Q&A sessions
+		app.Post("/v1/repos/:repoID/qa/sessions", middleware.RequireAuth(sugar), qaHandlers.CreateSession)
+		app.Get("/v1/repos/:repoID/qa/sessions", middleware.RequireAuth(sugar), qaHandlers.ListSessions)
+		app.Get("/v1/repos/:repoID/qa/sessions/:sessionID", middleware.RequireAuth(sugar), qaHandlers.GetSession)
+		app.Post("/v1/repos/:repoID/qa/sessions/:sessionID/ask", middleware.RequireAuth(sugar), qaHandlers.Ask)
+		app.Get("/v1/repos/:repoID/qa/sessions/:sessionID/stream",
+			qaHandlers.StreamUpgrade,
+			websocket.New(qaHandlers.StreamWS),
+		)
+	}
+
+	if taskHandlers != nil {
+		// Phase 5 — Task creation & planning
+		app.Post("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.CreateTask)
+		app.Get("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.ListTasks)
+		app.Get("/v1/repos/:repoID/tasks/:taskID", middleware.RequireAuth(sugar), taskHandlers.GetTask)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/plans", middleware.RequireAuth(sugar), taskHandlers.ListPlans)
+		app.Put("/v1/repos/:repoID/tasks/:taskID/plan", middleware.RequireAuth(sugar), taskHandlers.UpdatePlan)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/approve", middleware.RequireAuth(sugar), taskHandlers.ApproveTask)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/replan", middleware.RequireAuth(sugar), taskHandlers.Replan)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/cancel", middleware.RequireAuth(sugar), taskHandlers.CancelTask)
+		// WebSocket — planning progress stream (token auth via ?token= query param)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/stream",
+			taskHandlers.StreamUpgrade,
+			websocket.New(taskHandlers.StreamWS),
+		)
+	}
+
+	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────
+	app.Post("/v1/backend/agent-request", func(c *fiber.Ctx) error {
+		traceID := c.Locals("trace_id").(string)
+		token, err := signAgentToken(traceID, jwtSecret)
+		if err != nil {
+			sugar.Errorw("failed_to_sign_token", "error", err)
+			return c.Status(500).JSON(fiber.Map{"error": "token_generation_failed"})
+		}
+		return c.JSON(fiber.Map{"token": token, "trace_id": traceID})
+	})
+
+	port := os.Getenv("BACKEND_PORT")
+	if port == "" {
+		port = "8080"
+	}
+	sugar.Infof("Backend listening on :%s", port)
+	if err := app.Listen(":" + port); err != nil {
+		log.Fatalf("Failed to start server: %v", err)
+	}
 }
 
-// traceIDMiddleware adds a trace ID to every request
 func traceIDMiddleware() fiber.Handler {
-    return func(c *fiber.Ctx) error {
-        traceID := c.Get("X-Trace-ID")
-        if traceID == "" {
-            traceID = fmt.Sprintf("req-%d", os.Getpid())
-        }
-        c.Locals("trace_id", traceID)
-        c.Set("X-Trace-ID", traceID)
-        return c.Next()
-    }
+	return func(c *fiber.Ctx) error {
+		traceID := c.Get("X-Trace-ID")
+		if traceID == "" {
+			traceID = fmt.Sprintf("req-%d-%d", os.Getpid(), time.Now().UnixNano())
+		}
+		c.Locals("trace_id", traceID)
+		c.Set("X-Trace-ID", traceID)
+		return c.Next()
+	}
 }
 
-// signAgentToken creates a signed JWT for Agent authentication (Phase 0)
-func signAgentToken(traceID string) (string, error) {
-    secret := os.Getenv("JWT_SECRET")
-    if secret == "" {
-        secret = "phase-0-insecure-default"
-    }
-
-    token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-        "sub":      "backend",
-        "trace_id": traceID,
-        "iat":      time.Now().Unix(),
-        "exp":      time.Now().Add(5 * time.Minute).Unix(),
-    })
-
-    return token.SignedString([]byte(secret))
+func signAgentToken(traceID string, secret string) (string, error) {
+	if secret == "" {
+		secret = "phase-0-insecure-default"
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sub":      "backend",
+		"trace_id": traceID,
+		"iat":      time.Now().Unix(),
+		"exp":      time.Now().Add(5 * time.Minute).Unix(),
+	})
+	return token.SignedString([]byte(secret))
 }

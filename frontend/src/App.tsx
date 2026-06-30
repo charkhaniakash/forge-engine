@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { GitHubInstallButton } from './components/GitHubInstallButton'
 import { GitHubInstallCallback } from './pages/GitHubInstallCallback'
+import { QAPanel } from './components/QAPanel'
+import { TaskPanel } from './components/TaskPanel'
 import './App.css'
 
 interface AuthState {
@@ -188,11 +190,52 @@ function LoginForm({ onSubmit, onCancel, loading, error }: any) {
   )
 }
 
+interface IndexStatus {
+  status: string
+  job: {
+    id: string
+    status: string
+    progress_stage: string | null
+    processed_chunks: number
+    total_chunks: number | null
+    commit_sha: string
+    error: string | null
+  } | null
+}
+
+function IndexStatusBadge({ status }: { status?: IndexStatus }) {
+  if (!status || status.status === 'not_indexed') {
+    return <span style={{ fontSize: '12px', color: '#57606a' }}>Not indexed</span>
+  }
+
+  const job = status.job
+  if (!job) {
+    return <span style={{ fontSize: '12px', color: '#57606a' }}>Unknown</span>
+  }
+
+  const colors = {
+    queued: '#bf8700',
+    running: '#0969da',
+    done: '#1a7f37',
+    failed: '#cf222e',
+    superseded: '#656d76',
+  }
+
+  return (
+    <span style={{ fontSize: '12px', color: colors[job.status as keyof typeof colors] || '#57606a' }}>
+      {job.status === 'running' && job.progress_stage ? `${job.progress_stage}...` : job.status}
+    </span>
+  )
+}
+
 function Dashboard({ user, org, role, token, onLogout }: any) {
   const [repos, setRepos] = useState<GitHubRepo[]>([])
   const [loadingRepos, setLoadingRepos] = useState(false)
   const [githubError, setGithubError] = useState<string | null>(null)
   const [installationMissing, setInstallationMissing] = useState(false)
+  const [indexStatuses, setIndexStatuses] = useState<Record<string, IndexStatus>>({})
+  const [activeQARepo, setActiveQARepo] = useState<GitHubRepo | null>(null)
+  const [activeTaskRepo, setActiveTaskRepo] = useState<GitHubRepo | null>(null)
 
   const loadRepos = async () => {
     setLoadingRepos(true)
@@ -207,10 +250,44 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
         return
       }
       setRepos(data)
+      // Load index status for each repo
+      data.forEach((repo: GitHubRepo) => loadIndexStatus(repo.id))
     } catch (err: any) {
       setGithubError(err.message)
     } finally {
       setLoadingRepos(false)
+    }
+  }
+
+  const loadIndexStatus = async (repoID: string) => {
+    try {
+      const response = await fetch(`http://localhost:8080/v1/github/repos/${repoID}/index/status`, {
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      const data = await response.json()
+      if (response.ok) {
+        setIndexStatuses(prev => ({ ...prev, [repoID]: data }))
+      }
+    } catch (_) {
+      // non-fatal
+    }
+  }
+
+  const triggerIndex = async (repoID: string) => {
+    try {
+      const response = await fetch(`http://localhost:8080/v1/github/repos/${repoID}/index/trigger`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+      const data = await response.json()
+      if (!response.ok) {
+        setGithubError(data.error || 'Failed to trigger index')
+        return
+      }
+      // Poll for status update
+      setTimeout(() => loadIndexStatus(repoID), 1500)
+    } catch (err: any) {
+      setGithubError(err.message)
     }
   }
 
@@ -252,7 +329,7 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
       </div>
 
       <div style={{ marginBottom: '2rem' }}>
-        <h3>GitHub Integration (Phase 2)</h3>
+        <h3>GitHub Integration & Repository Indexing (Phase 3)</h3>
 
         {githubError && (
           <div style={{ color: '#cf222e', marginBottom: '1rem', padding: '0.75rem', backgroundColor: '#ffebe9', borderRadius: '4px', border: '1px solid #ff818266' }}>
@@ -285,19 +362,110 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
           <div>
             <h4>Connected Repositories ({repos.length})</h4>
             <ul style={{ listStyle: 'none', padding: 0 }}>
-              {repos.map((repo) => (
-                <li key={repo.id} style={{ padding: '0.5rem', borderBottom: '1px solid #ddd' }}>
-                  <strong>{repo.repo_full_name}</strong>
-                  <br />
-                  <small>Owner: {repo.repo_owner} | Branch: {repo.default_branch} | Private: {repo.private ? 'Yes' : 'No'}</small>
-                  {repo.last_synced_at && <br />}
-                  {repo.last_synced_at && <small>Last synced: {new Date(repo.last_synced_at).toLocaleString()}</small>}
-                </li>
-              ))}
+              {repos.map((repo) => {
+                const idxStatus = indexStatuses[repo.id]
+                const job = idxStatus?.job
+                return (
+                  <li key={repo.id} style={{ padding: '0.75rem', borderBottom: '1px solid #ddd' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                      <div>
+                        <strong>{repo.repo_full_name}</strong>
+                        <br />
+                        <small>Branch: {repo.default_branch} · {repo.private ? 'Private' : 'Public'}</small>
+                        {repo.last_synced_at && (
+                          <><br /><small>Synced: {new Date(repo.last_synced_at).toLocaleString()}</small></>
+                        )}
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        <IndexStatusBadge status={idxStatus} />
+                        <br />
+                        <button
+                          onClick={() => triggerIndex(repo.id)}
+                          style={{ marginTop: '0.25rem', fontSize: '12px', padding: '2px 8px' }}
+                        >
+                          Index
+                        </button>
+                        {job?.status === 'running' && (
+                          <button
+                            onClick={() => loadIndexStatus(repo.id)}
+                            style={{ marginTop: '0.25rem', marginLeft: '4px', fontSize: '12px', padding: '2px 8px' }}
+                          >
+                            ↻
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {job?.status === 'running' && job.total_chunks != null && (
+                      <div style={{ marginTop: '0.5rem' }}>
+                        <div style={{ fontSize: '12px', color: '#57606a', marginBottom: '2px' }}>
+                          {job.progress_stage ?? 'working'} · {job.processed_chunks}/{job.total_chunks} chunks
+                        </div>
+                        <div style={{ background: '#eee', borderRadius: '4px', height: '6px', overflow: 'hidden' }}>
+                          <div style={{
+                            width: `${Math.round((job.processed_chunks / job.total_chunks) * 100)}%`,
+                            background: '#0969da',
+                            height: '100%',
+                            transition: 'width 0.3s',
+                          }} />
+                        </div>
+                      </div>
+                    )}
+                    {job?.status === 'failed' && job.error && (
+                      <div style={{ marginTop: '0.25rem', fontSize: '12px', color: '#cf222e' }}>
+                        Error: {job.error}
+                      </div>
+                    )}
+                    {idxStatus?.status === 'done' && (
+                      <div style={{ marginTop: '0.5rem', display: 'flex', gap: '4px' }}>
+                        <button
+                          onClick={() => setActiveQARepo(activeQARepo?.id === repo.id ? null : repo)}
+                          style={{ fontSize: '12px', padding: '2px 8px', background: activeQARepo?.id === repo.id ? '#dbeafe' : undefined }}
+                        >
+                          {activeQARepo?.id === repo.id ? 'Close Q&A' : '💬 Ask'}
+                        </button>
+                        <button
+                          onClick={() => setActiveTaskRepo(activeTaskRepo?.id === repo.id ? null : repo)}
+                          style={{ fontSize: '12px', padding: '2px 8px', background: activeTaskRepo?.id === repo.id ? '#fef9c3' : undefined }}
+                        >
+                          {activeTaskRepo?.id === repo.id ? 'Close Tasks' : '⚡ Tasks'}
+                        </button>
+                      </div>
+                    )}
+                  </li>
+                )
+              })}
             </ul>
           </div>
         )}
       </div>
+
+      {/* Phase 4 — Q&A panel */}
+      {activeQARepo && (
+        <div style={{ marginBottom: '2rem' }}>
+          <h3 style={{ marginBottom: '0.5rem' }}>
+            💬 Ask about {activeQARepo.repo_full_name}
+          </h3>
+          <QAPanel
+            repoID={activeQARepo.id}
+            repoName={activeQARepo.repo_full_name}
+            token={token}
+          />
+        </div>
+      )}
+
+      {/* Phase 5 — Task panel */}
+      {activeTaskRepo && (
+        <div style={{ marginBottom: '2rem' }}>
+          <h3 style={{ marginBottom: '0.5rem' }}>
+            ⚡ Tasks for {activeTaskRepo.repo_full_name}
+          </h3>
+          <TaskPanel
+            repoID={activeTaskRepo.id}
+            repoName={activeTaskRepo.repo_full_name}
+            token={token}
+          />
+        </div>
+      )}
 
       <div>
         <button onClick={onLogout} style={{ backgroundColor: '#e74c3c', color: 'white' }}>Log Out</button>

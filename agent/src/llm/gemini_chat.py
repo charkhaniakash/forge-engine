@@ -1,9 +1,12 @@
 """
-Gemini streaming chat provider for Phase 4 Q&A.
+Gemini streaming chat provider.
+
+response_format={"type":"json_object"} maps to MIME type application/json
+in the Gemini generation config.
 """
 from __future__ import annotations
 
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import structlog
 from google import genai
@@ -30,50 +33,45 @@ class GeminiChatProvider:
         messages: list[dict],
         payload: dict,
         request_id: str,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict]:
         seq = 0
         total_tokens = 0
 
-        # Convert OpenAI-style messages to Gemini content format.
         gemini_contents = _to_gemini_contents(messages)
 
+        # Build generation config — use JSON MIME type when requested.
+        gen_config: dict[str, Any] = {}
+        if response_format and response_format.get("type") == "json_object":
+            gen_config["response_mime_type"] = "application/json"
+
         try:
-            response = await self._client.aio.models.generate_content_stream(
+            async for chunk in await self._client.aio.models.generate_content_stream(
                 model=self._model,
                 contents=gemini_contents,
-            )
-            async for chunk in response:
+                config=genai_types.GenerateContentConfig(**gen_config) if gen_config else None,
+            ):
                 if chunk.usage_metadata:
                     total_tokens = chunk.usage_metadata.candidates_token_count or 0
-
                 text = chunk.text
                 if text:
                     yield {
-                        "v": 1,
-                        "event": "token",
-                        "seq": seq,
-                        "request_id": request_id,
-                        "text": text,
+                        "v": 1, "event": "token", "seq": seq,
+                        "request_id": request_id, "text": text,
                     }
                     seq += 1
 
         except Exception as exc:
             logger.error("gemini_chat_error", error=str(exc), request_id=request_id)
             yield {
-                "v": 1,
-                "event": "error",
-                "seq": seq,
-                "request_id": request_id,
-                "message": str(exc),
+                "v": 1, "event": "error", "seq": seq,
+                "request_id": request_id, "message": str(exc),
             }
             return
 
         done: dict = {
-            "v": 1,
-            "event": "done",
-            "seq": seq,
-            "request_id": request_id,
-            "model": self._model,
+            "v": 1, "event": "done", "seq": seq,
+            "request_id": request_id, "model": self._model,
             "token_count": total_tokens,
         }
         done.update(payload)
@@ -81,11 +79,6 @@ class GeminiChatProvider:
 
 
 def _to_gemini_contents(messages: list[dict]) -> list[genai_types.Content]:
-    """Convert OpenAI-style messages to Gemini Content objects.
-
-    System messages are prepended as a user turn (Gemini doesn't have a
-    dedicated system role in the contents list).
-    """
     contents = []
     for m in messages:
         role = m.get("role", "user")

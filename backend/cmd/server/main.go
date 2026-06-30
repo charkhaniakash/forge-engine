@@ -72,6 +72,7 @@ func main() {
 	webhookDeliveryRepo := repository.NewWebhookDeliveryRepository(dbConn)
 	ingestionJobRepo := repository.NewIngestionJobRepository(dbConn)
 	qaRepo := repository.NewQARepository(dbConn)
+	workItemRepo := repository.NewWorkItemRepository(dbConn)
 
 	// ── Auth handlers ─────────────────────────────────────────────────────────
 	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -85,6 +86,7 @@ func main() {
 	var githubHandlers *handlers.GitHubHandlers
 	var ingestionHandlers *handlers.IngestionHandlers
 	var qaHandlers *handlers.QAHandlers
+	var taskHandlers *handlers.TaskHandlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -183,6 +185,16 @@ func main() {
 				sugar,
 			)
 
+			// ── Task handlers (Phase 5) ───────────────────────────────────────
+			agentPlanClient := ingestion.NewAgentPlanClient(agentURL, jwtSecret)
+			taskHandlers = handlers.NewTaskHandlers(
+				workItemRepo,
+				ingestionJobRepo,
+				agentPlanClient,
+				jwtSecret,
+				sugar,
+			)
+
 			sugar.Info("GitHub integration and ingestion worker initialised")
 		}
 	} else {
@@ -252,12 +264,26 @@ func main() {
 		app.Get("/v1/repos/:repoID/qa/sessions", middleware.RequireAuth(sugar), qaHandlers.ListSessions)
 		app.Get("/v1/repos/:repoID/qa/sessions/:sessionID", middleware.RequireAuth(sugar), qaHandlers.GetSession)
 		app.Post("/v1/repos/:repoID/qa/sessions/:sessionID/ask", middleware.RequireAuth(sugar), qaHandlers.Ask)
-		// WebSocket — upgrade check (with inline JWT auth) runs first, then the WS handler.
-		// RequireAuth is NOT used here because browsers cannot send Authorization headers
-		// on WebSocket upgrades; the token is validated from the ?token= query parameter.
 		app.Get("/v1/repos/:repoID/qa/sessions/:sessionID/stream",
 			qaHandlers.StreamUpgrade,
 			websocket.New(qaHandlers.StreamWS),
+		)
+	}
+
+	if taskHandlers != nil {
+		// Phase 5 — Task creation & planning
+		app.Post("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.CreateTask)
+		app.Get("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.ListTasks)
+		app.Get("/v1/repos/:repoID/tasks/:taskID", middleware.RequireAuth(sugar), taskHandlers.GetTask)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/plans", middleware.RequireAuth(sugar), taskHandlers.ListPlans)
+		app.Put("/v1/repos/:repoID/tasks/:taskID/plan", middleware.RequireAuth(sugar), taskHandlers.UpdatePlan)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/approve", middleware.RequireAuth(sugar), taskHandlers.ApproveTask)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/replan", middleware.RequireAuth(sugar), taskHandlers.Replan)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/cancel", middleware.RequireAuth(sugar), taskHandlers.CancelTask)
+		// WebSocket — planning progress stream (token auth via ?token= query param)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/stream",
+			taskHandlers.StreamUpgrade,
+			websocket.New(taskHandlers.StreamWS),
 		)
 	}
 

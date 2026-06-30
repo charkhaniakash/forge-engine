@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 4 — Retrieval & Q&A**
+> ### 🔵 ACTIVE PHASE: **Phase 5 — Task Creation & Implementation Planning**
 >
-> Only work within this phase's scope (see Phase 4 below) until the human moves
+> Only work within this phase's scope (see Phase 5 below) until the human moves
 > this marker forward.
 
 *(Update this section only when the human says a phase is complete and to move
@@ -153,7 +153,34 @@ on. Do not move it yourself.)*
 - Frontend: recovery banner shown when sync returns 404
 - ADR 0003: defer LangGraph adoption documented
 
-### ✅ Phase 3 — Repository Ingestion & Indexing
+### ✅ Phase 5 — Task Creation & Implementation Planning
+- Database: work_items table — type, intent, status state machine, approval_status enum, approval_policy JSONB
+- Database: plans table — immutable append-only versions, schema_version v1, is_active flag, created_by field
+- Migration 008: work_items + plans with correct indexes and constraints
+- Go: WorkItemRepository — full state machine transitions (StartPlanning, MarkPlanReady, Approve, ResetForReplan, Cancel, GetByIDInternal)
+- Go: AgentPlanClient — POST /v1/agent/plan streaming NDJSON client (thinking/plan/error events)
+- Go: TaskHandlers — 9 endpoints (create, list, get, list-plans, update-plan, approve, replan, cancel, WS stream)
+- Go: Approval gate — hard-enforced server-side; status cannot advance to plan_approved without approval_status = approved
+- Go: Plan validation — JSON schema check + dependency cycle detection before any plan is persisted
+- Go: Planning goroutine — background dispatch, thinking events fanned to WebSocket in real time
+- Agent: Planner Protocol — interface for all planning implementations (plan_type, planner_id, async generate())
+- Agent: PlannerRegistry — factory pattern; Phase 5 registers ImplementationPlanner only
+- Agent: ImplementationPlanner — JSON-mode LLM call, PlanBody validation, one retry on failure
+- Agent: PlanValidator — deterministic: required fields, duplicate IDs, depends_on refs, cycle detection
+- Agent: PlanningPipeline — 7-stage async generator: intent→retrieval→impact→arch→constraint(noop)→generate→emit
+- Agent: RetrievalProfile — named profiles (qa, planning); planning uses k=120, include_tests=True, budget=8192
+- Agent: RetrievalEngine — updated to accept optional RetrievalProfile; backward-compatible (Q&A unchanged)
+- Agent: ChatProviders — updated to accept response_format for JSON mode (OpenAI/Gemini/Anthropic)
+- Agent: POST /v1/agent/plan — streaming NDJSON router; replaces Phase 5 stub
+- Frontend: TaskPanel — task list, intent input, live planning progress, plan viewer with step editing
+- Frontend: PlanView — steps with risk badges, affected files, edit/reorder/delete, approve button
+- Frontend: App.tsx — ⚡ Tasks button per indexed repo, TaskPanel mount
+- Plan Schema v1: schema_version, plan_type, planner_id, intent_summary, risks, assumptions, affected_files, steps
+- PlanStep: id, stable_id, order, depends_on[], title, description, type, affected_files, estimated_risk, user_edited, metadata
+- Approval policy: JSONB field; Phase 5 always_require_human; extensible for Phase 12 auto-approve rules
+- WorkItem composition: parent_id + template_id nullable columns reserved for future sub-tasks / templates
+
+---
 - Database: ingestion_jobs table with lifecycle tracking (queued/running/done/failed/superseded)
 - Database: code_chunks table with pgvector extension for embeddings
 - Go: JobWorker with Redis queue (BLPOP), goroutine pool with configurable concurrency

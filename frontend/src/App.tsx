@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { GitHubInstallButton } from './components/GitHubInstallButton'
 import { GitHubInstallCallback } from './pages/GitHubInstallCallback'
 import { QAPanel } from './components/QAPanel'
+import { TaskPanel } from './components/TaskPanel'
 import './App.css'
 
 interface AuthState {
@@ -234,6 +235,7 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
   const [installationMissing, setInstallationMissing] = useState(false)
   const [indexStatuses, setIndexStatuses] = useState<Record<string, IndexStatus>>({})
   const [activeQARepo, setActiveQARepo] = useState<GitHubRepo | null>(null)
+  const [activeTaskRepo, setActiveTaskRepo] = useState<GitHubRepo | null>(null)
 
   const loadRepos = async () => {
     setLoadingRepos(true)
@@ -414,12 +416,18 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
                       </div>
                     )}
                     {idxStatus?.status === 'done' && (
-                      <div style={{ marginTop: '0.5rem' }}>
+                      <div style={{ marginTop: '0.5rem', display: 'flex', gap: '4px' }}>
                         <button
                           onClick={() => setActiveQARepo(activeQARepo?.id === repo.id ? null : repo)}
                           style={{ fontSize: '12px', padding: '2px 8px', background: activeQARepo?.id === repo.id ? '#dbeafe' : undefined }}
                         >
                           {activeQARepo?.id === repo.id ? 'Close Q&A' : '💬 Ask'}
+                        </button>
+                        <button
+                          onClick={() => setActiveTaskRepo(activeTaskRepo?.id === repo.id ? null : repo)}
+                          style={{ fontSize: '12px', padding: '2px 8px', background: activeTaskRepo?.id === repo.id ? '#fef9c3' : undefined }}
+                        >
+                          {activeTaskRepo?.id === repo.id ? 'Close Tasks' : '⚡ Tasks'}
                         </button>
                       </div>
                     )}
@@ -440,6 +448,20 @@ function Dashboard({ user, org, role, token, onLogout }: any) {
           <QAPanel
             repoID={activeQARepo.id}
             repoName={activeQARepo.repo_full_name}
+            token={token}
+          />
+        </div>
+      )}
+
+      {/* Phase 5 — Task panel */}
+      {activeTaskRepo && (
+        <div style={{ marginBottom: '2rem' }}>
+          <h3 style={{ marginBottom: '0.5rem' }}>
+            ⚡ Tasks for {activeTaskRepo.repo_full_name}
+          </h3>
+          <TaskPanel
+            repoID={activeTaskRepo.id}
+            repoName={activeTaskRepo.repo_full_name}
             token={token}
           />
         </div>

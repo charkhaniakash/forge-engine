@@ -7,6 +7,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from src.auth import extract_token_from_header, verify_token
 from src.ingestion.router import router as ingestion_router
 from src.qa.router import router as qa_router
+from src.planning.router import router as planning_router
 
 # Configure structlog — structured JSON, ISO timestamps, trace ID on every line.
 structlog.configure(
@@ -87,21 +88,9 @@ app.include_router(ingestion_router)
 # POST /v1/agent/qa  (streaming NDJSON — see qa/router.py)
 app.include_router(qa_router)
 
-
-# ── Phase 5 stub — planning (not yet implemented) ─────────────────────────────
-@app.post("/v1/agent/plan")
-async def create_plan(
-    request: Request,
-    payload: dict,
-    token_payload: dict = Depends(verify_agent_token),
-):
-    """Stub — real planning logic is Phase 5."""
-    return {
-        "plan_id": "plan-stub-001",
-        "status": "planning",
-        "message": "Stub — Phase 5 not yet implemented",
-        "trace_id": request.state.trace_id,
-    }
+# ── Phase 5 — Planning ────────────────────────────────────────────────────────
+# POST /v1/agent/plan  (streaming NDJSON — see planning/router.py)
+app.include_router(planning_router)
 
 
 if __name__ == "__main__":

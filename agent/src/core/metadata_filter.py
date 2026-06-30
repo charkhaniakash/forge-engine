@@ -41,7 +41,8 @@ class MetadataFilter:
     """Filters the candidate set based on file-path metadata.
 
     filter_tests and filter_generated are True by default.
-    Pass filter_tests=False to include test files (useful for bug investigation).
+    Pass filter_tests=False to include test files (useful for planning,
+    bug investigation, and execution where test context is essential).
     """
 
     def __init__(

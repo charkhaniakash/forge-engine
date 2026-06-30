@@ -56,35 +56,30 @@ class ChatConfig(BaseModel):
 
 
 class RetrievalConfig(BaseModel):
-    """Tuning knobs for the Phase 4 retrieval pipeline.
+    """Tuning knobs for the retrieval pipeline.
 
-    These are config-driven rather than hardcoded so they can be adjusted
-    per-deployment without code changes. They are NOT runtime-configurable
-    (no DB config service) in Phase 4 — that belongs in Phase 13.
+    Profile-driven: each capability (Q&A, planning, execution) selects
+    its own profile. The RetrievalEngine is identical across all profiles.
 
     Pipeline: candidate_k → (filter) → rerank_k → (diversity) → final_k
     """
-    # Number of candidates fetched from pgvector cosine search.
+    # ── Q&A profile ───────────────────────────────────────────────────────────
     candidate_k: int = 50
-
-    # Candidates kept after re-ranking (before diversity selection).
     rerank_k: int = 15
-
-    # Final chunks sent to context assembly.
     final_k: int = 8
-
-    # Maximum chunks from any single file in the final set.
-    # Prevents one heavily-chunked file consuming all context slots.
     max_chunks_per_file: int = 3
-
-    # Token budget for the assembled code context (excludes prompt template
-    # and conversation history). 4096 is safe across GPT-4o-mini, Claude 3 Haiku,
-    # Gemini 1.5 Flash.
     context_token_budget: int = 4096
-
-    # Number of recent conversation turns (user+assistant pairs) sent to the
-    # LLM with each request. Summarisation for longer sessions is Phase 11.
     history_turns: int = 6
+
+    # ── Planning profile ──────────────────────────────────────────────────────
+    # Broader retrieval: more candidates, larger context, includes test files
+    # so the planner understands existing test patterns and constraints.
+    planning_candidate_k: int = 120
+    planning_rerank_k: int = 30
+    planning_final_k: int = 15
+    planning_max_chunks_per_file: int = 5
+    planning_context_token_budget: int = 8192
+    planning_include_tests: bool = True
 
 
 class Settings(BaseSettings):

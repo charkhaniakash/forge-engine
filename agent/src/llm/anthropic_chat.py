@@ -1,9 +1,12 @@
 """
-Anthropic streaming chat provider for Phase 4 Q&A.
+Anthropic streaming chat provider.
+
+response_format is ignored — JSON output is requested via the system prompt
+by the planning pipeline directly.
 """
 from __future__ import annotations
 
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import structlog
 import anthropic
@@ -29,11 +32,11 @@ class AnthropicChatProvider:
         messages: list[dict],
         payload: dict,
         request_id: str,
+        response_format: dict[str, Any] | None = None,  # ignored — use system prompt
     ) -> AsyncIterator[dict]:
         seq = 0
         total_tokens = 0
 
-        # Anthropic separates system messages from the messages list.
         system_parts = [m["content"] for m in messages if m.get("role") == "system"]
         chat_messages = [m for m in messages if m.get("role") != "system"]
         system_prompt = "\n\n".join(system_parts) if system_parts else anthropic.NOT_GIVEN
@@ -47,15 +50,11 @@ class AnthropicChatProvider:
             ) as stream:
                 async for text in stream.text_stream:
                     yield {
-                        "v": 1,
-                        "event": "token",
-                        "seq": seq,
-                        "request_id": request_id,
-                        "text": text,
+                        "v": 1, "event": "token", "seq": seq,
+                        "request_id": request_id, "text": text,
                     }
                     seq += 1
 
-                # Capture usage from the final message.
                 final = await stream.get_final_message()
                 if final.usage:
                     total_tokens = final.usage.output_tokens or 0
@@ -63,20 +62,14 @@ class AnthropicChatProvider:
         except Exception as exc:
             logger.error("anthropic_chat_error", error=str(exc), request_id=request_id)
             yield {
-                "v": 1,
-                "event": "error",
-                "seq": seq,
-                "request_id": request_id,
-                "message": str(exc),
+                "v": 1, "event": "error", "seq": seq,
+                "request_id": request_id, "message": str(exc),
             }
             return
 
         done: dict = {
-            "v": 1,
-            "event": "done",
-            "seq": seq,
-            "request_id": request_id,
-            "model": self._model,
+            "v": 1, "event": "done", "seq": seq,
+            "request_id": request_id, "model": self._model,
             "token_count": total_tokens,
         }
         done.update(payload)

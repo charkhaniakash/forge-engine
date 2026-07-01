@@ -4,8 +4,11 @@
  * Shows for any indexed repo. Lets the user describe an engineering task,
  * watches live planning progress via WebSocket, then displays the plan for
  * review, editing, and approval.
+ *
+ * Phase 6: shows WorkspaceStatus below the plan for approved tasks.
  */
 import { useEffect, useRef, useState } from 'react'
+import { WorkspaceStatus } from './WorkspaceStatus'
 
 const API = 'http://localhost:8080'
 
@@ -275,6 +278,21 @@ export function TaskPanel({ repoID, repoName, token }: TaskPanelProps) {
                 onMoveStep={(i, dir) => setEditingSteps(prev => { if (!prev) return prev; const a = [...prev]; const j = i + dir; if (j < 0 || j >= a.length) return a; [a[i], a[j]] = [a[j], a[i]]; return a; })}
                 onSaveEdit={submitEditedPlan}
                 onCancelEdit={() => setEditingSteps(null)} />}
+
+              {/* Phase 6 — Workspace sandbox (shown for approved tasks) */}
+              {activeTask && (
+                activeTask.status === 'plan_approved' ||
+                activeTask.status === 'executing' ||
+                activeTask.status === 'done' ||
+                activeTask.status === 'failed'
+              ) && (
+                <WorkspaceStatus
+                  repoID={repoID}
+                  taskID={activeTask.id}
+                  token={token}
+                  approvalStatus={activeTask.approval_status}
+                />
+              )}
             </div>
           </>
         )}

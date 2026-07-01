@@ -23,6 +23,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
+	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
 
 func main() {
@@ -73,6 +74,7 @@ func main() {
 	ingestionJobRepo := repository.NewIngestionJobRepository(dbConn)
 	qaRepo := repository.NewQARepository(dbConn)
 	workItemRepo := repository.NewWorkItemRepository(dbConn)
+	wsRepo := repository.NewWorkspaceRepository(dbConn)
 
 	// ── Auth handlers ─────────────────────────────────────────────────────────
 	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -87,6 +89,7 @@ func main() {
 	var ingestionHandlers *handlers.IngestionHandlers
 	var qaHandlers *handlers.QAHandlers
 	var taskHandlers *handlers.TaskHandlers
+	var workspaceHandlers *handlers.WorkspaceHandlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -195,6 +198,32 @@ func main() {
 				sugar,
 			)
 
+			// ── Workspace / execution sandbox (Phase 6) ───────────────────────
+			dockerDriver, driverErr := workspace.NewDockerDriver(sugar)
+			if driverErr != nil {
+				sugar.Warnw("docker_driver_init_failed",
+					"error", driverErr,
+					"note", "workspace provisioning will be unavailable")
+			} else {
+				wsCfg := workspace.DefaultConfig()
+				wsManager := workspace.NewWorkspaceManager(
+					dockerDriver, wsRepo, tokenCache, wsCfg, sugar)
+
+				// Orphan reaper — runs in background until server shuts down.
+				reaperCtx, reaperCancel := context.WithCancel(context.Background())
+				defer reaperCancel()
+				reaper := workspace.NewWorkspaceReaper(wsManager, wsRepo, wsCfg.ReaperIntervalSeconds, sugar)
+				go reaper.Start(reaperCtx)
+				sugar.Infow("workspace_reaper_started",
+					"interval_seconds", wsCfg.ReaperIntervalSeconds)
+
+				workspaceHandlers = handlers.NewWorkspaceHandlers(
+					wsManager, wsRepo, workItemRepo,
+					githubRepoRepo, githubInstallationRepo, ingestionJobRepo, sugar)
+
+				sugar.Info("workspace execution sandbox initialised")
+			}
+
 			sugar.Info("GitHub integration and ingestion worker initialised")
 		}
 	} else {
@@ -285,6 +314,24 @@ func main() {
 			taskHandlers.StreamUpgrade,
 			websocket.New(taskHandlers.StreamWS),
 		)
+	}
+
+	if workspaceHandlers != nil {
+		// Phase 6 — Secure execution workspace (user-facing)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/workspace",
+			middleware.RequireAuth(sugar), workspaceHandlers.ProvisionWorkspace)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/workspace",
+			middleware.RequireAuth(sugar), workspaceHandlers.GetWorkspace)
+		app.Delete("/v1/repos/:repoID/tasks/:taskID/workspace",
+			middleware.RequireAuth(sugar), workspaceHandlers.DestroyWorkspace)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/workspace/logs",
+			middleware.RequireAuth(sugar), workspaceHandlers.GetWorkspaceLogs)
+
+		// Phase 6 — Internal execution endpoint (called by Phase 7 agent routing)
+		// Protected by internal JWT — not accessible from the internet.
+		app.Post("/v1/internal/workspaces/:workspaceID/exec",
+			middleware.RequireInternalAuth(jwtSecret, sugar),
+			workspaceHandlers.InternalExec)
 	}
 
 	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────

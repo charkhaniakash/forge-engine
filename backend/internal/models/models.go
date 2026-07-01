@@ -186,6 +186,90 @@ type Plan struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
+// Workspace is the domain-level execution environment for one task execution attempt.
+// It owns the full lifecycle from provisioning through destruction.
+//
+// Terminology:
+//   Workspace   — the platform concept (what handlers and the frontend see)
+//   Sandbox     — the runtime instance managed by a SandboxDriver
+//   Container   — the Docker implementation detail (container_id is opaque)
+//
+// Ownership: Go owns every status transition. The Agent never writes to workspaces.
+// Approval gate: a workspace can only be provisioned when the associated
+// work_item.approval_status IN ('approved', 'auto_approved').
+type Workspace struct {
+	ID             string     `json:"id"`
+	WorkItemID     string     `json:"work_item_id"`
+	RepoID         string     `json:"repo_id"`
+	CommitSHA      string     `json:"commit_sha"`
+	Driver         string     `json:"driver"`          // "docker"
+	ContainerID    *string    `json:"-"`               // never exposed in API responses
+	ContainerName  *string    `json:"container_name,omitempty"`
+	Image          string     `json:"image"`
+	CPULimit       string     `json:"cpu_limit"`
+	MemoryLimitMB  int        `json:"memory_limit_mb"`
+	PIDLimit       int        `json:"pid_limit"`
+	TimeoutSeconds int        `json:"timeout_seconds"`
+	Status         string     `json:"status"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	ReadyAt        *time.Time `json:"ready_at,omitempty"`
+	DestroyedAt    *time.Time `json:"destroyed_at,omitempty"`
+	Error          *string    `json:"error,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// Workspace status constants.
+const (
+	WorkspaceStatusProvisioning = "provisioning"
+	WorkspaceStatusReady        = "ready"
+	WorkspaceStatusExecuting    = "executing"
+	WorkspaceStatusCompleted    = "completed"
+	WorkspaceStatusFailed       = "failed"
+	WorkspaceStatusTimedOut     = "timed_out"
+	WorkspaceStatusKilled       = "killed"
+	WorkspaceStatusDestroying   = "destroying"
+	WorkspaceStatusDestroyed    = "destroyed"
+)
+
+// ExecutionLog records every event in a workspace's lifetime:
+//   - Lifecycle transitions (workspace_creating, repo_cloning, workspace_ready, …)
+//   - Commands executed via ExecutionService (command events)
+//
+// The seq field provides ordered replay and powers the live worklog UI.
+type ExecutionLog struct {
+	ID             string     `json:"id"`
+	WorkspaceID    string     `json:"workspace_id"`
+	Seq            int        `json:"seq"`
+	EventType      string     `json:"event_type"`      // "lifecycle" | "command"
+	LifecycleEvent *string    `json:"lifecycle_event,omitempty"`
+	Command        []string   `json:"command,omitempty"`
+	WorkingDir     *string    `json:"working_dir,omitempty"`
+	ExitCode       *int       `json:"exit_code,omitempty"`
+	TimedOut       bool       `json:"timed_out"`
+	TimeoutSeconds *int       `json:"timeout_seconds,omitempty"`
+	DurationMS     *int       `json:"duration_ms,omitempty"`
+	Stdout         *string    `json:"stdout,omitempty"`
+	Stderr         *string    `json:"stderr,omitempty"`
+	Message        *string    `json:"message,omitempty"`
+	StartedAt      *time.Time `json:"started_at,omitempty"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
+}
+
+// Lifecycle event name constants.
+const (
+	LifecycleEventCreating        = "workspace_creating"
+	LifecycleEventCreated         = "workspace_created"
+	LifecycleEventRepoCloning     = "repo_cloning"
+	LifecycleEventRepoCloned      = "repo_cloned"
+	LifecycleEventRepoCheckout    = "repo_checkout"
+	LifecycleEventReady           = "workspace_ready"
+	LifecycleEventDestroying      = "workspace_destroying"
+	LifecycleEventDestroyed       = "workspace_destroyed"
+	LifecycleEventFailed          = "workspace_failed"
+)
+
 // IngestionJob represents one attempt to index a repository at a specific commit SHA.
 // The (repo_id, commit_sha) pair is the logical snapshot key.
 // Retrieval (Phase 4+) must only read code_chunks where the associated job has

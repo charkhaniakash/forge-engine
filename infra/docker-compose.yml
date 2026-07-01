@@ -55,14 +55,24 @@ services:
       GITHUB_APP_PRIVATE_KEY_PATH: /app/secrets/github-private-key.pem
       GITHUB_INSTALL_STATE_SECRET: forge-engine-install-state-secret
       # Phase 3 — ingestion worker
-      # This path must match the agent's mount point exactly.
       CLONE_BASE_DIR: /tmp/forge-clones
       WORKER_CONCURRENCY: 2
+      # Phase 6 — execution sandbox
+      SANDBOX_IMAGE: forge-sandbox:latest
+      SANDBOX_CPU_LIMIT: "1.0"
+      SANDBOX_MEMORY_LIMIT_MB: "512"
+      SANDBOX_PID_LIMIT: "128"
+      SANDBOX_TIMEOUT_SECONDS: "1800"
+      SANDBOX_REAPER_INTERVAL_SECONDS: "300"
     ports:
       - "8080:8080"
     volumes:
       - ./secrets/github-private-key.pem:/app/secrets/github-private-key.pem:ro
       - clone_storage:/tmp/forge-clones
+      # Phase 6 — Docker socket mount so the backend can manage sandbox containers.
+      # The backend is the ONLY component with Docker access.
+      # The agent never touches Docker.
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       postgres:
         condition: service_healthy
@@ -138,6 +148,21 @@ services:
     depends_on:
       - backend
       - agent
+    networks:
+      - forge-network
+
+  # Phase 6 — Build the forge-sandbox image once so the backend can use it.
+  # This service exits immediately after building; it doesn't stay running.
+  # Run `docker compose build sandbox-builder` to rebuild after Dockerfile changes.
+  sandbox-builder:
+    build:
+      context: ../infra/sandbox
+      dockerfile: Dockerfile
+      tags:
+        - forge-sandbox:latest
+    image: forge-sandbox:latest
+    container_name: forge-sandbox-builder
+    command: echo "forge-sandbox image built"
     networks:
       - forge-network
 

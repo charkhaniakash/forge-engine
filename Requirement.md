@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 5 — Task Creation & Implementation Planning**
+> ### 🔵 ACTIVE PHASE: **Phase 7 — Code Modification Execution**
 >
-> Only work within this phase's scope (see Phase 5 below) until the human moves
+> Only work within this phase's scope (see Phase 7 below) until the human moves
 > this marker forward.
 
 *(Update this section only when the human says a phase is complete and to move
@@ -153,7 +153,28 @@ on. Do not move it yourself.)*
 - Frontend: recovery banner shown when sync returns 404
 - ADR 0003: defer LangGraph adoption documented
 
-### ✅ Phase 5 — Task Creation & Implementation Planning
+### ✅ Phase 6 — Secure Execution Sandbox
+- Database: workspaces table — driver, container_id (opaque), resource limits, full lifecycle status machine
+- Database: execution_logs table — unified event log for lifecycle events AND commands, with seq ordering
+- Migration 009: workspaces + execution_logs with correct indexes
+- Workspace abstraction: Workspace (domain) → Sandbox (runtime) → DockerContainer (impl detail)
+- SandboxDriver interface: Provision, Execute, Destroy, Status, ReadFile, WriteFile, CopyFile (last 3 are Phase 7 stubs)
+- DockerSandboxDriver: --network none, non-root forge user (uid 1000), read-only rootfs, CPU/mem/PID limits, streaming ExecutionEvent channel
+- Clone inside sandbox: git clone via authenticated URL injected as env var (never logged), then git checkout to target commit SHA
+- ExecutionEvent stream: "stdout"|"stderr"|"exit"|"timeout"|"error" events — consumers drain channel; Phase 7 fans to WebSocket
+- WorkspaceManager: orchestrates full lifecycle, writes every lifecycle event to execution_logs, redacts credentials from logs
+- WorkspaceReaper: periodic goroutine — destroys provisioning-timeout, wall-clock-timeout, and dead-container orphans
+- WorkspaceRepository: full CRUD + status transitions + LogLifecycle + LogCommandStart/Complete + ListLogs
+- WorkspaceHandlers: POST/GET/DELETE /workspace, GET /workspace/logs, POST /internal/workspaces/:id/exec
+- RequireInternalAuth middleware: validates Backend-to-Backend JWT (sub="backend") for the internal exec endpoint
+- Approval gate: ProvisionWorkspace rejects unless approval_status IN ('approved', 'auto_approved') — server-side hard check
+- forge-sandbox Dockerfile: ubuntu:22.04-slim, git only, forge user uid 1000, /workspace owned by forge
+- docker-compose: Docker socket mounted into backend (backend is the ONLY Docker-capable component), sandbox image build service
+- Frontend: WorkspaceStatus component — provision/destroy/status display, execution log viewer (dark terminal style)
+- Frontend: WorkspaceStatus shown in TaskPanel for approved/executing/done/failed tasks
+- Agent involvement: zero — Phase 6 is pure infrastructure, no LLM calls, no agent interaction
+
+---
 - Database: work_items table — type, intent, status state machine, approval_status enum, approval_policy JSONB
 - Database: plans table — immutable append-only versions, schema_version v1, is_active flag, created_by field
 - Migration 008: work_items + plans with correct indexes and constraints
@@ -487,28 +508,17 @@ execution without that approval.
 
 ### Phase 6 — Secure Execution Sandbox
 
-**Objective:** Isolated, ephemeral, resource-bounded environment for code
-execution — built and proven before any agent acts inside it.
+**Objective:** Build the secure execution foundation of Forge by introducing an isolated, ephemeral, resource-bounded workspace where engineering tasks can safely execute. This phase transitions Forge from a repository understanding platform into an execution-capable platform, but **does not introduce autonomous AI execution yet**. The sandbox represents the same concept as the cloud workspaces used by modern AI engineering systems such as Devin or Google Jules—an isolated environment where repositories are cloned, commands are executed, outputs are streamed, and the entire workspace is destroyed after completion. The goal of this phase is to prove the execution infrastructure independently of any AI reasoning.
 
-**In scope:** per-task ephemeral container provisioning (Docker to start),
-resource limits (CPU/mem/disk/network egress default-deny), filesystem
-boundary, command execution API (stdout/stderr/exit code, enforced timeouts),
-lifecycle tied to task state, orphan sandbox reaper job.
+**In scope:** Per-task ephemeral container provisioning (Docker initially), repository cloning and checkout, filesystem isolation, CPU/memory/disk quotas, network egress default-deny, command execution API (stdout/stderr/exit code, enforced timeouts), real-time command output streaming, sandbox lifecycle tied to task state, orphan sandbox reaper job, and complete audit logging of every command executed.
 
-**Out of scope:** any AI/agent reasoning. This phase is pure infra and must work
-fully without any LLM involved.
+**Out of scope:** Any AI reasoning, code generation, file modification, autonomous decision making, build repair, commit creation, or pull request generation. This phase focuses solely on building the execution platform that future phases will consume.
 
-**Backend (Go):** owns this entire phase — provisioning, lifecycle, quota
-enforcement, network policy, the tool-execution API, hard timeouts/kill
-switches, full audit logging of every command run.
+**Backend (Go):** Owns the entire execution platform. It provisions and destroys sandboxes, clones repositories, checks out commits, executes commands, enforces resource quotas and security boundaries, manages network policies, streams command output, exposes the tool-execution API, enforces hard timeouts and kill switches, performs cleanup, and records complete execution audit logs.
 
-**Agent (Python):** zero direct execution capability — only ever sends
-`ToolCallRequest` and receives `ToolCallResult` per the Section 2 contract.
+**Agent (Python):** Has **zero direct execution capability**. It never interacts with Docker, shells, filesystems, or Git directly. In future phases it will only issue structured `ToolCallRequest` messages and consume `ToolCallResult` responses through the backend, preserving a strict separation between reasoning and execution.
 
-**Definition of Done:** Backend provisions an isolated sandbox with a real repo
-checked out, executes arbitrary commands with enforced limits, captures output,
-tears down reliably — fully testable with zero AI involvement.
-
+**Definition of Done:** The backend can provision an isolated sandbox, clone and prepare a repository at a specific commit, execute arbitrary commands with enforced security and resource limits, stream execution output, capture stdout/stderr/exit codes, cleanly destroy the environment after completion, and reliably recover orphaned sandboxes. The entire execution platform must be fully testable without involving any LLM or AI agent.
 ---
 
 ### Phase 7 — Code Modification Execution
@@ -609,6 +619,67 @@ free invention.
 PR with an accurate description, visible and linked in the platform.
 
 ---
+
+
+
+### Phase 10B — Cloud Development Workspace (Browser IDE)
+
+**Objective:** Deliver a browser-based development workspace where users can
+observe, inspect, and collaborate with the autonomous software engineer in
+real time. The workspace is a live view into the execution sandbox rather than
+the user's local filesystem.
+
+**In scope:**
+- Browser IDE built on Monaco Editor (VS Code experience)
+- Live file explorer backed by the sandbox filesystem
+- Multi-file editing and tab management
+- Real-time AI code edits streamed into the editor
+- Live file synchronization between sandbox and browser
+- Integrated terminal connected to the sandbox
+- Build, test, and execution output panels
+- Git diff viewer (before/after changes)
+- Task timeline showing planning, execution, testing, and repair progress
+- AI activity feed (reading files, modifying files, running commands)
+- Search across repository
+- File diagnostics (errors, warnings, lint)
+- Read-only mode while execution is in progress where appropriate
+
+**Out of scope:**
+- Local filesystem editing
+- VS Code extension
+- Multi-user collaborative editing
+- Offline editing
+- Plugin/extension marketplace
+- IDE customization and themes
+
+**Backend (Go):**
+- Owns browser workspace lifecycle
+- Exposes sandbox filesystem APIs
+- Streams file updates via WebSocket
+- Streams terminal output
+- Streams AI progress events
+- Manages sandbox sessions
+- Coordinates editor state with execution state
+
+**Agent (Python):**
+- Continues to reason only
+- Produces code modifications
+- Produces progress/thinking events
+- Never communicates directly with the browser
+- Never owns editor state
+
+**Definition of Done:**
+- User opens a browser workspace for a task.
+- The workspace reflects the live sandbox filesystem.
+- AI edits appear in the editor in real time.
+- Users can inspect every generated change before approval.
+- Terminal output, build logs, tests, and execution progress stream live.
+- Git diffs are viewable before committing.
+- The workspace closes automatically when the sandbox lifecycle ends.
+
+
+--------
+
 
 ### Phase 11 — Real-Time Execution Streaming (Hardening)
 

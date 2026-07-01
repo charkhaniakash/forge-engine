@@ -521,256 +521,1758 @@ execution without that approval.
 **Definition of Done:** The backend can provision an isolated sandbox, clone and prepare a repository at a specific commit, execute arbitrary commands with enforced security and resource limits, stream execution output, capture stdout/stderr/exit codes, cleanly destroy the environment after completion, and reliably recover orphaned sandboxes. The entire execution platform must be fully testable without involving any LLM or AI agent.
 ---
 
-### Phase 7 — Code Modification Execution
+### Phase 7 — Autonomous Code Modification Execution
 
-**Objective:** Agent executes an approved plan, step by step, inside the
-sandbox, with live-visible diffs.
+**Objective:** Execute an approved implementation plan inside the Phase 6 Workspace through structured tool calls, producing deterministic, observable, and fully auditable code modifications with live-visible diffs. The agent behaves like a software engineer operating inside an isolated workspace while remaining strictly bounded by the approved plan.
 
-**In scope:** code-editing agent loop (read → reason → write via tool calls),
-diff generation/display, step-by-step execution tracking, explicit surfacing of
-plan deviations (not silent improvisation).
+**In scope:**
+- Step-by-step execution of approved implementation plans
+- Code-editing agent loop (read → understand → reason → write via tool calls)
+- Repository navigation (symbol lookup, dependency exploration, reference search, project structure understanding)
+- Structured file operations (read, create, modify, rename, move, delete)
+- Context-aware minimal code edits (avoid whole-file rewrites where possible)
+- Structured diff generation and visualization
+- Live execution timeline showing every reasoning and tool event
+- Execution checkpoints after every completed plan step
+- Workspace artifact tracking (modified files, created files, deleted files)
+- Step-by-step execution tracking with progress indicators
+- Explicit surfacing of plan deviations (never silently improvising)
+- Structured execution event model for future replay and observability
+- Live synchronization of workspace changes to future browser workspace clients
 
-**Out of scope:** running builds/tests (Phase 8), auto-repair (Phase 9), commits/PRs (Phase 10).
+**Out of scope:**
+- Running builds or tests (Phase 8)
+- Automatic repair loops (Phase 9)
+- Git commits and Pull Requests (Phase 10)
+- Browser IDE implementation (Phase 10B)
+- Streaming hardening and replay (Phase 11)
+- Human intervention controls (Phase 12)
 
-**Backend (Go):** orchestrates execution job, relays tool-call requests to the
-Phase 6 sandbox, persists diffs as structured artifacts, streams every event
-over WebSocket, advances task state machine.
+**Backend (Go):**
+Owns the complete execution orchestration pipeline.
+Responsibilities include:
+- Execute approved implementation plans sequentially
+- Orchestrate Workspace execution lifecycle
+- Validate every tool invocation
+- Relay tool-call requests to the Phase 6 Workspace
+- Persist structured execution events
+- Persist structured code diffs
+- Persist execution checkpoints
+- Persist workspace artifacts
+- Stream execution progress over WebSocket
+- Synchronize workspace updates with future browser workspace clients
+- Detect and surface plan deviations
+- Enforce execution permissions, workspace boundaries, cancellation, and timeouts
+- Advance the task execution state machine
 
-**Agent (Python):** per-plan-step reasoning loop, issues read/write tool calls,
-explains reasoning per step, detects and reports plan deviations explicitly.
+**Agent (Python):**
+Responsible only for reasoning and execution planning.
+Responsibilities include:
+- Interpret each approved implementation step
+- Gather repository context before modifying code
+- Issue structured read/write/search tool calls
+- Navigate repository structure intelligently
+- Generate minimal code modifications
+- Explain execution reasoning for every completed step
+- Detect repository inconsistencies
+- Explicitly report plan deviations instead of silently changing strategy
+- Produce structured execution summaries
+- Never edit files directly
+- Never bypass Backend authorization
+- Never communicate directly with the Workspace runtime or Browser UI
 
-**Definition of Done:** Given an approved plan, the agent executes each step in
-the sandbox, produces real inspectable diffs, streams progress live, and
-surfaces deviations rather than silently going off-script.
-
----
-
-### Phase 8 — Build & Test Execution
-
-**Objective:** Automatically run the project's real build/test tooling after
-code changes and structure the results.
-
-**In scope:** build-tool detection for a known, explicit set of stacks, test/build
-execution via the Phase 6 sandbox, structured result parsing (pass/fail, error
-locations), baseline-before-changes check to avoid blaming pre-existing flakiness.
-
-**Out of scope:** auto-repair (Phase 9) — this phase only runs and reports, it
-does not fix anything.
-
-**Backend (Go):** orchestrates the validation step, stores raw + parsed
-results, decides which commands constitute "build"/"test" for a given project
-(config-driven).
-
-**Agent (Python):** parses raw stdout/stderr into structured failure data for a
-defined initial set of test frameworks, classifies failures as
-simple/fixable vs. not (input to Phase 9, decision enforced in Phase 9 by Backend).
-
-**Definition of Done:** After code modification, the platform runs the right
-build/test commands for supported stacks, structures pass/fail/error data
-accurately, and surfaces it clearly.
-
----
-
-### Phase 9 — Self-Repair Loop
-
-**Objective:** Bounded automatic fixing of simple validation failures before
-escalating to the user.
-
-**In scope:** repair loop with a hard iteration cap and cost/time budget,
-failure-category gate (only "safe to auto-fix" categories attempted), re-runs
-Phase 7→8 in a tight loop, clean escalation when budget is exhausted.
-
-**Out of scope:** ever modifying test expectations to force a pass — the agent
-fixes implementation, not the test, unless explicitly instructed otherwise.
-
-**Backend (Go):** **enforces hard limits server-side** (max attempts, max time,
-max cost) — this is not optional and must not depend on the agent's own
-self-discipline. Manages state transitions, persists full attempt history.
-
-**Agent (Python):** classifies failures, generates targeted fixes scoped
-narrowly to the failing area, can self-terminate early if it judges something
-unfixable — but Backend's hard cap is the real safety net regardless.
-
-**Definition of Done:** Given a simple validation failure, the agent attempts
-bounded, fully logged repair cycles, succeeds or cleanly exhausts its budget, and
-never silently weakens a test to fake a pass.
+**Definition of Done:**
+Given an approved implementation plan:
+- The agent executes every approved step sequentially inside the Workspace.
+- Repository context is gathered before each modification.
+- Every modification is performed through structured tool calls.
+- Every file change produces an inspectable structured diff.
+- Every execution step is streamed live to the frontend.
+- Execution checkpoints are persisted after every completed step.
+- Workspace artifacts are tracked throughout execution.
+- Plan deviations are surfaced explicitly for user visibility.
+- The Workspace contains the fully modified repository, ready for Build & Test validation in Phase 8.
 
 ---
 
-### Phase 10 — Git Operations: Commit & Pull Request
+### Phase 8 — Intelligent Build & Validation Pipeline
 
-**Objective:** Turn validated agent changes into a real branch, commit(s), and PR on GitHub.
+**Objective:** Automatically validate the modified repository by executing its real build, test, lint, formatting, and analysis tooling inside the Phase 6 Workspace. Produce structured validation results that become the input for the autonomous repair loop in Phase 9.
 
-**In scope:** branch creation with collision handling, commit creation with
-meaningful messages, PR creation with a generated description (plan summary +
-changes + validation + repair history), PR status sync back from GitHub.
-
-**Out of scope:** anything not directly about producing the git artifacts.
-
-**Backend (Go):** all actual GitHub API calls via Phase 2's installation token,
-assembles the PR description from already-structured data, handles git-level
-conflicts (base branch moved — decide rebase vs. fail-and-ask).
-
-**Agent (Python):** optionally assists in generating human-readable prose for
-commit/PR descriptions from known structured facts — summarization only, not
-free invention.
-
-**Definition of Done:** A completed task results in a real branch + commit(s) +
-PR with an accurate description, visible and linked in the platform.
+This phase never modifies code. It only validates, analyzes, and reports.
 
 ---
 
+**In scope:**
+
+### Validation Pipeline
+- Automatic project stack detection
+- Build tool detection
+- Test framework detection
+- Package manager detection
+- Language runtime detection
+- Framework detection
+- Validation profile selection
+
+### Repository Baseline
+- Optional baseline validation before AI modifications
+- Detect pre-existing build failures
+- Detect pre-existing test failures
+- Detect flaky tests
+- Compare before/after validation results
+- Prevent attributing existing failures to the AI
+
+### Build Validation
+- Execute project build commands
+- Support an explicit set of known language stacks
+- Support configurable validation profiles
+- Capture build artifacts
+- Capture compiler diagnostics
+- Capture dependency resolution failures
+
+### Test Validation
+- Execute unit tests
+- Execute integration tests (where configured)
+- Detect skipped tests
+- Detect flaky tests
+- Parse structured test results
+- Collect execution statistics
+
+### Static Analysis
+- Run project linting tools
+- Run formatting validation
+- Collect compiler warnings
+- Collect static analysis diagnostics
+- Capture code quality violations
+
+### Structured Result Parsing
+Convert raw command output into structured validation data:
+- Build status
+- Test status
+- Failed test cases
+- Compiler errors
+- Runtime exceptions
+- Stack traces
+- File locations
+- Line numbers
+- Error categories
+- Severity levels
+- Suggested repair category
+
+### Validation Artifacts
+Persist:
+- Raw stdout/stderr
+- Structured validation results
+- Build logs
+- Test reports
+- Lint reports
+- Execution duration
+- Validation summary
+- Generated artifacts metadata
+
+### Live Validation Timeline
+Stream every validation event:
+- Build started
+- Installing dependencies
+- Running build
+- Running tests
+- Running linter
+- Parsing failures
+- Validation complete
+
+### Validation Summary
+Generate a structured report including:
+- Build Success / Failed
+- Tests Passed / Failed
+- Files with errors
+- Diagnostics summary
+- Validation duration
+- Readiness for Phase 9
+
+---
+
+**Out of scope:**
+- Automatic code repair (Phase 9)
+- Git commits and Pull Requests (Phase 10)
+- Browser IDE implementation (Phase 10B)
+- Human intervention controls (Phase 12)
+
+This phase never attempts to modify implementation code. It only validates and reports.
+
+---
+
+**Backend (Go):**
+
+Owns the complete validation orchestration pipeline.
+
+Responsibilities include:
+- Detect project technology stack
+- Select validation profile
+- Determine build, test, lint, and analysis commands
+- Execute validation commands through the Phase 6 Workspace
+- Orchestrate validation order
+- Capture raw execution output
+- Persist structured validation artifacts
+- Persist validation summaries
+- Stream validation progress over WebSocket
+- Compare baseline vs post-change validation
+- Produce structured inputs for the Phase 9 repair engine
+- Enforce validation timeouts and execution policies
+
+---
+
+**Agent (Python):**
+
+Responsible only for validation understanding.
+
+Responsibilities include:
+- Parse raw stdout/stderr
+- Parse compiler diagnostics
+- Parse structured test results
+- Parse lint results
+- Categorize failures
+- Identify affected files
+- Identify affected symbols
+- Classify failures by severity
+- Classify failures as repairable or non-repairable
+- Produce structured validation summaries
+- Never modify implementation code
+- Never execute repair actions
+
+---
+
+**Definition of Done:**
+
+After Phase 7 completes:
+
+- The platform automatically detects the project's technology stack.
+- The correct validation pipeline executes inside the Workspace.
+- Build, test, lint, and analysis commands execute successfully for supported stacks.
+- Baseline validation is compared against post-change validation where applicable.
+- Raw execution logs are converted into structured diagnostics.
+- Compiler errors, test failures, lint violations, and runtime exceptions are accurately classified.
+- Validation progress streams live to the frontend.
+- All validation artifacts are persisted.
+- The repository is classified as either:
+  - Validation Passed
+  - Validation Failed (Repairable)
+  - Validation Failed (Requires Human Intervention)
+
+The resulting structured validation report becomes the direct input for the autonomous repair loop implemented in Phase 9.
+
+---
+### Phase 9 — Autonomous Self-Repair & Recovery Loop
+
+**Objective:** Automatically repair validation failures through a bounded, intelligent repair workflow that iteratively diagnoses, fixes, validates, and verifies implementation changes inside the Phase 6 Workspace before escalating to the user. The repair workflow is implemented internally as a LangGraph-based Repair Graph with explicit backend-enforced safety limits.
+
+**In scope:**
+- LangGraph-based autonomous repair workflow
+- Intelligent failure diagnosis and classification
+- Failure-category gating (only safe-to-auto-fix categories)
+- Root-cause analysis before generating fixes
+- Context-aware repository investigation
+- Targeted implementation repairs scoped to affected files only
+- Minimal code modifications (avoid unnecessary rewrites)
+- Iterative repair → validation → retry loop
+- Automatic strategy switching when an attempted repair fails
+- Repair checkpointing between iterations
+- Structured repair attempt history
+- Repair confidence scoring
+- Explicit escalation when repair confidence becomes too low
+- Full execution timeline for every repair attempt
+- Re-run Phase 7 → Phase 8 after every repair attempt
+- Hard iteration, cost, and execution budgets
+- Complete audit logging of every repair decision
+
+**Out of scope:**
+- Modifying tests to artificially produce passing results
+- Disabling validations to hide failures
+- Changing build configurations to bypass failures
+- Git commits and Pull Requests (Phase 10)
+- Browser IDE implementation (Phase 10B)
+- Human approval workflows (Phase 12)
+
+The repair engine fixes implementation code only unless the user explicitly instructs otherwise.
+
+---
+
+**Backend (Go):**
+
+Owns the complete repair orchestration pipeline.
+
+Responsibilities include:
+- Start autonomous repair sessions
+- Enforce maximum repair attempts
+- Enforce execution time limits
+- Enforce token and cost budgets
+- Enforce workspace boundaries
+- Execute Phase 7 and Phase 8 between repair iterations
+- Persist complete repair history
+- Persist every repair attempt
+- Persist generated diffs
+- Persist validation history
+- Stream repair progress over WebSocket
+- Decide when repair budgets are exhausted
+- Escalate failures requiring human intervention
+- Advance task lifecycle state
+
+The Backend is the final authority for repair safety. The Agent can never exceed configured limits.
+
+---
+
+**Agent (Python):**
+
+Responsible only for repair reasoning.
+
+The repair workflow is implemented internally as a **LangGraph-based Repair Graph**. The graph manages repair state, branching decisions, retries, strategy selection, and checkpointing while remaining an internal implementation detail of the Python Agent. The Go Backend continues interacting with the Agent exclusively through the existing ToolCallRequest / ToolCallResult contract.
+
+Responsibilities include:
+- Analyze structured validation failures
+- Perform root-cause analysis
+- Gather additional repository context when necessary
+- Classify failures by repairability
+- Generate narrowly scoped implementation fixes
+- Choose appropriate repair strategies
+- Switch strategies when previous repairs fail
+- Execute repository investigation before editing
+- Generate minimal implementation changes
+- Determine when additional repair attempts are worthwhile
+- Self-terminate early when confidence becomes too low
+- Produce structured repair summaries
+- Explain repair reasoning
+- Never modify tests unless explicitly instructed
+- Never bypass Backend repair limits
+- Never bypass Backend authorization
+- Never communicate directly with the Workspace runtime or Browser UI
+
+---
+
+**Definition of Done:**
+
+Given a validation failure:
+
+- The repair workflow executes through the LangGraph-based Repair Graph.
+- Validation failures are classified before repair begins.
+- Root-cause analysis is performed prior to every repair attempt.
+- Only approved repair categories are attempted automatically.
+- Every repair attempt produces structured diffs.
+- Phase 7 and Phase 8 execute after every repair iteration.
+- Every repair attempt is fully logged and streamed live.
+- Checkpoints are created after every iteration.
+- Repair history is persisted for auditing.
+- Repair terminates immediately upon successful validation.
+- If repair budgets are exhausted or confidence becomes too low, the Backend cleanly escalates to the user.
+- The repair engine never weakens or modifies tests to artificially achieve passing validation unless explicitly instructed by the user.
+
+
+---
+### Phase 10 — Git Operations, Review Preparation & Pull Request Automation
+
+**Objective:** Convert a successfully validated implementation into production-ready Git artifacts by creating an isolated branch, meaningful commit history, and a comprehensive Pull Request that accurately represents the work performed throughout the entire execution lifecycle.
+
+This phase is responsible for publishing work to GitHub. It never modifies implementation code.
+
+---
+
+**In scope:**
+
+### Git Workspace Finalization
+- Verify workspace is in a clean, valid state
+- Detect modified, created, renamed, moved, and deleted files
+- Generate repository change summary
+- Detect merge conflicts before push
+
+### Branch Management
+- Automatic feature branch creation
+- Collision-resistant branch naming
+- Branch naming strategy based on task metadata
+- Existing branch reuse (when appropriate)
+- Safe branch cleanup policies
+
+### Commit Generation
+- Generate meaningful commit messages
+- Support configurable commit message templates
+- Support optional multi-commit mode for future execution strategies
+- Include execution metadata
+- Include validation metadata
+- Preserve deterministic commit ordering
+
+### Pull Request Generation
+Generate a complete Pull Request including:
+
+- Human-readable implementation summary
+- Original user request
+- Approved implementation plan
+- High-level architectural changes
+- Modified files summary
+- Validation results
+- Repair history (if applicable)
+- Risks
+- Assumptions
+- Follow-up recommendations
+- Deployment considerations (future-ready)
+
+### GitHub Synchronization
+- Push branch to remote
+- Create Pull Request
+- Synchronize PR status
+- Synchronize review state
+- Synchronize mergeability
+- Synchronize CI status (future-ready)
+
+### Change Review Artifacts
+Persist:
+- Branch information
+- Commit metadata
+- PR metadata
+- PR URL
+- Changed file list
+- Diff summary
+- GitHub synchronization history
+
+### Live Progress
+Stream:
+- Creating branch
+- Creating commits
+- Pushing branch
+- Creating Pull Request
+- Synchronizing GitHub
+- Pull Request ready
+
+---
+
+**Out of scope:**
+- Browser-based code review (Phase 10B)
+- Human approval workflow (Phase 12)
+- Deployment pipelines
+- Automatic merging
+- Repository administration
+
+This phase never edits implementation code. It only publishes validated work.
+
+---
+
+**Backend (Go):**
+
+Owns the complete Git publishing pipeline.
+
+Responsibilities include:
+- Verify repository readiness
+- Manage Git workspace state
+- Create feature branches
+- Handle branch collisions
+- Create commits
+- Push branches
+- Create Pull Requests through the GitHub App
+- Assemble PR descriptions using structured execution data
+- Handle Git synchronization failures
+- Handle base-branch movement
+- Decide rebase vs fail-and-request-user-action
+- Persist Git metadata
+- Persist PR metadata
+- Stream publishing progress
+- Synchronize GitHub state back into Forge Engine
+
+All Git operations are performed exclusively through the GitHub App Installation Token.
+
+---
+
+**Agent (Python):**
+
+Responsible only for summarization.
+
+Responsibilities include:
+- Generate human-readable commit messages
+- Generate Pull Request summaries
+- Summarize implementation work
+- Summarize validation results
+- Summarize repair history
+- Summarize architectural impact
+- Generate reviewer-friendly explanations
+
+The Agent never invents information. Every summary is derived from structured execution data already stored by previous phases.
+
+The Agent:
+- Never performs Git operations
+- Never communicates directly with GitHub
+- Never pushes commits
+- Never creates Pull Requests
+
+---
+
+**Definition of Done:**
+
+Given a successfully validated implementation:
+
+- A production-ready feature branch is created.
+- Repository changes are committed with meaningful commit messages.
+- The branch is pushed successfully to GitHub.
+- A Pull Request is automatically created.
+- The Pull Request contains accurate implementation summaries generated from structured execution history.
+- Validation results and repair history are attached.
+- Branch, commit, and PR metadata are synchronized back into Forge Engine.
+- Users can immediately review the generated Pull Request through both GitHub and Forge Engine.
+
+---
 
 
 ### Phase 10B — Cloud Development Workspace (Browser IDE)
 
-**Objective:** Deliver a browser-based development workspace where users can
-observe, inspect, and collaborate with the autonomous software engineer in
-real time. The workspace is a live view into the execution sandbox rather than
-the user's local filesystem.
+**Objective:** Deliver a production-grade browser-based software engineering workspace where users can observe, inspect, collaborate with, interrupt, and guide the autonomous software engineer in real time. The workspace becomes the primary interface for interacting with Forge Engine and serves as a live representation of the execution Workspace rather than the user's local filesystem.
+
+---
 
 **In scope:**
-- Browser IDE built on Monaco Editor (VS Code experience)
-- Live file explorer backed by the sandbox filesystem
-- Multi-file editing and tab management
-- Real-time AI code edits streamed into the editor
-- Live file synchronization between sandbox and browser
-- Integrated terminal connected to the sandbox
-- Build, test, and execution output panels
-- Git diff viewer (before/after changes)
-- Task timeline showing planning, execution, testing, and repair progress
-- AI activity feed (reading files, modifying files, running commands)
+
+### Browser IDE
+- Monaco Editor (VS Code experience)
+- Multi-file editing
+- File explorer
+- Breadcrumb navigation
+- Tabs
+- Split editor
+- Command palette
+- Keyboard shortcuts
+- Minimap
+- Find & Replace
+- Go To Definition
+- Peek Definition
+- Symbol Outline
 - Search across repository
-- File diagnostics (errors, warnings, lint)
-- Read-only mode while execution is in progress where appropriate
+- File tree virtualization for large repositories
+
+### Live Workspace Synchronization
+- Live synchronization with the Phase 6 Workspace
+- Incremental file synchronization
+- File create/update/delete events
+- Live cursor-safe updates while AI edits files
+- Automatic refresh when execution modifies files
+- Workspace reconnection after browser refresh
+- Automatic workspace recovery after temporary disconnects
+
+### AI Pair Programmer Experience
+- Watch AI edit code live
+- AI cursor visualization
+- Highlight active file being modified
+- Highlight active lines being edited
+- Show currently executing plan step
+- Show AI progress
+- Show repository exploration
+- Show files currently being read
+- Show tools currently being executed
+- Show current reasoning stage (high level only)
+- Show execution confidence
+- Display execution timeline
+
+### Interactive Task Timeline
+Timeline includes:
+- Planning
+- Approval
+- Workspace Provisioning
+- Repository Analysis
+- Code Modification
+- Validation
+- Repair Attempts
+- Git Operations
+
+Each timeline event supports:
+- timestamps
+- duration
+- logs
+- affected files
+- execution artifacts
+
+### Integrated Terminal
+- Interactive terminal
+- Live stdout/stderr
+- Terminal history
+- Multiple terminal sessions (future-ready)
+- Command cancellation
+- Terminal resize
+- ANSI color support
+
+### Validation Workspace
+- Build output panel
+- Test output panel
+- Lint output panel
+- Diagnostics panel
+- Error navigation
+- Warning navigation
+- Click-to-file navigation
+- Validation history
+
+### Git Experience
+- Side-by-side Git diff viewer
+- Inline diff viewer
+- File change summary
+- Added / Modified / Deleted files
+- Commit preview
+- Pull Request preview
+
+### AI Activity Feed
+Live feed showing:
+- Reading file
+- Searching symbols
+- Searching references
+- Creating file
+- Editing file
+- Running command
+- Running validation
+- Repair attempt
+- Waiting for approval
+- Finished step
+
+### Human-in-the-Loop Controls
+- Pause execution
+- Resume execution
+- Stop execution
+- Approve next step
+- Reject current plan
+- Request replanning
+- Ask AI questions during execution
+- Inspect execution reasoning summaries
+- Approve repair attempts (future policy driven)
+
+### Repository Intelligence
+- Symbol search
+- File search
+- Global search
+- Reference search
+- Dependency explorer
+- Repository outline
+- Recently modified files
+
+### Workspace Sessions
+- Session restoration
+- Browser reconnect
+- Persistent editor state
+- Open tab restoration
+- Scroll position restoration
+- Terminal reconnection
+
+### Observability
+- Workspace health
+- Sandbox status
+- CPU usage
+- Memory usage
+- Workspace lifetime
+- Execution duration
+- Streaming latency
+- Active task information
+
+---
 
 **Out of scope:**
-- Local filesystem editing
-- VS Code extension
+- Editing the user's local filesystem
+- Native VS Code extension
 - Multi-user collaborative editing
-- Offline editing
-- Plugin/extension marketplace
-- IDE customization and themes
+- Plugin marketplace
+- IDE themes and customization
+- Mobile IDE
+- Local desktop application
+
+---
 
 **Backend (Go):**
-- Owns browser workspace lifecycle
-- Exposes sandbox filesystem APIs
-- Streams file updates via WebSocket
-- Streams terminal output
-- Streams AI progress events
-- Manages sandbox sessions
-- Coordinates editor state with execution state
+
+Owns the complete Browser Workspace platform.
+
+Responsibilities include:
+- Workspace lifecycle management
+- Sandbox session management
+- Browser workspace provisioning
+- Filesystem API
+- Terminal API
+- File synchronization
+- Incremental diff streaming
+- WebSocket gateway
+- AI event streaming
+- Execution timeline streaming
+- Diagnostics streaming
+- Git diff generation
+- Session restoration
+- Workspace reconnection
+- Browser state synchronization
+- Execution permission enforcement
+- Human interaction handling
+- Workspace cleanup when execution completes
+
+---
 
 **Agent (Python):**
-- Continues to reason only
-- Produces code modifications
-- Produces progress/thinking events
+
+Responsible only for software engineering reasoning.
+
+Responsibilities include:
+- Continue autonomous execution
+- Produce code modifications
+- Produce execution summaries
+- Produce structured progress events
+- Produce repository exploration events
+- Produce validation summaries
+- Produce repair summaries
+
+The Agent:
 - Never communicates directly with the browser
 - Never owns editor state
+- Never owns terminal state
+- Never owns workspace synchronization
+- Never owns WebSocket connections
+
+### Interactive AI Collaboration
+
+The Browser Workspace is not a passive viewer. Users can actively collaborate with the autonomous software engineer while execution is in progress.
+
+Capabilities include:
+
+- Pause execution at any time
+- Resume execution from the latest checkpoint
+- Cancel execution gracefully
+- Send follow-up instructions during execution
+- Ask questions about the current implementation
+- Request explanations for ongoing code modifications
+- Protect specific files or folders from modification
+- Mark files as read-only for the current execution
+- Request alternative implementation approaches
+- Trigger partial replanning for remaining work
+- Continue execution without restarting completed work
+
+The execution engine treats user interactions as first-class execution events rather than new tasks, allowing the agent to adapt its remaining work while preserving completed progress.
+
+---
 
 **Definition of Done:**
-- User opens a browser workspace for a task.
-- The workspace reflects the live sandbox filesystem.
-- AI edits appear in the editor in real time.
-- Users can inspect every generated change before approval.
-- Terminal output, build logs, tests, and execution progress stream live.
-- Git diffs are viewable before committing.
-- The workspace closes automatically when the sandbox lifecycle ends.
+
+- Users can open a live browser workspace for any active task.
+- The Browser Workspace reflects the live execution Workspace in real time.
+- AI code modifications appear immediately inside the editor.
+- Repository exploration is visible while the AI works.
+- Terminal, build, validation, and repair output stream live.
+- Git diffs can be inspected before publishing.
+- Users can pause, resume, stop, or guide execution.
+- Execution timelines, diagnostics, and AI activity remain synchronized throughout the task.
+- Browser sessions automatically reconnect after refresh without losing workspace state.
+- The Browser Workspace automatically closes and cleans up when the underlying execution Workspace is destroyed.
+
 
 
 --------
 
+### Phase 11 — Production-Grade Real-Time Execution Streaming
 
-### Phase 11 — Real-Time Execution Streaming (Hardening)
+**Objective:** Transform the real-time execution streaming introduced throughout Phases 4–10 into a resilient, production-grade event delivery platform capable of supporting long-running autonomous software engineering sessions with guaranteed ordering, replay, reconnection, and multiple concurrent viewers.
 
-**Objective:** Harden the live-streaming experience built incrementally in
-Phases 4–10 into something production-grade.
-
-**In scope:** event log persistence (every WS event durably stored), reconnect
-with replay-from-sequence-number, multi-viewer support, backpressure handling
-so a slow client never stalls the agent.
-
-**Out of scope:** no new agent intelligence — this is transport hardening only.
-
-**Backend (Go):** event log persistence, connection management hardening,
-backpressure/slow-consumer handling, fan-out efficiency.
-
-**Agent (Python):** no change — already emits structured progress from prior phases.
-
-**Definition of Done:** A user can disconnect mid-task and reconnect to a
-complete, gap-free history plus live continuation; slow clients don't affect
-agent execution speed.
+The streaming platform becomes the single source of truth for all execution activity occurring inside Forge Engine.
 
 ---
 
-### Phase 12 — Human Review & Control Gates
+**In scope:**
 
-**Objective:** Unify all approval/intervention points: pause, resume, abort,
-override, configurable autonomy levels.
+### Durable Event Streaming
+- Persist every execution event before broadcasting
+- Monotonically increasing sequence numbers
+- Ordered event delivery
+- Exactly-once replay semantics
+- Event integrity guarantees
 
-**In scope:** unified task control model, configurable autonomy per org/task,
-pre-PR diff review step, manual diff override capability.
+### Connection Management
+- Automatic client reconnection
+- Resume streaming from last acknowledged sequence number
+- Heartbeat / keep-alive support
+- Idle timeout detection
+- Graceful connection recovery
+- Automatic session restoration
 
-**Out of scope:** new execution capabilities — this phase only adds control over
-existing ones.
+### Multi-Viewer Support
+- Multiple browser sessions observing the same execution
+- Organization-wide viewers (permission controlled)
+- Independent replay state per client
+- Efficient event fan-out
 
-**Backend (Go):** enforces control state transitions atomically (abort must
-actually stop sandbox execution within seconds, not just flip a DB flag),
-autonomy policy evaluation at each gate, persists manual overrides as new source
-of truth.
+### Event Replay
+- Replay complete execution history
+- Replay from arbitrary sequence number
+- Fast-forward to latest state
+- Gap detection
+- Duplicate event protection
 
-**Agent (Python):** supports being paused/interrupted mid-reasoning with enough
-checkpointed state to resume; respects override signals — never silently
-re-overwrites a user's manual edit on the next loop iteration.
+### Streaming Reliability
+- Backpressure handling
+- Slow-consumer isolation
+- Buffered event queues
+- Event batching where appropriate
+- Non-blocking broadcasting
+- Automatic client throttling
 
-**Definition of Done:** User can pause/resume/abort/override at any point, with
-*tested*, guaranteed cessation of sandbox activity on abort, and autonomy
-settings respected consistently by both sides.
+### Event Model
+Stream structured events including:
+- Planning
+- Workspace lifecycle
+- Repository analysis
+- Tool execution
+- File modifications
+- Validation
+- Repair
+- Git operations
+- Browser workspace updates
+- Human interaction events (future-ready)
+
+### Execution Timeline
+Provide a complete replayable execution timeline supporting:
+- timestamps
+- duration
+- event metadata
+- affected files
+- execution summaries
+- tool activity
+- validation history
+- repair history
+
+### Session Recovery
+After browser refresh or temporary disconnect:
+- Restore workspace state
+- Restore timeline
+- Restore terminal output
+- Restore editor state
+- Resume live event streaming
+
+### Streaming Observability
+Collect:
+- active connections
+- reconnect count
+- event throughput
+- streaming latency
+- dropped events
+- replay duration
+- slow client metrics
 
 ---
 
-### Phase 13 — Observability, Audit, and Cost Tracking
+**Out of scope:**
+- New reasoning capabilities
+- New agent intelligence
+- Execution planning
+- Validation logic
+- Repair logic
+- Browser IDE features
+- Human approval policies
 
-**Objective:** Make every decision, tool call, and dollar spent traceable and attributable.
-
-**In scope:** per-task cost ledger (tokens × pricing + compute time), full "show
-your work" trace view from existing event/tool-execution data, distributed
-tracing across the Go↔Python boundary, anomaly alerting.
-
-**Out of scope:** new agent behaviors — this phase consolidates and surfaces
-data other phases already generate.
-
-**Backend (Go):** cost aggregation pipeline, trace correlation (consuming trace
-IDs propagated since Phase 0), quota enforcement tied to Phase 1.
-
-**Agent (Python):** reports token usage/latency/model used on every LLM call in
-a structured format; emits structured reasoning traces, not just final outputs.
-
-**Definition of Done:** Full cost breakdown and step-by-step trace retrievable
-per task; org admins have a real-time usage dashboard; anomalies trigger alerts
-before they become billing surprises.
+This phase focuses exclusively on transport reliability and streaming infrastructure.
 
 ---
 
-### Phase 14 — Multi-Tenant Scale & Concurrency Hardening
+**Backend (Go):**
 
-**Objective:** Correct, performant behavior under real concurrent multi-tenant load.
+Owns the complete execution event platform.
 
-**In scope:** fair job-queue scheduling across orgs, horizontal scaling of both
-services, sandbox pool management, DB partitioning for high-volume tables, load
-testing.
+Responsibilities include:
+- Persist every execution event before delivery
+- Maintain ordered event logs
+- Generate sequence numbers
+- Manage WebSocket lifecycle
+- Handle reconnect and replay
+- Manage client acknowledgements
+- Detect missing events
+- Fan-out events to multiple clients
+- Isolate slow consumers
+- Apply backpressure strategies
+- Batch events when appropriate
+- Restore streaming sessions
+- Collect streaming metrics
+- Guarantee that agent execution is never blocked by client performance
 
-**Out of scope:** new product features — this is a hardening pass across the
-whole system, done once real usage patterns are known.
+---
 
-**Backend (Go):** fair queuing/scheduling, WebSocket hub horizontal scaling
-(Redis-backed pub/sub), DB partitioning/archival strategy.
+**Agent (Python):**
 
-**Agent (Python):** horizontal FastAPI scaling, LLM provider rate-limit/backpressure handling.
+No architectural changes.
 
-**Definition of Done:** Platform sustains realistic concurrent multi-tenant load
-with fair resource allocation and no tenant able to degrade another's experience.
+Responsibilities include:
+- Continue emitting structured execution events
+- Continue emitting progress events
+- Continue emitting validation events
+- Continue emitting repair events
+- Continue emitting execution summaries
 
+The Agent remains completely unaware of:
+- reconnects
+- replay
+- WebSockets
+- client sessions
+- browser state
+- event persistence
+
+---
+
+**Definition of Done:**
+
+- Every execution event is durably persisted before being streamed.
+- Every event has a globally ordered sequence number within its execution session.
+- Users can disconnect and reconnect without losing execution history.
+- Replay resumes from the last acknowledged event.
+- Multiple users can observe the same execution simultaneously.
+- Slow or disconnected clients never reduce agent execution throughput.
+- Event delivery remains ordered, reliable, and replayable across the complete execution lifecycle.
+- Browser workspaces recover automatically after refresh while maintaining live synchronization with the active execution.
+
+---
+
+### Phase 12 — Human-in-the-Loop Execution Control & Autonomy Policies
+
+**Objective:** Transform Forge Engine from a fully autonomous execution engine into a collaborative software engineering platform where humans can supervise, interrupt, guide, and control the AI at any point during execution through configurable autonomy policies.
+
+This phase introduces the execution control plane for the entire platform.
+
+---
+
+**In scope:**
+
+### Execution Control
+- Pause execution
+- Resume execution
+- Abort execution
+- Graceful cancellation
+- Force cancellation
+- Step-by-step execution mode
+- Continue execution after interruption
+
+### Interactive AI Collaboration
+- Send follow-up instructions during execution
+- Ask questions while the AI is working
+- Clarify implementation intent
+- Request explanation of current changes
+- Redirect implementation strategy
+- Trigger partial replanning of remaining work
+- Continue execution without restarting completed work
+
+### Checkpoint & Resume
+- Automatic execution checkpoints
+- Resume from latest checkpoint
+- Rollback to previous checkpoint (future-ready)
+- Preserve completed execution state
+- Restore execution context after interruption
+
+### Manual Code Overrides
+- Manual editing inside Browser Workspace
+- Protect manually edited regions
+- Protect files from further modification
+- Protect folders from modification
+- Merge AI changes with manual edits
+- Prevent AI from overwriting approved user changes
+
+### Review Gates
+- Review before execution
+- Review after execution
+- Review after validation
+- Review after repair
+- Review before Git commit
+- Review before Pull Request creation
+
+### Autonomy Policies
+Configurable per:
+- Organization
+- Repository
+- Task
+- Execution session
+
+Example policies:
+- Fully Manual
+- Approval Per Step
+- Approval Per Phase
+- Approval Before PR
+- Fully Autonomous
+
+### Intervention Events
+Execution supports live events including:
+- Pause
+- Resume
+- Abort
+- Continue
+- Replan
+- Protect File
+- Protect Folder
+- Retry Step
+- Skip Step
+- Inject Instruction
+- Request Explanation
+- Approve
+- Reject
+
+### Execution History
+Persist:
+- Every interruption
+- Every approval
+- Every rejection
+- Every override
+- Every user instruction
+- Every policy decision
+- Complete audit history
+
+---
+
+**Out of scope:**
+- New reasoning capabilities
+- New validation capabilities
+- New repair capabilities
+- New Git functionality
+
+This phase controls existing capabilities rather than introducing new execution features.
+
+---
+
+**Backend (Go):**
+
+Owns the complete execution control plane.
+
+Responsibilities include:
+- Evaluate autonomy policies
+- Enforce approval gates
+- Manage execution state machine
+- Pause running execution
+- Resume execution
+- Abort execution within guaranteed time limits
+- Persist execution checkpoints
+- Restore execution state
+- Persist user overrides
+- Persist policy decisions
+- Coordinate execution interruptions
+- Broadcast execution state changes
+- Prevent further tool execution after abort
+- Guarantee workspace shutdown after cancellation
+- Synchronize Browser Workspace with execution state
+
+The Backend remains the final authority over execution control.
+
+---
+
+**Agent (Python):**
+
+Responsible only for adapting execution.
+
+Responsibilities include:
+- Pause reasoning immediately upon interruption
+- Persist sufficient reasoning state for later continuation
+- Resume reasoning from checkpoints
+- Incorporate follow-up user instructions
+- Re-evaluate remaining implementation after new guidance
+- Respect protected files and protected regions
+- Respect manual code modifications
+- Never overwrite approved user edits
+- Explain execution decisions when requested
+- Produce updated execution summaries
+- Continue execution from checkpoints instead of restarting
+
+The Agent:
+- Never ignores Backend control signals
+- Never continues after an Abort event
+- Never bypasses autonomy policies
+- Never overwrites protected user changes
+
+---
+
+**Definition of Done:**
+
+- Users can pause, resume, abort, and guide execution at any point.
+- Follow-up instructions modify only the remaining execution plan.
+- Previously completed work is preserved through execution checkpoints.
+- Execution resumes from the latest checkpoint without restarting.
+- Manual code edits are respected and never silently overwritten.
+- Autonomy policies are enforced consistently for every execution session.
+- Every interruption, approval, rejection, override, and policy decision is fully audited.
+- Abort requests reliably terminate sandbox activity within the configured time limit.
+- The Browser Workspace, Backend, Workspace, and Agent remain fully synchronized throughout the execution lifecycle.
+
+
+---
+
+### Phase 13 — Enterprise Observability, Audit, Cost Intelligence & Analytics
+
+**Objective:** Transform Forge Engine into a fully observable enterprise platform where every execution, reasoning decision, tool invocation, infrastructure action, approval, and dollar spent is completely traceable, auditable, replayable, and attributable.
+
+This phase establishes the operational intelligence layer of Forge Engine.
+
+---
+
+**In scope:**
+
+### Execution Timeline
+Provide a complete replayable timeline including:
+- Planning
+- Repository analysis
+- Workspace lifecycle
+- Tool execution
+- File modifications
+- Validation
+- Repair
+- Git operations
+- Pull Request creation
+- Human interactions
+- Policy evaluations
+
+Every execution becomes replayable from start to finish.
+
+---
+
+### Cost Intelligence
+
+Track cost per:
+
+- Organization
+- Repository
+- User
+- Task
+- Workspace
+- Execution
+- Model
+- Planner
+- Tool
+- Pull Request
+
+Cost breakdown includes:
+
+- Prompt tokens
+- Completion tokens
+- Embedding tokens
+- LLM pricing
+- Embedding pricing
+- Compute time
+- Workspace lifetime
+- Build duration
+- Test duration
+- Storage consumption
+- Network usage (future)
+- Infrastructure overhead
+
+Provide estimated and actual execution cost.
+
+---
+
+### Complete Audit Trail
+
+Persist every:
+
+- User action
+- AI decision
+- Tool invocation
+- Workspace event
+- Approval
+- Rejection
+- Manual override
+- Pause
+- Resume
+- Abort
+- Policy evaluation
+- Git operation
+- Pull Request creation
+
+Every event is timestamped, correlated, and attributable.
+
+---
+
+### Distributed Tracing
+
+End-to-end trace propagation across:
+
+Frontend
+
+↓
+
+Go Backend
+
+↓
+
+Background Workers
+
+↓
+
+Workspace
+
+↓
+
+Python Agent
+
+↓
+
+LLM Provider
+
+↓
+
+Embedding Provider
+
+↓
+
+GitHub
+
+Every request shares the same Trace ID.
+
+Support:
+
+- Parent spans
+- Child spans
+- Cross-service latency
+- Bottleneck analysis
+
+---
+
+### AI Reasoning Observability
+
+Capture structured reasoning metadata including:
+
+- Planner selected
+- Retrieved context size
+- Retrieved files
+- Model used
+- Tool selection
+- Execution duration
+- Confidence signals
+- Retry count
+- Repair attempts
+- Validation outcomes
+
+Never expose hidden chain-of-thought.
+
+Only structured execution metadata is persisted.
+
+---
+
+### Usage Analytics
+
+Organization dashboards showing:
+
+- Tasks executed
+- Success rate
+- Failure rate
+- Average execution time
+- Average repair attempts
+- Workspace utilization
+- Token consumption
+- Cost trends
+- Repository activity
+- Most active users
+- AI productivity metrics
+
+---
+
+### Workspace Analytics
+
+Track:
+
+- Workspace lifetime
+- Command count
+- Files modified
+- Files created
+- Files deleted
+- Validation executions
+- Repair loops
+- CPU usage
+- Memory usage
+- Peak resource utilization
+
+---
+
+### AI Performance Analytics
+
+Track:
+
+- Model latency
+- Planner latency
+- Retrieval latency
+- Tool latency
+- Build duration
+- Test duration
+- Repair success rate
+- PR success rate
+
+Compare different models over time.
+
+---
+
+### Replay & Debugging
+
+Support:
+
+- Replay any historical execution
+- Replay reasoning events
+- Replay workspace lifecycle
+- Replay terminal output
+- Replay Browser Workspace activity
+- Replay AI execution timeline
+
+Enable deterministic debugging of previous executions.
+
+---
+
+### Alerts & Anomaly Detection
+
+Generate alerts for:
+
+- Cost spikes
+- Excessive repair loops
+- Long-running executions
+- Workspace leaks
+- Tool failures
+- LLM failures
+- GitHub failures
+- Build failures
+- Test failures
+- Policy violations
+- Quota exhaustion
+
+---
+
+### Quotas & Budget Management
+
+Support configurable limits for:
+
+- Daily token budget
+- Monthly spending
+- Workspace hours
+- Concurrent executions
+- LLM usage
+- Repository executions
+- Organization budgets
+
+Automatic actions:
+
+- Warn
+- Pause execution
+- Require approval
+- Reject execution
+
+---
+
+### Enterprise Reporting
+
+Generate reports including:
+
+- Cost reports
+- Usage reports
+- Engineering productivity
+- AI efficiency
+- Repository health
+- Execution statistics
+- Compliance reports
+- Audit exports
+
+---
+
+**Out of scope:**
+
+- New planning capabilities
+- New execution capabilities
+- New repair capabilities
+- New Browser Workspace functionality
+
+This phase exposes, correlates, analyzes, and visualizes data generated by previous phases.
+
+---
+
+**Backend (Go):**
+
+Owns the complete observability platform.
+
+Responsibilities include:
+
+- Cost aggregation
+- Trace correlation
+- Event aggregation
+- Audit persistence
+- Metrics collection
+- Dashboard APIs
+- Usage analytics
+- Budget enforcement
+- Alert generation
+- Report generation
+- Replay APIs
+- Quota enforcement
+- Organization analytics
+- Workspace analytics
+- Distributed trace management
+
+The Backend becomes the operational control center of Forge Engine.
+
+---
+
+**Agent (Python):**
+
+Responsible only for emitting structured telemetry.
+
+Responsibilities include:
+
+- Report token usage
+- Report model usage
+- Report execution latency
+- Report retrieval statistics
+- Report planner metadata
+- Report repair metadata
+- Report tool usage
+- Report reasoning metadata
+- Propagate Trace IDs
+- Emit structured execution events
+
+The Agent never computes costs or quotas.
+It only reports structured telemetry.
+
+---
+
+**Definition of Done:**
+
+- Every execution is fully traceable from frontend to completion.
+- Every AI decision, tool invocation, and user action is correlated by Trace ID.
+- Every task has a complete cost breakdown.
+- Organizations have real-time usage and cost dashboards.
+- Historical executions can be replayed for debugging and audits.
+- Budgets and quotas are enforced automatically.
+- Anomalies trigger proactive alerts before becoming operational or billing issues.
+- Enterprise administrators have complete visibility into AI activity, infrastructure utilization, and organizational usage.
+
+---
+
+### Phase 14 — Enterprise Scale, Multi-Tenant Infrastructure & Platform Hardening
+
+**Objective:** Transform Forge Engine from a feature-complete AI engineering platform into a globally scalable, highly available, enterprise-grade SaaS capable of serving thousands of organizations and millions of autonomous engineering tasks simultaneously while guaranteeing fairness, isolation, reliability, and operational stability.
+
+This phase focuses exclusively on platform scalability, resilience, and operational excellence.
+
+---
+
+## In scope
+
+### Multi-Tenant Isolation
+
+Every organization becomes an isolated tenant.
+
+Isolation includes:
+
+- Workspace isolation
+- Repository isolation
+- Storage isolation
+- Event isolation
+- Cost isolation
+- Queue isolation
+- Cache isolation
+- Rate limits
+- Quotas
+- Security boundaries
+
+No tenant can impact another tenant.
+
+---
+
+### Intelligent Job Scheduling
+
+Instead of FIFO scheduling:
+
+Implement priority-aware scheduling.
+
+Support:
+
+- Organization quotas
+- Priority queues
+- Fair scheduling
+- Premium tiers
+- Starvation prevention
+- Execution preemption (future-ready)
+
+Example:
+
+Enterprise customers never wait behind thousands of free-tier jobs.
+
+---
+
+### Horizontal Scaling
+
+Support independent scaling of:
+
+Frontend
+
+Go Backend
+
+Python Agent
+
+Workspace Executors
+
+Background Workers
+
+WebSocket Gateway
+
+Redis
+
+PostgreSQL
+
+Vector Database
+
+Each service scales independently.
+
+---
+
+### Workspace Pooling
+
+Instead of always creating:
+
+Workspace
+
+↓
+
+Run
+
+↓
+
+Destroy
+
+Support:
+
+- Warm workspace pools
+- Image pre-pulling
+- Container reuse (policy-controlled)
+- Fast provisioning
+- Parallel workspace allocation
+
+Cold-start latency drops significantly.
+
+---
+
+### Distributed Event Infrastructure
+
+Scale WebSockets using:
+
+Redis Pub/Sub
+
+↓
+
+Multiple Backend Nodes
+
+↓
+
+Thousands of Browser Clients
+
+Support:
+
+- Sticky sessions
+- Distributed event broadcasting
+- Event routing
+- Load-balanced streaming
+
+---
+
+### Database Scaling
+
+Support:
+
+- Read replicas
+- Connection pooling
+- Partitioning
+- Archiving
+- Online migrations
+- Query optimization
+- Automatic vacuum tuning
+- Large execution history management
+
+Partition large tables such as:
+
+- execution_logs
+- qa_messages
+- code_chunks
+- audit_events
+- cost_events
+
+---
+
+### Distributed Caching
+
+Introduce:
+
+Redis Cluster
+
+for:
+
+- Sessions
+- Rate limiting
+- Repository metadata
+- Workspace metadata
+- Planner cache
+- Retrieval cache
+- GitHub metadata
+
+---
+
+### AI Provider Resilience
+
+Support:
+
+- Multiple LLM providers
+- Automatic failover
+- Load balancing
+- Rate-limit handling
+- Provider health monitoring
+- Regional routing
+- Cost-aware model routing
+
+Example:
+
+OpenAI rate limited
+
+↓
+
+Automatically switch
+
+↓
+
+Gemini
+
+↓
+
+Continue execution
+
+---
+
+### Workspace Infrastructure
+
+Support:
+
+- Multiple workspace hosts
+- Distributed workspace scheduling
+- Workspace health monitoring
+- Automatic cleanup
+- Failed workspace recovery
+- Resource balancing
+
+Future-ready for:
+
+Docker
+
+↓
+
+Firecracker
+
+↓
+
+Kubernetes
+
+↓
+
+Cloud VMs
+
+without changing higher layers.
+
+---
+
+### High Availability
+
+Support:
+
+- Backend failover
+- Agent failover
+- Redis failover
+- Database failover
+- Workspace recovery
+
+Long-running executions survive infrastructure failures whenever possible.
+
+---
+
+### Load Testing
+
+Validate:
+
+- Thousands of concurrent workspaces
+- Thousands of active WebSockets
+- Thousands of GitHub API requests
+- Thousands of LLM requests
+- Large repository indexing
+- Long-running executions
+
+Measure:
+
+- Latency
+- Throughput
+- Recovery time
+- Failure rates
+
+---
+
+### Operations Dashboard
+
+Provide infrastructure visibility for operators:
+
+- Active workspaces
+- Queue depth
+- Agent utilization
+- CPU
+- Memory
+- Token throughput
+- Active organizations
+- Build success rate
+- Test success rate
+- Event throughput
+- Cost per hour
+
+---
+
+## Out of scope
+
+- New planning capabilities
+- New coding capabilities
+- New Browser Workspace functionality
+- New Git features
+
+This phase focuses exclusively on platform scalability, reliability, and operational maturity.
+
+---
+
+## Backend (Go)
+
+Owns platform orchestration.
+
+Responsibilities include:
+
+- Fair job scheduling
+- Workspace scheduling
+- Tenant isolation
+- Distributed event routing
+- Horizontal scaling
+- Queue management
+- Distributed locking
+- Cache coordination
+- Database optimization
+- Infrastructure monitoring
+- Rate limiting
+- Quota enforcement
+- High availability
+
+---
+
+## Agent (Python)
+
+Responsible for scalable reasoning infrastructure.
+
+Responsibilities include:
+
+- Horizontal scaling
+- Worker auto-registration
+- Distributed task execution
+- Provider failover
+- Model routing
+- Rate-limit handling
+- Retry policies
+- Health reporting
+
+The Agent remains stateless and horizontally scalable.
+
+---
+
+## Definition of Done
+
+- Thousands of organizations can execute tasks simultaneously.
+- Resource allocation remains fair across tenants.
+- Infrastructure components scale independently.
+- Long-running executions remain reliable during node failures.
+- Workspace provisioning remains fast under heavy load.
+- WebSocket streaming supports thousands of concurrent clients.
+- Database performance remains stable for very large execution histories.
+- AI provider outages are handled gracefully through automatic failover.
+- No single tenant can degrade another tenant's performance.
+- Forge Engine operates as a production-grade, enterprise SaaS platform.
 ---
 
 ## 8. Conventions

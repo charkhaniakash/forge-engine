@@ -60,6 +60,17 @@ func (r *WorkItemRepository) GetByID(ctx context.Context, id, orgID string) (*mo
 	return scanWorkItem(row)
 }
 
+// TransitionToExecuting moves a work item from plan_approved → executing.
+// Called by ExecutionHandlers when the orchestrator goroutine starts.
+func (r *WorkItemRepository) TransitionToExecuting(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items
+		SET status = $2, updated_at = NOW()
+		WHERE id = $1 AND status = $3
+	`, id, models.WorkItemStatusExecuting, models.WorkItemStatusPlanApproved)
+	return err
+}
+
 // GetByIDInternal returns a work item by UUID without org scoping.
 // Only used by internal goroutines (e.g. the planning background goroutine).
 // Never expose this to HTTP handlers.

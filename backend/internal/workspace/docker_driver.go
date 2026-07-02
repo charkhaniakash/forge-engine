@@ -1,11 +1,13 @@
 package workspace
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -34,6 +36,19 @@ const (
 //   - Non-root execution: User = "forge" (uid 1000)
 //   - Resource limits: CPU, memory, PIDs from WorkspaceConfig
 //   - Read-only root filesystem + writable /workspace and /tmp via tmpfs
+//
+// File I/O implementation note (Phase 7 → Phase 9 upgrade path):
+//   ReadFile and WriteFile currently use docker cp (CopyFromContainer /
+//   CopyToContainer). This is correct for Phase 7 where each step performs
+//   O(10) file operations. For Phase 9 autonomous repair loops that may
+//   perform O(100+) operations, upgrade to a bind mount:
+//
+//   Provision: add HostConfig.Binds = ["/tmp/forge-ws/{id}:/workspace"]
+//   ReadFile:  os.ReadFile("/tmp/forge-ws/{id}/" + path)
+//   WriteFile: os.WriteFile("/tmp/forge-ws/{id}/" + path, data, 0644)
+//
+//   This replaces ~2-5ms/op socket overhead with single-syscall latency.
+//   The SandboxDriver interface and all callers above this layer are unchanged.
 type DockerSandboxDriver struct {
 	client *client.Client
 	logger *zap.SugaredLogger
@@ -372,22 +387,75 @@ func (d *DockerSandboxDriver) Status(ctx context.Context, containerID string) (C
 	return status, nil
 }
 
-// ReadFile reads a file from inside the container.
-// Phase 6: not implemented. Phase 7 will implement via docker cp.
-func (d *DockerSandboxDriver) ReadFile(_ context.Context, _ string, _ string) ([]byte, error) {
-	return nil, ErrNotImplemented
+// ReadFile reads a file from inside the container using docker cp.
+// Returns the raw file bytes.
+func (d *DockerSandboxDriver) ReadFile(ctx context.Context, containerID string, path string) ([]byte, error) {
+	reader, _, err := d.client.CopyFromContainer(ctx, containerID, path)
+	if err != nil {
+		return nil, fmt.Errorf("docker cp read %s: %w", path, err)
+	}
+	defer reader.Close()
+
+	tr := tar.NewReader(reader)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar read: %w", err)
+		}
+		if hdr.Typeflag == tar.TypeReg {
+			return io.ReadAll(tr)
+		}
+	}
+	return nil, fmt.Errorf("file not found in tar: %s", path)
 }
 
-// WriteFile writes data to a path inside the container.
-// Phase 6: not implemented. Phase 7 will implement via docker cp.
-func (d *DockerSandboxDriver) WriteFile(_ context.Context, _ string, _ string, _ []byte) error {
-	return ErrNotImplemented
+// WriteFile writes data to a path inside the container via docker cp.
+func (d *DockerSandboxDriver) WriteFile(ctx context.Context, containerID string, path string, data []byte) error {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Name:     filepath.Base(path),
+		Mode:     0o644,
+		Size:     int64(len(data)),
+		Typeflag: tar.TypeReg,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("tar header: %w", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		return fmt.Errorf("tar write: %w", err)
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("tar close: %w", err)
+	}
+	destDir := filepath.Dir(path)
+	return d.client.CopyToContainer(ctx, containerID, destDir, &buf,
+		types.CopyToContainerOptions{AllowOverwriteDirWithFile: false})
 }
 
-// CopyFile copies a file inside the container.
-// Phase 6: not implemented. Phase 7 will implement via docker exec cp.
-func (d *DockerSandboxDriver) CopyFile(_ context.Context, _ string, _, _ string) error {
-	return ErrNotImplemented
+// CopyFile copies a file from src to dst inside the container via docker exec.
+func (d *DockerSandboxDriver) CopyFile(ctx context.Context, containerID string, src, dst string) error {
+	ch, err := d.Execute(ctx, containerID, ExecRequest{
+		Command:        []string{"cp", "--", src, dst},
+		TimeoutSeconds: 30,
+		User:           "root", // cp between paths may need root
+	})
+	if err != nil {
+		return fmt.Errorf("copy %s → %s: %w", src, dst, err)
+	}
+	exitCode := 0
+	for event := range ch {
+		if event.Type == "exit" && event.ExitCode != nil {
+			exitCode = *event.ExitCode
+		}
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("cp exited with code %d", exitCode)
+	}
+	return nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

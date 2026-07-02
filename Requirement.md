@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 7 — Code Modification Execution**
+> ### 🔵 ACTIVE PHASE: **Phase 8 — Intelligent Build & Validation Pipeline**
 >
-> Only work within this phase's scope (see Phase 7 below) until the human moves
+> Only work within this phase's scope (see Phase 8 below) until the human moves
 > this marker forward.
 
 *(Update this section only when the human says a phase is complete and to move
@@ -153,7 +153,34 @@ on. Do not move it yourself.)*
 - Frontend: recovery banner shown when sync returns 404
 - ADR 0003: defer LangGraph adoption documented
 
-### ✅ Phase 6 — Secure Execution Sandbox
+### ✅ Phase 7 — Code Modification Execution
+- Database: task_executions, step_executions, execution_events, code_diffs, execution_checkpoints (migration 010)
+- Go: ExecutionOrchestrator — single-step loop, Go decides every "next step", topological sort with depends_on
+- Go: AgentExecClient — POST /v1/agent/execute-step streaming NDJSON reader
+- Go: ExecutionPolicy — capability set for Phase 7 (read/write/create/delete/rename/list/search, no shell, no git)
+- Go: Tool dispatch — POST /v1/internal/workspaces/:id/tool + idempotent tool_call_id via ON CONFLICT
+- Go: Diff engine — Go computes unified diffs from before/after file content; agent never sees diffs
+- Go: DockerDriver — ReadFile/WriteFile/CopyFile implemented via docker cp + tar
+- Go: WorkspaceManager — ReadFile/WriteFile/CreateFile/DeleteFile/RenameFile/ListDir/SearchSymbol
+- Go: ExecutionHandlers — StartExecution, GetExecution, GetExecutionEvents, GetExecutionDiffs, CancelExecution, StreamWS
+- Go: ExecutionRepository — full CRUD for all 5 tables + UpdateExecutionContext + idempotent GetEventByToolCallID
+- Go: WorkItemRepository — TransitionToExecuting added
+- Go: RequireInternalAuth middleware — reused for /tool endpoint
+- Agent: ExecutionGraph (LangGraph) — single-step scope; never holds full plan; Go owns step sequencing
+- Agent: ExecutionState — ctx + current_step + retrieved_context + tool_history + reasoning + deviation + complete
+- Agent: Nodes — gather_context, reason, call_tool, receive_result, check_deviation, complete_step
+- Agent: ToolClient — calls Go /tool via HTTP; Go validates, executes, persists
+- Agent: ExecutionPipeline — async generator streaming NDJSON events per node
+- Agent: POST /v1/agent/execute-step — streaming NDJSON router
+- Go control queue: cancel checked between steps; pause hook point for Phase 12
+- Execution checkpoints: persisted after every step_complete with modified/created/deleted file lists
+- Idempotency: tool_call_id UUID on every tool call; duplicate → cached result returned immediately
+- ExecutionContext: task_execution_id, workspace_id, step_id, plan_version, trace_id, org_id, user_id, model, temperature, max_tokens, execution_mode, autonomy_level
+- Boundary enforced: agent has no Docker access, no subprocess, no filesystem — all operations via /tool
+- Frontend: ExecutionPanel — step timeline, live event log, diff viewer (syntax-highlighted, per-file expand), deviation badges
+- Frontend: wired into TaskPanel for plan_approved/executing/done/failed tasks
+
+---
 - Database: workspaces table — driver, container_id (opaque), resource limits, full lifecycle status machine
 - Database: execution_logs table — unified event log for lifecycle events AND commands, with seq ordering
 - Migration 009: workspaces + execution_logs with correct indexes

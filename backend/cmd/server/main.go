@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/db"
+	"github.com/charkhaniakash/forge-engine/backend/internal/execution"
 	"github.com/charkhaniakash/forge-engine/backend/internal/github"
 	"github.com/charkhaniakash/forge-engine/backend/internal/handlers"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
@@ -75,6 +76,7 @@ func main() {
 	qaRepo := repository.NewQARepository(dbConn)
 	workItemRepo := repository.NewWorkItemRepository(dbConn)
 	wsRepo := repository.NewWorkspaceRepository(dbConn)
+	execRepo := repository.NewExecutionRepository(dbConn)
 
 	// ── Auth handlers ─────────────────────────────────────────────────────────
 	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -90,6 +92,7 @@ func main() {
 	var qaHandlers *handlers.QAHandlers
 	var taskHandlers *handlers.TaskHandlers
 	var workspaceHandlers *handlers.WorkspaceHandlers
+	var executionHandlers *handlers.ExecutionHandlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -221,7 +224,21 @@ func main() {
 					wsManager, wsRepo, workItemRepo,
 					githubRepoRepo, githubInstallationRepo, ingestionJobRepo, sugar)
 
-				sugar.Info("workspace execution sandbox initialised")
+				// ── Execution engine (Phase 7) ────────────────────────────────
+				agentExecClient := execution.NewAgentExecClient(agentURL, jwtSecret)
+				orchestrator := execution.NewExecutionOrchestrator(
+					execRepo, wsRepo, wsManager,
+					agentExecClient,
+					nil, // publisher wired by NewExecutionHandlers
+					jwtSecret, sugar,
+				)
+				executionHandlers = handlers.NewExecutionHandlers(
+					execRepo, workItemRepo, wsRepo,
+					githubRepoRepo, orchestrator, wsManager,
+					jwtSecret, sugar,
+				)
+
+				sugar.Info("workspace execution sandbox and execution engine initialised")
 			}
 
 			sugar.Info("GitHub integration and ingestion worker initialised")
@@ -327,11 +344,33 @@ func main() {
 		app.Get("/v1/repos/:repoID/tasks/:taskID/workspace/logs",
 			middleware.RequireAuth(sugar), workspaceHandlers.GetWorkspaceLogs)
 
-		// Phase 6 — Internal execution endpoint (called by Phase 7 agent routing)
-		// Protected by internal JWT — not accessible from the internet.
+		// Phase 6 — Internal command execution (called by Phase 7 agent routing)
 		app.Post("/v1/internal/workspaces/:workspaceID/exec",
 			middleware.RequireInternalAuth(jwtSecret, sugar),
 			workspaceHandlers.InternalExec)
+	}
+
+	if executionHandlers != nil {
+		// Phase 7 — Task execution lifecycle
+		app.Post("/v1/repos/:repoID/tasks/:taskID/execute",
+			middleware.RequireAuth(sugar), executionHandlers.StartExecution)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution",
+			middleware.RequireAuth(sugar), executionHandlers.GetExecution)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution/events",
+			middleware.RequireAuth(sugar), executionHandlers.GetExecutionEvents)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution/diffs",
+			middleware.RequireAuth(sugar), executionHandlers.GetExecutionDiffs)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/execution/cancel",
+			middleware.RequireAuth(sugar), executionHandlers.CancelExecution)
+		// WebSocket — live execution events
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution/stream",
+			executionHandlers.StreamUpgrade,
+			websocket.New(executionHandlers.StreamWS),
+		)
+		// Phase 7 — Internal tool dispatch (called by agent via internal JWT)
+		app.Post("/v1/internal/workspaces/:workspaceID/tool",
+			middleware.RequireInternalAuth(jwtSecret, sugar),
+			executionHandlers.ToolDispatch)
 	}
 
 	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────

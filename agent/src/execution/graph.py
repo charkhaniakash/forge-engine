@@ -1,0 +1,82 @@
+"""
+ExecutionGraph: LangGraph StateGraph scoped to ONE plan step.
+
+The graph never holds the full plan or remaining steps.
+Go calls this once per step, waits for it to complete, then decides
+what to do next (advance, retry, pause, skip).
+
+Node flow:
+  START
+    → gather_context
+    → reason
+    → [call_tool → receive_result → reason]  (loop)
+    → [check_deviation | complete_step]
+    → END
+
+The graph streams NDJSON events via the pipeline's async generator —
+each node yields events before returning so Go gets real-time feedback.
+"""
+from __future__ import annotations
+
+from langgraph.graph import StateGraph, END
+
+from src.execution.models import ExecutionState
+from src.execution.nodes import (
+    node_gather_context,
+    node_reason,
+    node_call_tool,
+    node_receive_result,
+    node_check_deviation,
+    node_complete_step,
+    route_after_reason,
+    route_after_result,
+)
+
+
+def build_execution_graph() -> StateGraph:
+    """Build and compile the single-step execution graph."""
+    graph = StateGraph(ExecutionState)
+
+    # Register nodes.
+    graph.add_node("gather_context", node_gather_context)
+    graph.add_node("reason",         node_reason)
+    graph.add_node("call_tool",      node_call_tool)
+    graph.add_node("receive_result", node_receive_result)
+    graph.add_node("check_deviation",node_check_deviation)
+    graph.add_node("complete_step",  node_complete_step)
+
+    # Entry point.
+    graph.set_entry_point("gather_context")
+
+    # Static edges.
+    graph.add_edge("gather_context", "reason")
+    graph.add_edge("call_tool",      "receive_result")
+
+    # Conditional edges.
+    graph.add_conditional_edges(
+        "reason",
+        route_after_reason,
+        {
+            "call_tool":       "call_tool",
+            "check_deviation": "check_deviation",
+            "complete_step":   "complete_step",
+        },
+    )
+    graph.add_conditional_edges(
+        "receive_result",
+        route_after_result,
+        {
+            "reason":        "reason",
+            "complete_step": "complete_step",
+        },
+    )
+
+    # Terminal nodes.
+    graph.add_edge("check_deviation", END)
+    graph.add_edge("complete_step",   END)
+
+    return graph.compile()
+
+
+# Module-level compiled graph — one instance, stateless between invocations.
+execution_graph = build_execution_graph()

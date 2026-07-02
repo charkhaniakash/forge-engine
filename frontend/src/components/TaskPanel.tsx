@@ -9,6 +9,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { WorkspaceStatus } from './WorkspaceStatus'
+import { ExecutionPanel } from './ExecutionPanel'
 
 const API = 'http://localhost:8080'
 
@@ -290,6 +291,22 @@ export function TaskPanel({ repoID, repoName, token }: TaskPanelProps) {
                   repoID={repoID}
                   taskID={activeTask.id}
                   token={token}
+                  approvalStatus={activeTask.approval_status}
+                />
+              )}
+
+              {/* Phase 7 — Execution panel (shown once workspace is ready or task is executing) */}
+              {activeTask && (
+                activeTask.status === 'plan_approved' ||
+                activeTask.status === 'executing' ||
+                activeTask.status === 'done' ||
+                activeTask.status === 'failed'
+              ) && (
+                <ExecutionPanel
+                  repoID={repoID}
+                  taskID={activeTask.id}
+                  token={token}
+                  taskStatus={activeTask.status}
                   approvalStatus={activeTask.approval_status}
                 />
               )}

@@ -8,6 +8,7 @@ from src.auth import extract_token_from_header, verify_token
 from src.ingestion.router import router as ingestion_router
 from src.qa.router import router as qa_router
 from src.planning.router import router as planning_router
+from src.execution.router import router as execution_router
 
 # Configure structlog — structured JSON, ISO timestamps, trace ID on every line.
 structlog.configure(
@@ -91,6 +92,10 @@ app.include_router(qa_router)
 # ── Phase 5 — Planning ────────────────────────────────────────────────────────
 # POST /v1/agent/plan  (streaming NDJSON — see planning/router.py)
 app.include_router(planning_router)
+
+# ── Phase 7 — Code Modification Execution ────────────────────────────────────
+# POST /v1/agent/execute-step  (streaming NDJSON — see execution/router.py)
+app.include_router(execution_router)
 
 
 if __name__ == "__main__":

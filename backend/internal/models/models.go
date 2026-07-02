@@ -270,6 +270,105 @@ const (
 	LifecycleEventFailed          = "workspace_failed"
 )
 
+// ── Phase 7 — Execution models ────────────────────────────────────────────────
+
+// ExecutionContext carries all identity and configuration for one execution.
+// Go resolves and injects this at execution start; the agent receives it
+// in every step request and must never override it.
+type ExecutionContext struct {
+	TaskExecutionID  string `json:"task_execution_id"`
+	StepExecutionID  string `json:"step_execution_id,omitempty"` // current step execution ID
+	WorkspaceID      string `json:"workspace_id"`
+	StepID           string `json:"step_id,omitempty"` // current step stable_id
+	PlanVersion      int    `json:"plan_version"`
+	TraceID          string `json:"trace_id"`
+	OrgID            string `json:"org_id"`
+	UserID           string `json:"user_id"`
+	// LLM configuration — resolved from org policy at execution start.
+	Model         string  `json:"model"`
+	Temperature   float64 `json:"temperature"`
+	MaxTokens     int     `json:"max_tokens"`
+	ExecutionMode string  `json:"execution_mode"`  // "autonomous" | "supervised"
+	AutonomyLevel string  `json:"autonomy_level"`  // "full" | "step_approval" | "tool_approval"
+}
+
+// TaskExecution is one attempt to execute a work item's approved plan.
+// Go owns every status transition. The agent never writes to this table.
+type TaskExecution struct {
+	ID                   string          `json:"id"`
+	WorkItemID           string          `json:"work_item_id"`
+	WorkspaceID          string          `json:"workspace_id"`
+	PlanID               string          `json:"plan_id"`
+	Status               string          `json:"status"` // pending|running|completed|failed|cancelled|paused
+	CurrentStepStableID  *string         `json:"current_step_stable_id,omitempty"`
+	ExecutionContext      json.RawMessage `json:"execution_context"`
+	StartedAt            *time.Time      `json:"started_at,omitempty"`
+	CompletedAt          *time.Time      `json:"completed_at,omitempty"`
+	Error                *string         `json:"error,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
+	UpdatedAt            time.Time       `json:"updated_at"`
+}
+
+// StepExecution tracks the execution of one plan step.
+type StepExecution struct {
+	ID              string     `json:"id"`
+	TaskExecutionID string     `json:"task_execution_id"`
+	StepStableID    string     `json:"step_stable_id"`
+	StepOrder       int        `json:"step_order"`
+	Status          string     `json:"status"` // pending|running|completed|failed|skipped|deviated
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	Reasoning       *string    `json:"reasoning,omitempty"`
+	DeviationNote   *string    `json:"deviation_note,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+}
+
+// ExecutionEvent is one entry in the ordered event log for an execution.
+// Covers tool calls, reasoning notes, deviations, and lifecycle transitions.
+type ExecutionEvent struct {
+	ID              string          `json:"id"`
+	TaskExecutionID string          `json:"task_execution_id"`
+	StepExecutionID *string         `json:"step_execution_id,omitempty"`
+	Seq             int             `json:"seq"`
+	EventType       string          `json:"event_type"`
+	ToolName        *string         `json:"tool_name,omitempty"`
+	ToolArgs        json.RawMessage `json:"tool_args,omitempty"`
+	ToolResult      json.RawMessage `json:"tool_result,omitempty"`
+	ToolCallID      *string         `json:"tool_call_id,omitempty"` // idempotency key
+	Message         *string         `json:"message,omitempty"`
+	Success         *bool           `json:"success,omitempty"`
+	DurationMS      *int            `json:"duration_ms,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+}
+
+// CodeDiff is a structured diff computed by Go for one file modification.
+// The agent sends the new file content; Go reads the old content and diffs.
+type CodeDiff struct {
+	ID              string    `json:"id"`
+	TaskExecutionID string    `json:"task_execution_id"`
+	StepExecutionID string    `json:"step_execution_id"`
+	FilePath        string    `json:"file_path"`
+	Operation       string    `json:"operation"` // modify|create|delete|rename
+	OldPath         *string   `json:"old_path,omitempty"`
+	DiffUnified     *string   `json:"diff_unified,omitempty"`
+	LinesAdded      int       `json:"lines_added"`
+	LinesRemoved    int       `json:"lines_removed"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// ExecutionCheckpoint is persisted after every completed step.
+// Phase 12 reads the latest checkpoint to resume from the correct position.
+type ExecutionCheckpoint struct {
+	ID              string    `json:"id"`
+	TaskExecutionID string    `json:"task_execution_id"`
+	StepStableID    string    `json:"step_stable_id"`
+	StepOrder       int       `json:"step_order"`
+	ModifiedFiles   []string  `json:"modified_files"`
+	CreatedFiles    []string  `json:"created_files"`
+	DeletedFiles    []string  `json:"deleted_files"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
 // IngestionJob represents one attempt to index a repository at a specific commit SHA.
 // The (repo_id, commit_sha) pair is the logical snapshot key.
 // Retrieval (Phase 4+) must only read code_chunks where the associated job has

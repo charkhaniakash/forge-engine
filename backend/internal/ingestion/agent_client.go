@@ -139,3 +139,11 @@ const contextKeyTraceID contextKey = "trace_id"
 func WithTraceID(ctx context.Context, traceID string) context.Context {
 	return context.WithValue(ctx, contextKeyTraceID, traceID)
 }
+
+// GetTraceID retrieves the trace ID from a context, returning "" if absent.
+func GetTraceID(ctx context.Context) string {
+	if v := ctx.Value(contextKeyTraceID); v != nil {
+		return fmt.Sprintf("%v", v)
+	}
+	return ""
+}

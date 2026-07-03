@@ -200,11 +200,27 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 			return
 		}
 		if stepDeviation != "" {
-			_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
-			o.publishLifecycle(execID, "deviation",
-				fmt.Sprintf("Step %s deviated: %s", stableID, stepDeviation))
-			// Deviation is not fatal — continue with remaining steps.
-			// Phase 12 can add a gate here to pause for human review.
+			// Classify the deviation type for the step record.
+			if strings.HasPrefix(stepDeviation, "execution_error:") {
+				_ = o.execRepo.MarkStepFailed(ctx, stepExec.ID,
+					strings.TrimPrefix(stepDeviation, "execution_error: "))
+				// execution_error is a retryable infrastructure failure — not fatal
+				// to the overall execution in Phase 7. Log and continue.
+				o.publishLifecycle(execID, "execution_error",
+					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
+			} else if strings.HasPrefix(stepDeviation, "requires_human:") {
+				_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
+				o.publishLifecycle(execID, "requires_human",
+					fmt.Sprintf("Step %s requires human input: %s",
+						stableID, strings.TrimPrefix(stepDeviation, "requires_human: ")))
+			} else {
+				// plan_deviation (including legacy deviation events)
+				_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
+				o.publishLifecycle(execID, "plan_deviation",
+					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
+				// Plan deviation is not fatal — continue with remaining steps.
+				// Phase 9 adds replanning when a deviation is detected.
+			}
 		} else {
 			_ = o.execRepo.MarkStepCompleted(ctx, stepExec.ID, stepReasoning)
 		}
@@ -271,10 +287,27 @@ func (o *ExecutionOrchestrator) handleStepEvent(
 		// Track file artifacts from write/create/delete/rename results.
 		o.trackArtifact(event, modified, created, deleted)
 
-	case "deviation":
+	case "deviation", "plan_deviation":
+		// "deviation" is the legacy event type; "plan_deviation" is the typed form.
+		// Both set the deviation field. Go surfaces this to the user and may
+		// trigger replanning in Phase 9.
 		*deviation = event.Message
 		_, _ = o.execRepo.AppendEvent(ctx, execID, stepExecIDPtr,
-			"deviation", nil, nil, nil, nil, msgPtr, nil, nil)
+			"plan_deviation", nil, nil, nil, nil, msgPtr, nil, nil)
+
+	case "requires_human":
+		// The step needs human input — block execution here.
+		// Phase 12 will add the actual gate; for now surface it as a deviation.
+		*deviation = "requires_human: " + event.Message
+		_, _ = o.execRepo.AppendEvent(ctx, execID, stepExecIDPtr,
+			"requires_human", nil, nil, nil, nil, msgPtr, nil, nil)
+
+	case "execution_error":
+		// Technical failure inside the agent — different from plan mismatch.
+		// Surfaced as a step failure so Go can retry or escalate.
+		*deviation = "execution_error: " + event.Message
+		_, _ = o.execRepo.AppendEvent(ctx, execID, stepExecIDPtr,
+			"execution_error", nil, nil, nil, nil, msgPtr, nil, nil)
 
 	case "step_complete":
 		if event.Summary != "" {

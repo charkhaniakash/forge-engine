@@ -83,7 +83,9 @@ class ExecutionPipeline:
                         yield ev
 
             if final_state.get("deviation"):
-                yield _event("deviation", message=final_state["deviation"])
+                # Emit the typed terminal event from the final state.
+                dev_type = final_state.get("deviation_type") or "plan_deviation"
+                yield _event(dev_type, message=final_state["deviation"])
 
             summary = _extract_summary(final_state)
             yield _event("step_complete", summary=summary)
@@ -159,9 +161,17 @@ def _emit_node_events(
             ))
 
     elif node_name == "check_deviation":
+        # Legacy catch-all → emit as plan_deviation (safest default).
         msg = update.get("deviation") or ""
         if msg:
-            events.append(event_fn("deviation", message=msg))
+            events.append(event_fn("plan_deviation", message=msg))
+
+    elif node_name in ("plan_deviation", "requires_human", "execution_error"):
+        # Typed terminal nodes — emit the specific event so Go and the
+        # frontend receive the correct semantic category.
+        msg = update.get("deviation") or ""
+        if msg:
+            events.append(event_fn(node_name, message=msg))
 
     return events
 

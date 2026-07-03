@@ -27,6 +27,9 @@ from src.execution.nodes import (
     node_call_tool,
     node_receive_result,
     node_check_deviation,
+    node_plan_deviation,
+    node_requires_human,
+    node_execution_error,
     node_complete_step,
     route_after_reason,
     route_after_result,
@@ -38,12 +41,15 @@ def build_execution_graph() -> StateGraph:
     graph = StateGraph(ExecutionState)
 
     # Register nodes.
-    graph.add_node("gather_context", node_gather_context)
-    graph.add_node("reason",         node_reason)
-    graph.add_node("call_tool",      node_call_tool)
-    graph.add_node("receive_result", node_receive_result)
-    graph.add_node("check_deviation",node_check_deviation)
-    graph.add_node("complete_step",  node_complete_step)
+    graph.add_node("gather_context",  node_gather_context)
+    graph.add_node("reason",          node_reason)
+    graph.add_node("call_tool",       node_call_tool)
+    graph.add_node("receive_result",  node_receive_result)
+    graph.add_node("plan_deviation",  node_plan_deviation)
+    graph.add_node("requires_human",  node_requires_human)
+    graph.add_node("execution_error", node_execution_error)
+    graph.add_node("check_deviation", node_check_deviation)   # legacy catch-all
+    graph.add_node("complete_step",   node_complete_step)
 
     # Entry point.
     graph.set_entry_point("gather_context")
@@ -58,7 +64,10 @@ def build_execution_graph() -> StateGraph:
         route_after_reason,
         {
             "call_tool":       "call_tool",
-            "check_deviation": "check_deviation",
+            "plan_deviation":  "plan_deviation",
+            "requires_human":  "requires_human",
+            "execution_error": "execution_error",
+            "check_deviation": "check_deviation",   # legacy
             "complete_step":   "complete_step",
         },
     )
@@ -71,7 +80,10 @@ def build_execution_graph() -> StateGraph:
         },
     )
 
-    # Terminal nodes.
+    # Terminal nodes → END.
+    graph.add_edge("plan_deviation",  END)
+    graph.add_edge("requires_human",  END)
+    graph.add_edge("execution_error", END)
     graph.add_edge("check_deviation", END)
     graph.add_edge("complete_step",   END)
 

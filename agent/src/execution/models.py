@@ -86,8 +86,9 @@ class ExecutionState(TypedDict):
     latest_tool_result: ToolCallResult | None  # result from last tool call
 
     # Terminal flags
-    deviation: str | None   # set if plan assumption is wrong; not fatal
-    complete: bool           # True when the step is done
+    deviation: str | None        # message — set for any non-complete terminal outcome
+    deviation_type: str | None   # "plan_deviation" | "requires_human" | "execution_error" | None
+    complete: bool               # True when the step is done
 
     # Internal — must be declared so LangGraph preserves across node hops.
     # LangGraph drops undeclared keys on state merge; declaring here keeps token alive.

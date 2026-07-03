@@ -66,6 +66,19 @@ const STEP_COLOR: Record<string, string> = {
   skipped:   '#57606a',
 }
 
+// Map deviation_type to a display badge for the step timeline.
+function DeviationBadge({ note }: { note: string }) {
+  if (!note) return null
+  if (note.startsWith('requires_human:')) {
+    return <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '10px', background: '#0969da', color: '#fff', marginLeft: '4px' }}>👤 needs human</span>
+  }
+  if (note.startsWith('execution_error:')) {
+    return <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '10px', background: '#cf222e', color: '#fff', marginLeft: '4px' }}>🔴 error</span>
+  }
+  // plan_deviation (default)
+  return <span style={{ fontSize: '10px', padding: '1px 5px', borderRadius: '10px', background: '#bf8700', color: '#fff', marginLeft: '4px' }}>⚠️ deviation</span>
+}
+
 const LIVE_STATUSES = new Set(['pending', 'running'])
 
 export function ExecutionPanel({ repoID, taskID, token, taskStatus, approvalStatus }: ExecutionPanelProps) {
@@ -111,7 +124,7 @@ export function ExecutionPanel({ repoID, taskID, token, taskStatus, approvalStat
         const label = formatLiveEvent(ev)
         if (label) setLiveEvents(prev => [...prev.slice(-99), label])
         // Refresh on terminal events.
-        if (['step_complete', 'exec_complete', 'error', 'deviation'].includes(ev.event)) {
+        if (['step_complete', 'exec_complete', 'error', 'plan_deviation', 'requires_human', 'execution_error'].includes(ev.event)) {
           fetchExecution()
         }
       } catch (_) {}
@@ -300,13 +313,16 @@ function coloriseDiff(unified: string): React.ReactNode {
 
 function formatLiveEvent(ev: any): string {
   switch (ev.event) {
-    case 'reasoning':    return `💭 ${ev.message?.slice(0, 80) ?? ''}`
-    case 'tool_call':    return `🔧 ${ev.tool}(${JSON.stringify(ev.args ?? {}).slice(0, 60)})`
-    case 'tool_result':  return `  ${ev.success ? '✓' : '✗'} ${ev.tool}`
-    case 'deviation':    return `⚠ deviation: ${ev.message?.slice(0, 80) ?? ''}`
-    case 'step_complete':return `✅ step complete: ${ev.summary?.slice(0, 60) ?? ''}`
-    case 'exec_complete':return `🎉 execution complete`
-    case 'error':        return `❌ error: ${ev.message?.slice(0, 80) ?? ''}`
-    default:             return ''
+    case 'reasoning':       return `💭 ${ev.message?.slice(0, 80) ?? ''}`
+    case 'tool_call':       return `🔧 ${ev.tool}(${JSON.stringify(ev.args ?? {}).slice(0, 60)})`
+    case 'tool_result':     return `  ${ev.success ? '✓' : '✗'} ${ev.tool}`
+    case 'plan_deviation':  return `⚠️ Plan deviation: ${ev.message?.slice(0, 80) ?? ''}`
+    case 'requires_human':  return `👤 Needs human: ${ev.message?.slice(0, 80) ?? ''}`
+    case 'execution_error': return `🔴 Execution error: ${ev.message?.slice(0, 80) ?? ''}`
+    case 'deviation':       return `⚠️ Deviation: ${ev.message?.slice(0, 80) ?? ''}` // legacy
+    case 'step_complete':   return `✅ step complete: ${ev.summary?.slice(0, 60) ?? ''}`
+    case 'exec_complete':   return `🎉 execution complete`
+    case 'error':           return `❌ error: ${ev.message?.slice(0, 80) ?? ''}`
+    default:                return ''
   }
 }

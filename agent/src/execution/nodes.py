@@ -34,7 +34,7 @@ Your job for this step:
 1. Read the files you need to understand the current state.
 2. Reason about what minimal change is required.
 3. Write the changed files using the write_file or create_file tool.
-4. If you discover that a plan assumption is wrong, report it as a deviation.
+4. Report the correct outcome when you cannot continue.
 5. Never invent APIs, types, or behaviours not present in the codebase.
 6. Output only the complete new file content — no explanation, no markdown fences.
 
@@ -55,8 +55,21 @@ When done with a step, respond with:
 To call a tool, respond with:
   {"action": "tool", "tool": "<name>", "args": {...}, "reasoning": "why"}
 
-To report a deviation, respond with:
-  {"action": "deviation", "message": "what differs from the plan assumption"}
+Use these three distinct outcomes when you cannot complete the step:
+
+1. plan_deviation — the repository state no longer matches what the plan assumed.
+   Use ONLY when the codebase itself has changed (file missing, API renamed,
+   structure changed, etc.) and the approved plan needs to be reconsidered.
+   {"action": "plan_deviation", "message": "what the plan assumed vs. what exists now"}
+
+2. requires_human — you cannot proceed because the step needs human judgement
+   or a capability you do not have (visual verification, external systems,
+   ambiguous requirements that must be clarified).
+   {"action": "requires_human", "message": "what decision or action is needed"}
+
+3. execution_error — a technical failure prevented this step (tool failed,
+   LLM error, workspace problem). Do NOT use this for plan mismatches.
+   {"action": "execution_error", "message": "what failed and why"}
 """
 
 
@@ -210,16 +223,62 @@ async def node_receive_result(state: ExecutionState) -> dict:
     return {}
 
 
-# ── Node: check_deviation ─────────────────────────────────────────────────────
+# ── Terminal nodes ────────────────────────────────────────────────────────────
 
-async def node_check_deviation(state: ExecutionState) -> dict:
-    """Record a deviation. Not fatal — Go surfaces it to the user."""
-    action: dict = state.get("_pending_action", {}) or {}  # type: ignore[assignment]
+async def node_plan_deviation(state: ExecutionState) -> dict:
+    """Repository state differs from what the plan assumed.
+
+    Triggers replanning in Phase 9. Not an error — the plan was correct
+    when approved but the codebase has changed since.
+    """
+    action: dict = state.get("_pending_action", {}) or {}
     if not isinstance(action, dict):
         action = {}
-    msg = action.get("message", "Plan deviation detected")
-    logger.warning("plan_deviation", message=msg, step_id=state["ctx"].step_id)
-    return {"deviation": msg, "complete": True, "_pending_action": None}
+    msg = action.get("message", "Repository state differs from plan assumptions")
+    logger.warning("plan_deviation_detected",
+                   message=msg, step_id=state["ctx"].step_id)
+    return {"deviation": msg, "deviation_type": "plan_deviation",
+            "complete": True, "_pending_action": None}
+
+
+async def node_requires_human(state: ExecutionState) -> dict:
+    """The step needs human judgement or an unsupported capability.
+
+    Blocks execution until a human provides input or approval.
+    Examples: visual verification, ambiguous requirements, external systems.
+    """
+    action: dict = state.get("_pending_action", {}) or {}
+    if not isinstance(action, dict):
+        action = {}
+    msg = action.get("message", "Human input or verification required")
+    logger.info("requires_human_detected",
+                message=msg, step_id=state["ctx"].step_id)
+    return {"deviation": msg, "deviation_type": "requires_human",
+            "complete": True, "_pending_action": None}
+
+
+async def node_execution_error(state: ExecutionState) -> dict:
+    """A technical failure occurred — tool, LLM, workspace, or timeout.
+
+    Retryable infrastructure failures. Distinct from plan mismatches
+    or human-blocked situations.
+    """
+    action: dict = state.get("_pending_action", {}) or {}
+    if not isinstance(action, dict):
+        action = {}
+    msg = action.get("message", "Execution error")
+    logger.error("execution_error_detected",
+                 message=msg, step_id=state["ctx"].step_id)
+    return {"deviation": msg, "deviation_type": "execution_error",
+            "complete": True, "_pending_action": None}
+
+
+# ── Keep for backward compatibility (JSON parse failures fall here) ───────────
+async def node_check_deviation(state: ExecutionState) -> dict:
+    """Legacy catch-all for unclassified deviations (e.g. non-JSON LLM output).
+    Routes to plan_deviation semantics as the safest default.
+    """
+    return await node_plan_deviation(state)
 
 
 # ── Node: complete_step ───────────────────────────────────────────────────────
@@ -246,18 +305,26 @@ def route_after_reason(state: ExecutionState) -> str:
         logger.error("route_after_reason_invalid_state", state_type=type(state))
         return "complete_step"
 
-    action: dict = state.get("_pending_action") or {}  # type: ignore[assignment]
+    action: dict = state.get("_pending_action") or {}
     if not isinstance(action, dict):
         logger.error("route_after_reason_invalid_action", action_type=type(action))
         action = {}
 
     a = action.get("action", "")
     logger.info("route_after_reason_decision", action=a)
+
     if a == "tool":
         return "call_tool"
+    if a == "plan_deviation":
+        return "plan_deviation"
+    if a == "requires_human":
+        return "requires_human"
+    if a == "execution_error":
+        return "execution_error"
+    # Legacy "deviation" key and anything else → plan_deviation as safe default.
     if a == "deviation":
-        return "check_deviation"
-    return "complete_step"  # "complete" or anything else
+        return "plan_deviation"
+    return "complete_step"  # "complete" or unknown
 
 
 def route_after_result(state: ExecutionState) -> str:

@@ -1,0 +1,44 @@
+.root {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  background: var(--surface-1);
+  border: none;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text-primary);
+}
+.header:hover {
+  background: var(--surface-2);
+}
+.chevron {
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) var(--ease);
+  flex-shrink: 0;
+}
+.chevronOpen {
+  transform: rotate(90deg);
+}
+.title {
+  font-weight: var(--font-medium);
+  font-size: var(--text-md);
+}
+.subtitle {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+.right {
+  margin-left: auto;
+}
+.body {
+  padding: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-base);
+}

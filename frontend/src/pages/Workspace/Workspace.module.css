@@ -1,0 +1,29 @@
+.body {
+  padding: var(--space-6) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+.titleRow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.top {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) 1fr;
+  gap: var(--space-5);
+  align-items: start;
+}
+.logWrap {
+  padding: var(--space-3) var(--space-4);
+}
+.ide {
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface-inset);
+}

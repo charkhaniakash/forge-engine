@@ -1,0 +1,95 @@
+.body {
+  padding: var(--space-6) var(--space-8);
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: var(--space-5);
+  align-items: start;
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.orgRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-primary);
+}
+.orgName {
+  font-weight: var(--font-medium);
+  flex: 1;
+}
+.check {
+  color: var(--accent);
+}
+.membersCard {
+  min-height: 200px;
+}
+.members {
+  padding: var(--space-2) 0;
+}
+.pad {
+  padding: var(--space-3) var(--space-4);
+}
+.memberRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.memberRow:last-child {
+  border-bottom: none;
+}
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--surface-3);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: var(--font-semibold);
+  font-size: var(--text-md);
+  flex-shrink: 0;
+}
+.memberMain {
+  flex: 1;
+  min-width: 0;
+}
+.memberName {
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+}
+.memberEmail {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.fieldLabel {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-weight: var(--font-medium);
+  margin-bottom: var(--space-2);
+}
+.input {
+  width: 100%;
+  height: 38px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--text-md);
+  outline: none;
+}
+.input:focus {
+  border-color: var(--accent-border);
+}
+.inviteForm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}

@@ -1,0 +1,52 @@
+.wrap {
+  width: 100%;
+}
+.label {
+  display: flex;
+  justify-content: space-between;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin-bottom: var(--space-1);
+}
+.track {
+  background: var(--surface-2);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  width: 100%;
+}
+.fill {
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width var(--duration-normal) var(--ease);
+}
+.accent {
+  background: var(--accent);
+}
+.success {
+  background: var(--success);
+}
+.warning {
+  background: var(--warning);
+}
+.danger {
+  background: var(--danger);
+}
+.info {
+  background: var(--info);
+}
+.neutral {
+  background: var(--neutral);
+}
+
+.indeterminate {
+  width: 40%;
+  animation: forge-indeterminate 1.2s ease infinite;
+}
+@keyframes forge-indeterminate {
+  0% {
+    margin-left: -40%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}

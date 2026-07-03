@@ -1,0 +1,164 @@
+.topnav {
+  height: var(--topnav-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: 0 var(--space-4);
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.left,
+.right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+.search {
+  width: 100%;
+  max-width: 440px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  font-weight: var(--font-semibold);
+}
+.logo {
+  color: var(--accent);
+  font-size: 18px;
+}
+.brandName {
+  font-size: var(--text-lg);
+  color: var(--text-primary);
+}
+.divider {
+  width: 1px;
+  height: 20px;
+  background: var(--border-default);
+  margin: 0 var(--space-1);
+}
+.orgSwitcher {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: var(--text-md);
+}
+.orgSwitcher:hover {
+  background: var(--surface-2);
+  border-color: var(--border-default);
+}
+.orgName {
+  font-weight: var(--font-medium);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iconBtn,
+.execIndicator {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+}
+.iconBtn:hover,
+.execIndicator:hover {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+.execIndicator {
+  font-size: var(--text-sm);
+  color: var(--info);
+  border: 1px solid var(--border-default);
+  padding: var(--space-1) var(--space-3);
+}
+.execDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--info);
+  animation: forge-blink 1.2s ease infinite;
+}
+@keyframes forge-blink {
+  50% {
+    opacity: 0.3;
+  }
+}
+.badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  background: var(--danger);
+  color: #fff;
+  border-radius: var(--radius-full);
+  font-size: 9px;
+  font-weight: var(--font-bold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  color: var(--text-on-accent);
+  border: none;
+  cursor: pointer;
+  font-weight: var(--font-semibold);
+  font-size: var(--text-md);
+}
+.notifHeader,
+.userHeader {
+  display: flex;
+  flex-direction: column;
+}
+.notifHeader {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+.markRead {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: var(--text-xs);
+}
+.userName {
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+}
+.userEmail {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+.unreadNotif {
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+}
+.readNotif {
+  color: var(--text-secondary);
+}

@@ -1,0 +1,83 @@
+.body {
+  padding: var(--space-6) var(--space-8);
+}
+.pickerGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-3);
+}
+.pickerRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-primary);
+}
+.pickerChevron {
+  margin-left: auto;
+  color: var(--text-tertiary);
+}
+.createBox {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  margin-bottom: var(--space-6);
+}
+.intent {
+  flex: 1;
+  resize: vertical;
+  min-height: 52px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  font-family: var(--font-sans);
+  outline: none;
+}
+.intent:focus {
+  border-color: var(--accent-border);
+}
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.taskRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  width: 100%;
+  text-align: left;
+  background: var(--surface-1);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  cursor: pointer;
+}
+.taskRow:hover {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.taskMain {
+  min-width: 0;
+}
+.taskIntent {
+  color: var(--text-primary);
+  font-weight: var(--font-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.taskMeta {
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  margin-top: 2px;
+}
+.taskBadges {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}

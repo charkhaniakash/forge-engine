@@ -161,6 +161,43 @@ func (o *ValidationOrchestrator) Run(
 		"container_id", validationContainerID[:min(12, len(validationContainerID))],
 		"image", profile.SandboxImage)
 
+	// Pre-flight: verify the primary toolchain executable is available inside
+	// the validation container before running any stages. This produces a clear
+	// diagnostic immediately rather than a cryptic exit code mid-pipeline.
+	primaryTool := _primaryToolForStack(detection.Language)
+	if primaryTool != "" {
+		pfCtx, pfCancel := context.WithTimeout(ctx, 10*time.Second)
+		pfCh, pfErr := o.wsManager.ExecInValidationContainer(pfCtx, validationContainerID, workspace.ExecRequest{
+			Command:        []string{"which", primaryTool},
+			TimeoutSeconds: 10,
+		})
+		if pfErr == nil {
+			pfExitCode := 0
+			for ev := range pfCh {
+				if ev.Type == "exit" && ev.ExitCode != nil {
+					pfExitCode = *ev.ExitCode
+				}
+			}
+			if pfExitCode != 0 {
+				log.Errorw("validation_toolchain_missing",
+					"tool", primaryTool,
+					"image", profile.SandboxImage,
+					"container_id", validationContainerID[:min(12, len(validationContainerID))],
+				)
+				// Synthesize a clear diagnostic and fail the run immediately.
+				_ = o.repo.MarkError(ctx, run.ID,
+					fmt.Sprintf("toolchain check failed: '%s' not found in %s container — image may not be built", primaryTool, profile.SandboxImage))
+				o.publish(run.ID, "error", map[string]interface{}{
+					"message": fmt.Sprintf("'%s' not found in container from image %s. Run 'docker compose build sandbox-%s' to rebuild the image.", primaryTool, profile.SandboxImage, detection.Language),
+				})
+				pfCancel()
+				return fmt.Errorf("toolchain missing: %s not found in %s", primaryTool, profile.SandboxImage)
+			}
+			log.Infow("validation_toolchain_verified", "tool", primaryTool, "image", profile.SandboxImage)
+		}
+		pfCancel()
+	}
+
 	// 5. Run stages in sequence inside the validation container.
 	buildPassed := true
 	for _, stageCfg := range profile.Stages {
@@ -458,6 +495,22 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// _primaryToolForStack returns the executable whose presence confirms the
+// language toolchain is installed in the validation container.
+// Used for the pre-flight check before running any validation stages.
+func _primaryToolForStack(language string) string {
+	switch language {
+	case "go":
+		return "go"
+	case "javascript", "node":
+		return "npm"
+	case "python":
+		return "python3"
+	default:
+		return ""
+	}
 }
 
 // Ensure bytes import is used.

@@ -470,6 +470,21 @@ func (d *DockerSandboxDriver) CopyFile(ctx context.Context, containerID string, 
 // ProvisionWithVolume creates a container that mounts an existing named volume
 // at /workspace instead of creating a fresh volume. Used by the validation
 // pipeline to share the Phase 7 code with a language-specific sandbox image.
+//
+// Filesystem layout for the validation container:
+//   /workspace        → existing workspace volume (read-write, contains the code)
+//   /tmp              → tmpfs 256m (build tools write temp files here)
+//   /home/forge       → tmpfs 512m (npm cache, pip cache, go module cache, etc.)
+//   everything else   → read-only (rootfs from the sandbox image)
+//
+// Why /home/forge needs tmpfs:
+//   - forge-sandbox-node sets NPM_CONFIG_CACHE=/home/forge/.npm
+//   - forge-sandbox-python pip installs to /home/forge/.local when run as forge
+//   - forge-sandbox-go sets GOPATH=/home/forge/go
+//   All three toolchains write to /home/forge during their first run.
+//   Without a writable /home/forge the tools crash with permission errors,
+//   which manifest as exit code 254 (npm/pip startup failure) or exit code 1
+//   with a misleading "executable not found" error from the generic parser.
 func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg WorkspaceConfig, volumeName string) (*DriverInfo, error) {
 	containerName := fmt.Sprintf("forge-val-%s", cfg.WorkspaceID)
 
@@ -494,9 +509,14 @@ func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg Works
 		Binds: []string{
 			fmt.Sprintf("%s:%s", volumeName, workspaceMountPath),
 		},
+		// Writable tmpfs mounts required by the language toolchains:
+		//   /tmp            — general temp files (all tools)
+		//   /home/forge     — npm cache (node_npm_v1), pip cache (python_pip_v1),
+		//                     go module cache (go_default_v1), ruff cache, etc.
+		//                     MUST be writable or the toolchain cannot start.
 		Tmpfs: map[string]string{
-			"/tmp":  "size=256m,mode=1777",
-			"/root": "size=64m,mode=0700", // npm/pip cache writeable location
+			"/tmp":        "size=256m,mode=1777",
+			"/home/forge": "size=512m,mode=0755,uid=1000,gid=1000",
 		},
 		AutoRemove:  false,
 		SecurityOpt: []string{"no-new-privileges"},
@@ -518,15 +538,21 @@ func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg Works
 		},
 	}
 
+	d.logger.Infow("validation_container_creating",
+		"container_name", containerName,
+		"image", cfg.Image,
+		"volume", volumeName,
+	)
+
 	created, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, containerName)
 	if err != nil {
-		return nil, fmt.Errorf("docker create validation container failed: %w", err)
+		return nil, fmt.Errorf("docker create validation container failed (image=%s): %w", cfg.Image, err)
 	}
 
 	if err := d.client.ContainerStart(ctx, created.ID, types.ContainerStartOptions{}); err != nil {
 		_ = d.client.ContainerRemove(context.Background(), created.ID,
 			types.ContainerRemoveOptions{Force: true})
-		return nil, fmt.Errorf("docker start validation container failed: %w", err)
+		return nil, fmt.Errorf("docker start validation container failed (image=%s): %w", cfg.Image, err)
 	}
 
 	d.logger.Infow("validation_container_started",

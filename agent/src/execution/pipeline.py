@@ -68,6 +68,11 @@ class ExecutionPipeline:
                 "complete": False,
                 "_pending_action": None,
                 "_agent_token": agent_token,  # read by _get_tool_client in nodes
+                # Convergence and JSON-retry tracking
+                "_iteration": 0,
+                "_max_iterations": 12,
+                "_json_retry_count": 0,
+                "_max_json_retries": 2,
             }
 
             # Run the graph with astream — yields state snapshots per node.

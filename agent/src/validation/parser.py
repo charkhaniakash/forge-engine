@@ -37,6 +37,21 @@ class ValidationParser:
         warnings = sum(1 for d in diags if d.severity == "warning")
         stage_passed = req.exit_code == 0
 
+        # Ensure failed stages always surface at least one diagnostic so
+        # the UI never shows an empty result for a broken stage.
+        if not stage_passed and len(diags) == 0:
+            logger.warning(
+                "validation_parser_fallback_diagnostic",
+                stage=req.stage,
+                stack=req.stack,
+                exit_code=req.exit_code,
+            )
+            diags = generic_parser.parse_failed_stage(
+                req.stage, req.exit_code, req.stdout, req.stderr
+            )
+            errors = sum(1 for d in diags if d.severity == "error")
+            warnings = sum(1 for d in diags if d.severity == "warning")
+
         logger.info(
             "validation_parsed",
             stage=req.stage,

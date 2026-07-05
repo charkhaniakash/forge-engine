@@ -89,3 +89,49 @@ def parse(stage: str, exit_code: int, combined_output: str) -> list[ParsedDiagno
             break
 
     return diags
+
+
+def parse_failed_stage(
+    stage: str,
+    exit_code: int,
+    stdout: str,
+    stderr: str,
+) -> list[ParsedDiagnostic]:
+    """Always produce at least one diagnostic for a failed stage.
+
+    Uses stderr as the primary message source and falls back to stdout.
+    Truncates the message to 500 characters. This guarantees the UI always
+    shows something meaningful even when the structured parsers produce no hits.
+
+    Args:
+        stage:     Stage name (e.g. "build", "test", "lint").
+        exit_code: Process exit code from the validation container.
+        stdout:    Raw stdout from the stage.
+        stderr:    Raw stderr from the stage.
+
+    Returns:
+        A list with exactly one ParsedDiagnostic of category "environment_error".
+    """
+    raw_message = (stderr.strip() or stdout.strip()) or "Stage failed with no output"
+    # Truncate to 500 chars to keep the diagnostic compact.
+    truncated = raw_message[:500]
+    if len(raw_message) > 500:
+        truncated += "…"
+
+    message = f"[exit {exit_code}] {truncated}"
+
+    return [
+        ParsedDiagnostic(
+            severity="error",
+            category="environment_error",
+            file_path="",
+            line_number=0,
+            column_number=0,
+            message=message,
+            raw_output=raw_message[:500],
+            tool="generic_parser",
+            origin="stderr" if stderr.strip() else "stdout",
+            confidence=0.6,
+            repair_category="unknown",
+        )
+    ]

@@ -93,18 +93,122 @@ async def node_gather_context(state: ExecutionState) -> dict:
 
 # ── Node: reason ──────────────────────────────────────────────────────────────
 
-async def node_reason(state: ExecutionState) -> dict:
-    """Ask the LLM what to do next for this step."""
+def _detect_convergence(tool_history: list[dict], window: int = 4) -> bool:
+    """Return True if the agent is looping without making progress.
+
+    Two signals:
+    1. The last `window` tool calls are identical (same tool + same args).
+    2. The same file has been written more than 3 times with identical content.
+    """
+    if len(tool_history) < window:
+        return False
+
+    # Signal 1: last N calls are identical.
+    tail = tool_history[-window:]
+    first_req = tail[0].get("request") if tail[0] else None
+    if first_req and all(
+        e.get("request") == first_req for e in tail if e
+    ):
+        return True
+
+    # Signal 2: same file written >3 times with the same content.
+    write_ops: dict[str, list[str]] = {}
+    for entry in tool_history:
+        if not entry or not isinstance(entry, dict):
+            continue
+        req = entry.get("request") or {}
+        tool = req.get("tool", "")
+        args = req.get("args") or {}
+        if tool in ("write_file", "create_file"):
+            path = args.get("path", "")
+            content = args.get("content", "")
+            write_ops.setdefault(path, []).append(content)
+
+    for path, contents in write_ops.items():
+        if len(contents) > 3 and len(set(contents)) == 1:
+            return True
+
+    return False
+
+
+async def _call_llm_for_reason(
+    messages: list[dict],
+    ctx,
+    attempt: int,
+) -> str:
+    """Single LLM call for node_reason. Returns the raw string response."""
     from src.llm.chat_factory import get_chat_provider
 
+    provider = get_chat_provider()
+    content_parts: list[str] = []
+
+    async for event in provider.stream(
+        messages=messages,
+        payload={},
+        request_id=f"reason-{ctx.task_execution_id[:8]}-{ctx.step_id}-a{attempt}",
+        response_format={"type": "json_object"},
+    ):
+        if event and isinstance(event, dict):
+            evt_type = event.get("event")
+            if evt_type == "token":
+                content_parts.append(event.get("text", ""))
+            elif evt_type in ("done", "error"):
+                break
+
+    return "".join(content_parts).strip()
+
+
+async def node_reason(state: ExecutionState) -> dict:
+    """Ask the LLM what to do next for this step.
+
+    Improvements over the original:
+    - Convergence detection: aborts with execution_error if the agent is
+      repeating the same tool calls with no progress.
+    - JSON parse retry: retries the LLM call up to _max_json_retries times
+      before giving up. Failures are execution_error, not plan_deviation.
+    - Structured logging: emits iteration, tool_calls_so_far, repeated_tool_detected.
+    """
     ctx = state["ctx"]
     step = state["current_step"]
     tool_history = state["tool_history"]
     retrieved_context = state["retrieved_context"]
 
+    iteration: int = state.get("_iteration", 0)  # type: ignore[call-overload]
+    max_iterations: int = state.get("_max_iterations", 12)  # type: ignore[call-overload]
+    json_retry_count: int = state.get("_json_retry_count", 0)  # type: ignore[call-overload]
+    max_json_retries: int = state.get("_max_json_retries", 2)  # type: ignore[call-overload]
+    tool_calls_so_far = len(tool_history)
+
+    # ── Convergence detection ─────────────────────────────────────────────────
+    repeated_tool_detected = _detect_convergence(tool_history)
+    logger.info(
+        "node_reason_start",
+        step_id=ctx.step_id,
+        iteration=iteration,
+        tool_calls_so_far=tool_calls_so_far,
+        repeated_tool_detected=repeated_tool_detected,
+    )
+
+    if repeated_tool_detected or iteration >= max_iterations:
+        msg = (
+            "Execution loop detected: agent is repeating the same tool calls without progress"
+            if repeated_tool_detected
+            else f"Maximum iteration limit ({max_iterations}) reached without completing the step"
+        )
+        logger.error(
+            "node_reason_convergence_abort",
+            step_id=ctx.step_id,
+            iteration=iteration,
+            repeated_tool_detected=repeated_tool_detected,
+        )
+        return {
+            "_iteration": iteration + 1,
+            "_pending_action": {"action": "execution_error", "message": msg},
+        }
+
+    # ── Build messages ────────────────────────────────────────────────────────
     messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
 
-    # Inject code context.
     context_block = _format_context(retrieved_context)
     if context_block:
         messages.append({
@@ -116,7 +220,6 @@ async def node_reason(state: ExecutionState) -> dict:
             "content": "I've reviewed the current file contents.",
         })
 
-    # Inject tool history so the LLM knows what it already did.
     for entry in tool_history:
         if entry and isinstance(entry, dict):
             req = entry.get("request")
@@ -126,7 +229,6 @@ async def node_reason(state: ExecutionState) -> dict:
             if res is not None:
                 messages.append({"role": "user", "content": f"Tool result: {json.dumps(res)}"})
 
-    # The current task.
     step_title = step.get("title", "") if step else ""
     step_desc = step.get("description", "") if step else ""
     step_files = step.get("affected_files", []) if step else []
@@ -141,45 +243,76 @@ async def node_reason(state: ExecutionState) -> dict:
         ),
     })
 
-    # Collect the LLM response — planning uses JSON mode.
-    provider = get_chat_provider()
-    content_parts: list[str] = []
-    logger.info("node_reason_start", step_id=ctx.step_id, messages_count=len(messages))
-
-    async for event in provider.stream(
-        messages=messages,
-        payload={},
-        request_id=f"reason-{ctx.task_execution_id[:8]}-{ctx.step_id}",
-        response_format={"type": "json_object"},
-    ):
-        if event and isinstance(event, dict):
-            evt_type = event.get("event")
-            if evt_type == "token":
-                content_parts.append(event.get("text", ""))
-            elif evt_type in ("done", "error"):
-                break
-
-    raw = "".join(content_parts).strip()
-    logger.info("node_reason_llm_response", step_id=ctx.step_id, raw_length=len(raw), raw_preview=raw[:200])
-
-    # Parse the action.
+    # ── LLM call with JSON-parse retry ────────────────────────────────────────
     action: dict = {}
-    try:
-        action = json.loads(raw)
-        logger.info("node_reason_parsed", step_id=ctx.step_id, action_type=type(action), action_preview=str(action)[:200])
-    except json.JSONDecodeError as e:
-        # Fallback: treat as a deviation so Go surfaces it.
-        logger.error("node_reason_json_error", step_id=ctx.step_id, error=str(e), raw=raw[:200])
-        action = {"action": "deviation", "message": f"LLM produced non-JSON: {raw[:200]}"}
+    attempt = 0
+    parse_error: str = ""
 
-    # Ensure action is a dict
-    if not isinstance(action, dict):
-        logger.error("node_reason_not_dict", step_id=ctx.step_id, action_type=type(action))
-        action = {"action": "deviation", "message": f"LLM produced non-dict: {type(action)}"}
+    while attempt <= max_json_retries:
+        # On retry, append a correction message so the model knows what to fix.
+        if attempt > 0:
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"Your previous response could not be parsed as JSON: {parse_error}. "
+                    "Please respond ONLY with a valid JSON object and nothing else."
+                ),
+            })
 
-    reasoning_text = action.get("reasoning", "") or action.get("summary", "")
-    return {"reasoning": (state.get("reasoning") or "") + "\n" + reasoning_text,
-            "_pending_action": action}
+        raw = await _call_llm_for_reason(messages, ctx, attempt)
+        logger.info(
+            "node_reason_llm_response",
+            step_id=ctx.step_id,
+            attempt=attempt,
+            raw_length=len(raw),
+            raw_preview=raw[:200],
+        )
+
+        try:
+            parsed = json.loads(raw)
+            if not isinstance(parsed, dict):
+                raise ValueError(f"Expected dict, got {type(parsed).__name__}")
+            action = parsed
+            logger.info(
+                "node_reason_parsed",
+                step_id=ctx.step_id,
+                attempt=attempt,
+                action_type=action.get("action", ""),
+                action_preview=str(action)[:200],
+            )
+            # Successful parse — reset consecutive failure counter.
+            return {
+                "reasoning": (state.get("reasoning") or "") + "\n" + (action.get("reasoning", "") or action.get("summary", "")),
+                "_pending_action": action,
+                "_iteration": iteration + 1,
+                "_json_retry_count": 0,
+            }
+        except (json.JSONDecodeError, ValueError) as e:
+            parse_error = str(e)
+            logger.warning(
+                "node_reason_json_parse_failed",
+                step_id=ctx.step_id,
+                attempt=attempt,
+                error=parse_error,
+                raw_preview=raw[:200],
+            )
+            attempt += 1
+
+    # All retries exhausted — emit execution_error (NOT plan_deviation).
+    logger.error(
+        "node_reason_json_retries_exhausted",
+        step_id=ctx.step_id,
+        max_json_retries=max_json_retries,
+        last_error=parse_error,
+    )
+    return {
+        "_iteration": iteration + 1,
+        "_json_retry_count": json_retry_count + attempt,
+        "_pending_action": {
+            "action": "execution_error",
+            "message": f"LLM produced non-JSON after {attempt} attempts: {parse_error}",
+        },
+    }
 
 
 # ── Node: call_tool ───────────────────────────────────────────────────────────

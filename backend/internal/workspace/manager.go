@@ -652,7 +652,14 @@ func (m *WorkspaceManager) ExecInValidationContainer(
 
 // DestroyValidationContainer removes an ephemeral validation container by ID.
 func (m *WorkspaceManager) DestroyValidationContainer(ctx context.Context, containerID string) error {
-	return m.driver.Destroy(ctx, containerID)
+	err := m.driver.Destroy(ctx, containerID)
+	// Exit code 137 is expected: Docker stop sends SIGKILL after the grace period,
+	// which terminates the container with 128+9=137. This is normal cleanup, not an error.
+	m.logger.Infow("validation_container_destroyed",
+		"container_id", containerID[:min(12, len(containerID))],
+		"note", "exit_137_is_expected_sigkill_from_docker_stop",
+	)
+	return err
 }
 
 // Destroy tears down the workspace: stops/removes the container and updates DB.

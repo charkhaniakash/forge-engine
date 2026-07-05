@@ -94,3 +94,9 @@ class ExecutionState(TypedDict):
     # LangGraph drops undeclared keys on state merge; declaring here keeps token alive.
     _agent_token: str        # Backend JWT forwarded from Go → ToolClient
     _pending_action: dict[str, Any] | None  # current LLM action awaiting dispatch
+
+    # Convergence and retry tracking
+    _iteration: int           # current reasoning iteration, starts at 0
+    _max_iterations: int      # default 12
+    _json_retry_count: int    # tracks consecutive JSON parse failures
+    _max_json_retries: int    # default 2

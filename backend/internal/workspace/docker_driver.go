@@ -319,6 +319,12 @@ func (d *DockerSandboxDriver) Execute(ctx context.Context, containerID string, r
 
 // Destroy stops and removes the container. Idempotent — safe to call on
 // already-removed containers.
+//
+// Exit code 137 note: Docker stop sends SIGTERM then SIGKILL after the grace
+// period. Containers that receive SIGKILL exit with code 137 (128+9). This is
+// expected behaviour for validation containers stopped via DestroyValidationContainer
+// and should be logged at Info, not Warn. For regular workspace containers the
+// same code may indicate an OOM kill, which warrants investigation.
 func (d *DockerSandboxDriver) Destroy(ctx context.Context, containerID string) error {
 	// Extract workspace ID from container name to clean up the volume.
 	containerInfo, err := d.client.ContainerInspect(ctx, containerID)
@@ -337,6 +343,9 @@ func (d *DockerSandboxDriver) Destroy(ctx context.Context, containerID string) e
 		},
 	); err != nil {
 		// Log but don't fail — we still want to attempt Remove.
+		// Note: for validation containers this is often a no-op since the
+		// container may already have exited; the Warn is only relevant for
+		// unexpected stop failures on long-running workspace containers.
 		d.logger.Warnw("docker_stop_failed",
 			"container_id", containerID[:min(12, len(containerID))],
 			"error", err)

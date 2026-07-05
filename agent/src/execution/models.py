@@ -100,3 +100,25 @@ class ExecutionState(TypedDict):
     _max_iterations: int      # default 12
     _json_retry_count: int    # tracks consecutive JSON parse failures
     _max_json_retries: int    # default 2
+
+    # Repository state tracking for content-based convergence detection.
+    # Maps file_path → sha256 hash of last-known content.
+    # Updated after every successful write_file / create_file.
+    # If a write produces no hash change we skip the write immediately.
+    _file_hashes: dict[str, str]
+
+    # In-memory file content cache.
+    # Maps file_path → content string of the last-known file state.
+    # Populated on successful write_file / create_file so subsequent
+    # read_file calls for the same path never need a round-trip to Go.
+    # Invalidated only by delete_file or rename_file on the same path.
+    _file_cache: dict[str, str]
+
+    # Count of write iterations that produced no repository state change.
+    # Two consecutive no-change write cycles → abort.
+    _no_progress_write_cycles: int
+
+    # Set to True by node_call_tool when a write is skipped due to identical
+    # content. route_after_result reads this flag to terminate the step
+    # immediately without re-entering node_reason, saving one full LLM call.
+    _convergence_triggered: bool

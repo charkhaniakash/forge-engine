@@ -379,7 +379,7 @@ export function Validation() {
               )
             })()}
 
-            {/* Diagnostics */}
+            {/* Diagnostics — grouped by category */}
             <Card padded={false}>
               <CardHeader
                 title={selectedStage ? `Diagnostics — ${selectedStage}` : 'All diagnostics'}
@@ -404,40 +404,76 @@ export function Validation() {
                       : 'No diagnostics for this selection.'}
                   </div>
                 ) : (
-                  visibleDiags.map((d) => (
-                    <div key={d.id} className={styles.diagRow}>
-                      <span className={`${styles.diagSev} ${styles[d.severity] ?? ''}`}>
-                        {d.severity === 'error' ? '✕' : d.severity === 'warning' ? '⚠' : 'ℹ'}
-                      </span>
-                      <div className={styles.diagBody}>
-                        <span className={styles.diagMessage} title={d.message}>
-                          {d.message}
+                  (() => {
+                    // Group diagnostics into three buckets for clarity.
+                    const infraCategories = new Set(['environment_error', 'dependency_missing'])
+                    const appCategories = new Set(['compile_error', 'type_error', 'runtime_panic'])
+                    const infra = visibleDiags.filter((d) => infraCategories.has(d.category))
+                    const app = visibleDiags.filter((d) => appCategories.has(d.category))
+                    const validation = visibleDiags.filter(
+                      (d) => !infraCategories.has(d.category) && !appCategories.has(d.category),
+                    )
+
+                    const renderDiag = (d: ValidationDiagnostic) => (
+                      <div key={d.id} className={styles.diagRow}>
+                        <span className={`${styles.diagSev} ${styles[d.severity] ?? ''}`}>
+                          {d.severity === 'error' ? '✕' : d.severity === 'warning' ? '⚠' : 'ℹ'}
                         </span>
-                        {(d.file_path || d.symbol_name) && (
-                          <span className={styles.diagLocation}>
-                            {[
-                              d.file_path,
-                              d.line_number ? `:${d.line_number}` : '',
-                              d.symbol_name ? ` (${d.symbol_name})` : '',
-                            ]
-                              .filter(Boolean)
-                              .join('')}
+                        <div className={styles.diagBody}>
+                          <span className={styles.diagMessage} title={d.message}>
+                            {d.message}
                           </span>
-                        )}
+                          {(d.file_path || d.symbol_name) && (
+                            <span className={styles.diagLocation}>
+                              {[
+                                d.file_path,
+                                d.line_number ? `:${d.line_number}` : '',
+                                d.symbol_name ? ` (${d.symbol_name})` : '',
+                              ]
+                                .filter(Boolean)
+                                .join('')}
+                            </span>
+                          )}
+                        </div>
+                        <div className={styles.diagMeta}>
+                          {d.repair_category && d.repair_category !== 'unknown' && (
+                            <Badge
+                              tone={d.repair_category === 'auto_fixable' ? 'info' : 'danger'}
+                              size="sm"
+                            >
+                              {d.repair_category === 'auto_fixable' ? 'fixable' : 'manual'}
+                            </Badge>
+                          )}
+                          <span className={styles.toolBadge}>{d.tool}</span>
+                        </div>
                       </div>
-                      <div className={styles.diagMeta}>
-                        {d.repair_category && d.repair_category !== 'unknown' && (
-                          <Badge
-                            tone={d.repair_category === 'auto_fixable' ? 'info' : 'danger'}
-                            size="sm"
-                          >
-                            {d.repair_category === 'auto_fixable' ? 'fixable' : 'manual'}
-                          </Badge>
+                    )
+
+                    return (
+                      <>
+                        {infra.length > 0 && (
+                          <div className={styles.diagGroup}>
+                            <div className={styles.diagGroupLabel}>Infrastructure</div>
+                            {infra.map(renderDiag)}
+                          </div>
                         )}
-                        <span className={styles.toolBadge}>{d.tool}</span>
-                      </div>
-                    </div>
-                  ))
+                        {app.length > 0 && (
+                          <div className={styles.diagGroup}>
+                            <div className={styles.diagGroupLabel}>Application</div>
+                            {app.map(renderDiag)}
+                          </div>
+                        )}
+                        {validation.length > 0 && (
+                          <div className={styles.diagGroup}>
+                            {(infra.length > 0 || app.length > 0) && (
+                              <div className={styles.diagGroupLabel}>Validation</div>
+                            )}
+                            {validation.map(renderDiag)}
+                          </div>
+                        )}
+                      </>
+                    )
+                  })()
                 )}
               </div>
             </Card>

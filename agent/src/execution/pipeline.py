@@ -73,6 +73,11 @@ class ExecutionPipeline:
                 "_max_iterations": 12,
                 "_json_retry_count": 0,
                 "_max_json_retries": 2,
+                # Repository state tracking
+                "_file_hashes": {},
+                "_file_cache": {},
+                "_no_progress_write_cycles": 0,
+                "_convergence_triggered": False,
             }
 
             # Run the graph with astream — yields state snapshots per node.

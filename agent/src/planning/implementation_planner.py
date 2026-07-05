@@ -41,6 +41,17 @@ produce a structured implementation plan.
 Your response MUST be a single JSON object matching this schema exactly.
 Do not include any prose, markdown fences, or explanation outside the JSON.
 
+CRITICAL CONSTRAINT — CHECK EXISTING CODE BEFORE CREATING STEPS:
+The code context below contains the ACTUAL current state of the repository.
+Before creating any step, check whether the change already exists in the code context.
+
+Rules for step inclusion:
+  - If an import already exists in the file → do NOT add a step to add that import.
+  - If a function already exists with the correct signature → do NOT add a step to create it.
+  - If a variable, constant, or hook is already declared → do NOT add a step to add it.
+  - Only include steps for changes that are ACTUALLY MISSING from the code context.
+  - If the entire intent is already implemented, produce an empty steps array.
+
 CRITICAL CONSTRAINT — ONLY INCLUDE EXECUTABLE STEPS:
 The execution engine can ONLY perform these operations on the repository:
   - Read, write, create, delete, rename files
@@ -56,7 +67,7 @@ Do NOT include steps that require:
 
 Phase 8 (automated build/test/lint validation) runs automatically after execution.
 You do not need to include test or build steps in this plan.
-Focus exclusively on repository file modifications.
+Focus exclusively on repository file modifications that are MISSING from the current codebase.
 
 Schema:
 {
@@ -100,6 +111,7 @@ Rules:
 - If the context is insufficient to plan confidently, include an assumption documenting what is unknown.
 - Be specific: affected_files should list real file paths visible in the context.
 - Aim for 3-8 steps. Each step should modify one or more files.
+- NEVER include a step for something that is already present in the code context.
 """
 
 _RETRY_SUFFIX = """
@@ -257,7 +269,14 @@ def _build_user_message(
     parts = [f"Intent: {intent}"]
 
     if context_block:
-        parts.append(f"\nRelevant code context:\n\n{context_block}")
+        parts.append(
+            f"\nRelevant code context (CURRENT repository state — check this before creating steps):\n\n{context_block}"
+        )
+        parts.append(
+            "\nIMPORTANT: The code context above shows the ACTUAL current state of the files. "
+            "Do NOT create steps for things that are already present. "
+            "Only create steps for changes that are MISSING from the code above."
+        )
 
     if prior_plan is not None:
         parts.append(

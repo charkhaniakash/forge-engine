@@ -93,3 +93,33 @@
 .del {
   color: var(--diff-del-fg);
 }
+
+/* ── Outcome banner (shown after execution completes) ──────────── */
+.outcomeBanner {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}
+
+.outcomeBanner[data-tone='success'] {
+  background: var(--success-subtle);
+  color: var(--success);
+}
+
+.outcomeBanner[data-tone='warning'] {
+  background: var(--warning-subtle);
+  color: var(--warning);
+}
+
+/* ── Revision count badge on repeated file writes ──────────────── */
+.revisions {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin-right: var(--space-2);
+}

@@ -10,13 +10,13 @@ Node flow:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from typing import Any
 
 import structlog
 
-from src.config import settings
 from src.execution.context_builder import gather_context
 from src.execution.models import ExecutionState, ToolCallResult
 from src.execution.tool_client import ToolClient
@@ -93,41 +93,25 @@ async def node_gather_context(state: ExecutionState) -> dict:
 
 # ── Node: reason ──────────────────────────────────────────────────────────────
 
-def _detect_convergence(tool_history: list[dict], window: int = 4) -> bool:
-    """Return True if the agent is looping without making progress.
+def _hash_content(content: str) -> str:
+    """Return a short SHA-256 hex digest of the given content string."""
+    return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    Two signals:
-    1. The last `window` tool calls are identical (same tool + same args).
-    2. The same file has been written more than 3 times with identical content.
+
+def _detect_tool_repetition(tool_history: list[dict], window: int = 4) -> bool:
+    """Return True if the last `window` tool calls are identical (same tool + same args).
+
+    This is a fast early-detection heuristic. The authoritative convergence
+    signal is repository-state change tracking (see `_no_progress_write_cycles`).
     """
     if len(tool_history) < window:
         return False
-
-    # Signal 1: last N calls are identical.
     tail = tool_history[-window:]
     first_req = tail[0].get("request") if tail[0] else None
     if first_req and all(
         e.get("request") == first_req for e in tail if e
     ):
         return True
-
-    # Signal 2: same file written >3 times with the same content.
-    write_ops: dict[str, list[str]] = {}
-    for entry in tool_history:
-        if not entry or not isinstance(entry, dict):
-            continue
-        req = entry.get("request") or {}
-        tool = req.get("tool", "")
-        args = req.get("args") or {}
-        if tool in ("write_file", "create_file"):
-            path = args.get("path", "")
-            content = args.get("content", "")
-            write_ops.setdefault(path, []).append(content)
-
-    for path, contents in write_ops.items():
-        if len(contents) > 3 and len(set(contents)) == 1:
-            return True
-
     return False
 
 
@@ -177,29 +161,50 @@ async def node_reason(state: ExecutionState) -> dict:
     max_iterations: int = state.get("_max_iterations", 12)  # type: ignore[call-overload]
     json_retry_count: int = state.get("_json_retry_count", 0)  # type: ignore[call-overload]
     max_json_retries: int = state.get("_max_json_retries", 2)  # type: ignore[call-overload]
+    no_progress_cycles: int = state.get("_no_progress_write_cycles", 0)  # type: ignore[call-overload]
     tool_calls_so_far = len(tool_history)
 
     # ── Convergence detection ─────────────────────────────────────────────────
-    repeated_tool_detected = _detect_convergence(tool_history)
+    # Primary signal: repository state stopped changing (content-hash based).
+    # Secondary signal: tool-repetition heuristic for early detection.
+    repo_stalled = no_progress_cycles >= 2
+    repeated_tool_detected = _detect_tool_repetition(tool_history)
+    convergence_detected = repo_stalled or repeated_tool_detected
+
     logger.info(
         "node_reason_start",
         step_id=ctx.step_id,
         iteration=iteration,
         tool_calls_so_far=tool_calls_so_far,
         repeated_tool_detected=repeated_tool_detected,
+        repo_stalled=repo_stalled,
+        no_progress_cycles=no_progress_cycles,
     )
 
-    if repeated_tool_detected or iteration >= max_iterations:
-        msg = (
-            "Execution loop detected: agent is repeating the same tool calls without progress"
-            if repeated_tool_detected
-            else f"Maximum iteration limit ({max_iterations}) reached without completing the step"
-        )
+    if convergence_detected or iteration >= max_iterations:
+        if repo_stalled:
+            msg = (
+                "Repository state stopped changing: the agent wrote files but the "
+                "content did not differ from what was already on disk. "
+                "No further progress is possible without a different approach."
+            )
+            reason = "repo_state_unchanged"
+        elif repeated_tool_detected:
+            msg = (
+                "Execution loop detected: agent is repeating the same tool calls "
+                "without making progress."
+            )
+            reason = "tool_repetition"
+        else:
+            msg = f"Maximum iteration limit ({max_iterations}) reached without completing the step."
+            reason = "max_iterations"
         logger.error(
             "node_reason_convergence_abort",
             step_id=ctx.step_id,
             iteration=iteration,
+            reason=reason,
             repeated_tool_detected=repeated_tool_detected,
+            repo_stalled=repo_stalled,
         )
         return {
             "_iteration": iteration + 1,
@@ -318,7 +323,21 @@ async def node_reason(state: ExecutionState) -> dict:
 # ── Node: call_tool ───────────────────────────────────────────────────────────
 
 async def node_call_tool(state: ExecutionState) -> dict:
-    """Dispatch the tool call the LLM requested."""
+    """Dispatch the tool call the LLM requested.
+
+    Fix 1 — Read-after-write cache:
+    After a successful write_file / create_file, the agent already knows the
+    exact file contents because it generated them. We cache the content in
+    _file_cache. When read_file is called for a cached path we return the
+    cached content immediately, eliminating the round-trip to Go and the
+    read→write→read loop pattern entirely.
+    The cache is invalidated by delete_file and rename_file on the same path.
+
+    Fix 2 — Identical-content write skip (convergence):
+    For write_file / create_file: hash the new content and compare to the
+    last-known hash. If identical, skip the write and increment
+    _no_progress_write_cycles. Two cycles → convergence abort.
+    """
     action: dict = state.get("_pending_action", {}) or {}  # type: ignore[assignment]
     if not isinstance(action, dict):
         action = {}
@@ -329,6 +348,74 @@ async def node_call_tool(state: ExecutionState) -> dict:
     tool_args = action.get("args", {})
     reasoning = action.get("reasoning", "")
 
+    file_hashes: dict = dict(state.get("_file_hashes") or {})  # type: ignore[call-overload]
+    file_cache: dict = dict(state.get("_file_cache") or {})    # type: ignore[call-overload]
+    no_progress_cycles: int = state.get("_no_progress_write_cycles", 0)  # type: ignore[call-overload]
+
+    # ── Fix 1: serve read_file from cache when content is known ──────────────
+    if tool_name == "read_file":
+        path = tool_args.get("path", "")
+        if path in file_cache:
+            cached_content = file_cache[path]
+            logger.info(
+                "node_call_tool_read_from_cache",
+                step_id=ctx.step_id,
+                path=path,
+                content_len=len(cached_content),
+            )
+            cached_result = ToolCallResult(
+                tool=tool_name,
+                success=True,
+                result={"content": cached_content, "bytes": len(cached_content), "cached": True},
+                cached=True,
+            )
+            history_entry = {
+                "request": {"action": "tool", "tool": tool_name, "args": tool_args},
+                "result": cached_result.model_dump(),
+            }
+            return {
+                "tool_history": list(state["tool_history"]) + [history_entry],
+                "latest_tool_result": cached_result,
+                "_pending_action": None,
+            }
+
+    # ── Fix 2: identical-content skip for write / create ─────────────────────
+    if tool_name in ("write_file", "create_file"):
+        path = tool_args.get("path", "")
+        content = tool_args.get("content", "")
+        new_hash = _hash_content(content)
+        old_hash = file_hashes.get(path)
+
+        if old_hash is not None and old_hash == new_hash:
+            logger.warning(
+                "node_call_tool_identical_content_skipped",
+                step_id=ctx.step_id,
+                tool=tool_name,
+                path=path,
+                hash=new_hash,
+                no_progress_cycles=no_progress_cycles + 1,
+            )
+            skipped_result = ToolCallResult(
+                tool=tool_name,
+                success=True,
+                result={"skipped": True, "reason": "content_unchanged", "path": path},
+                cached=True,
+            )
+            history_entry = {
+                "request": {"action": "tool", "tool": tool_name, "args": tool_args},
+                "result": skipped_result.model_dump(),
+            }
+            return {
+                "tool_history": list(state["tool_history"]) + [history_entry],
+                "latest_tool_result": skipped_result,
+                "_pending_action": None,
+                "_no_progress_write_cycles": no_progress_cycles + 1,
+                # NOTE: _convergence_triggered is set so route_after_result
+                # can terminate the step immediately without re-entering reason.
+                "_convergence_triggered": True,
+            }
+
+    # ── Execute the tool via Go ───────────────────────────────────────────────
     result = await tool_client.call(
         tool=tool_name,
         args=tool_args,
@@ -336,17 +423,53 @@ async def node_call_tool(state: ExecutionState) -> dict:
         step_id=ctx.step_id,
     )
 
-    history_entry = {
-        "request": {"action": "tool", "tool": tool_name, "args": tool_args},
-        "result": result.model_dump(),
-    }
-    new_history = list(state["tool_history"]) + [history_entry]
-
-    return {
-        "tool_history": new_history,
+    new_no_progress = no_progress_cycles
+    updates: dict = {
+        "tool_history": list(state["tool_history"]) + [{
+            "request": {"action": "tool", "tool": tool_name, "args": tool_args},
+            "result": result.model_dump(),
+        }],
         "latest_tool_result": result,
         "_pending_action": None,
     }
+
+    if result.success:
+        if tool_name in ("write_file", "create_file"):
+            path = tool_args.get("path", "")
+            content = tool_args.get("content", "")
+            new_hash = _hash_content(content)
+            old_hash = file_hashes.get(path)
+            file_hashes[path] = new_hash
+            # Cache the written content so future read_file calls are free.
+            file_cache[path] = content
+            updates["_file_hashes"] = file_hashes
+            updates["_file_cache"] = file_cache
+            if old_hash != new_hash:
+                new_no_progress = 0
+                logger.info(
+                    "node_call_tool_write_changed",
+                    step_id=ctx.step_id,
+                    path=path,
+                    old_hash=old_hash,
+                    new_hash=new_hash,
+                )
+            else:
+                new_no_progress = no_progress_cycles + 1
+            updates["_no_progress_write_cycles"] = new_no_progress
+
+        elif tool_name in ("delete_file", "rename_file"):
+            # Invalidate cache for affected paths.
+            path = tool_args.get("path", tool_args.get("old_path", ""))
+            new_path = tool_args.get("new_path", "")
+            file_cache.pop(path, None)
+            file_hashes.pop(path, None)
+            if new_path:
+                file_cache.pop(new_path, None)
+                file_hashes.pop(new_path, None)
+            updates["_file_hashes"] = file_hashes
+            updates["_file_cache"] = file_cache
+
+    return updates
 
 
 # ── Node: receive_result ──────────────────────────────────────────────────────
@@ -492,7 +615,23 @@ def route_after_reason(state: ExecutionState) -> str:
 
 
 def route_after_result(state: ExecutionState) -> str:
-    """Decide the next node after receiving a tool result."""
+    """Decide the next node after receiving a tool result.
+
+    Fix 2 — Immediate convergence termination:
+    If node_call_tool detected that the write was skipped (identical content),
+    it sets _convergence_triggered=True. We route directly to already_satisfied
+    here instead of re-entering node_reason, saving one full LLM call and
+    preventing the "detect convergence → one more LLM round → abort" pattern.
+    """
+    # Immediate convergence: skip re-entering reason.
+    convergence: bool = state.get("_convergence_triggered", False)  # type: ignore[call-overload]
+    if convergence:
+        logger.info(
+            "route_after_result_convergence_immediate",
+            step_id=state["ctx"].step_id,
+        )
+        return "already_satisfied"
+
     result: ToolCallResult | None = state.get("latest_tool_result")
     # If the tool failed with a hard error, stop the step.
     if result and not result.success and result.error:

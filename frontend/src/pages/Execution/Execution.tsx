@@ -227,6 +227,26 @@ export function Execution() {
         </div>
       ) : (
         <div className={styles.body}>
+          {/* ── Root cause / outcome banner for completed runs ─── */}
+          {execDone && (() => {
+            // Show the last exec_complete or execution_error event as a banner
+            // so the user immediately understands WHY execution finished.
+            const terminalEvent = [...(live?.events ?? [])]
+              .reverse()
+              .find((e) => ['exec_complete', 'execution_error', 'plan_deviation', 'requires_human'].includes(e.kind))
+            if (!terminalEvent) return null
+            const isError = terminalEvent.kind !== 'exec_complete'
+            const msg = terminalEvent.label.replace(/^[🎉❌⚠✋]\s*/, '')
+            return (
+              <div
+                className={styles.outcomeBanner}
+                data-tone={isError ? 'warning' : 'success'}
+              >
+                <span>{isError ? '⚠' : '✅'}</span>
+                <span>{msg}</span>
+              </div>
+            )
+          })()}
           <div className={styles.left}>
             <Card padded={false}>
               <CardHeader
@@ -279,16 +299,31 @@ export function Execution() {
                 {diffs.length === 0 ? (
                   <div className={styles.preparing}>No file changes yet.</div>
                 ) : (
-                  diffs.map((d) => (
-                    <div key={d.id} className={styles.fileRow}>
-                      <span className={styles.op} data-op={d.operation}>{d.operation}</span>
-                      <code className={styles.filePath}>{d.file_path}</code>
-                      <span className={styles.fileStat}>
-                        <span className={styles.add}>+{d.lines_added}</span>{' '}
-                        <span className={styles.del}>-{d.lines_removed}</span>
-                      </span>
-                    </div>
-                  ))
+                  // Group diffs by file_path so repeated writes show as one entry.
+                  Object.entries(
+                    diffs.reduce<Record<string, typeof diffs>>((acc, d) => {
+                      ;(acc[d.file_path] ??= []).push(d)
+                      return acc
+                    }, {})
+                  ).map(([filePath, fileDiffs]) => {
+                    const revisions = fileDiffs.length
+                    const totalAdd = fileDiffs.reduce((a, d) => a + d.lines_added, 0)
+                    const totalDel = fileDiffs.reduce((a, d) => a + d.lines_removed, 0)
+                    const op = fileDiffs[fileDiffs.length - 1].operation
+                    return (
+                      <div key={filePath} className={styles.fileRow}>
+                        <span className={styles.op} data-op={op}>{op}</span>
+                        <code className={styles.filePath}>{filePath}</code>
+                        <span className={styles.fileStat}>
+                          {revisions > 1 && (
+                            <span className={styles.revisions}>{revisions}×</span>
+                          )}
+                          <span className={styles.add}>+{totalAdd}</span>{' '}
+                          <span className={styles.del}>-{totalDel}</span>
+                        </span>
+                      </div>
+                    )
+                  })
                 )}
               </div>
             </Card>

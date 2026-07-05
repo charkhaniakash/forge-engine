@@ -295,9 +295,52 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 	var finalStatus, finalMsg string
 	if hasDeviations {
 		finalStatus = "completed_with_deviations"
+		// Build a human-readable reason list for the UI so users don't need
+		// to open a separate page to understand what happened.
+		var reasons []string
+		stepExecsMap := map[string]*models.StepExecution{}
+		for _, se := range stepExecs {
+			stepExecsMap[se.StepStableID] = se
+		}
+		for _, step := range steps {
+			sid, _ := step["stable_id"].(string)
+			if !deviatedOrFailed[sid] {
+				continue
+			}
+			se, ok := stepExecsMap[sid]
+			if !ok {
+				continue
+			}
+			switch se.Status {
+			case "deviated":
+				note := ""
+				if se.DeviationNote != nil {
+					note = *se.DeviationNote
+					if len(note) > 120 {
+						note = note[:120] + "…"
+					}
+				}
+				reasons = append(reasons, fmt.Sprintf("Step '%s' deviated: %s", sid, note))
+			case "failed":
+				note := ""
+				if se.DeviationNote != nil {
+					note = *se.DeviationNote
+					if len(note) > 120 {
+						note = note[:120] + "…"
+					}
+				}
+				reasons = append(reasons, fmt.Sprintf("Step '%s' failed: %s", sid, note))
+			case "skipped":
+				reasons = append(reasons, fmt.Sprintf("Step '%s' skipped (dependency failed)", sid))
+			}
+		}
+		reasonStr := strings.Join(reasons, "; ")
+		if reasonStr == "" {
+			reasonStr = "one or more steps did not complete successfully"
+		}
 		finalMsg = fmt.Sprintf(
-			"Execution complete with deviations — %d/%d steps completed, %d deviated, %d skipped, %d files modified",
-			completedSteps, len(steps), deviatedSteps, skippedSteps, len(modifiedFiles),
+			"Execution complete with deviations — %d/%d steps completed, %d deviated, %d skipped, %d files modified. Reason: %s",
+			completedSteps, len(steps), deviatedSteps, skippedSteps, len(modifiedFiles), reasonStr,
 		)
 	} else {
 		finalStatus = "completed"

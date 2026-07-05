@@ -99,6 +99,12 @@ type SandboxDriver interface {
 	// CopyFile copies a file from src to dst inside the container.
 	// Phase 6: returns ErrNotImplemented. Phase 7: real implementation.
 	CopyFile(ctx context.Context, containerID string, src, dst string) error
+
+	// ProvisionWithVolume creates a container like Provision but mounts an
+	// existing named volume instead of creating a new one.
+	// Used by the ValidationOrchestrator to share the Phase 7 code volume
+	// with an ephemeral language-specific validation container.
+	ProvisionWithVolume(ctx context.Context, cfg WorkspaceConfig, volumeName string) (*DriverInfo, error)
 }
 
 // ErrNotImplemented is returned by Phase 6 stubs for Phase 7+ methods.

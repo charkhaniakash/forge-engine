@@ -1,0 +1,30 @@
+# forge-sandbox-python:latest
+# Base sandbox image + Python toolchain for Phase 8 validation.
+# Profiles: python_pip_v1, python_pyproject_v1
+# Includes: git, python3, pip, pytest, ruff (optional)
+
+FROM forge-sandbox:latest
+
+USER root
+
+ARG PYTHON_VERSION=3.11
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python${PYTHON_VERSION} python3-pip python3-venv \
+    && rm -rf /var/lib/apt/lists/*
+
+# Ensure python3 and pip3 are on PATH.
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python${PYTHON_VERSION} 1 \
+    && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1
+
+# Install validation tools globally so they're available without a venv.
+RUN pip3 install --no-cache-dir \
+    pytest==8.2.2 \
+    pytest-json-report==1.5.0 \
+    ruff==0.4.10
+
+# Verify
+RUN python --version && pytest --version && ruff --version
+
+USER forge
+WORKDIR /workspace
+CMD ["sleep", "infinity"]

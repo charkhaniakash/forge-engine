@@ -5,6 +5,7 @@ import type {
   ExecutionSocketEvent,
   PlanningSocketEvent,
   QASocketEvent,
+  ValidationSocketEvent,
 } from '@/types'
 
 /**
@@ -18,6 +19,18 @@ export interface ExecutionLiveEvent {
   kind: string
   label: string
   raw: ExecutionSocketEvent
+}
+
+export interface ValidationLiveEvent {
+  seq: number
+  kind: string
+  label: string
+  raw: ValidationSocketEvent
+}
+
+interface ValidationStream {
+  events: ValidationLiveEvent[]
+  complete: boolean
 }
 
 interface ExecutionStream {
@@ -43,12 +56,14 @@ interface StreamState {
   execution: Record<string, ExecutionStream>
   qa: Record<string, QAStream>
   planning: Record<string, PlanningStream>
+  validation: Record<string, ValidationStream>
 }
 
 const initialState: StreamState = {
   execution: {},
   qa: {},
   planning: {},
+  validation: {},
 }
 
 function labelExecutionEvent(ev: ExecutionSocketEvent): string {
@@ -81,6 +96,38 @@ const TERMINAL_EXEC = new Set([
   'execution_error',
   'error',
 ])
+
+const TERMINAL_VALIDATION = new Set([
+  'validation_complete',
+  'error',
+])
+
+function labelValidationEvent(ev: ValidationSocketEvent): string {
+  const stageIcon: Record<string, string> = {
+    install: '📦', build: '🔨', test: '🧪', lint: '🔍', format: '✨',
+  }
+  const icon = ev.stage ? (stageIcon[ev.stage] ?? '⚙️') : '🔬'
+  switch (ev.event) {
+    case 'validation_start':
+      return `🔬 Validation started — stack: ${ev.stack ?? '?'}, profile: ${ev.profile ?? '?'}`
+    case 'stage_start':
+      return `${icon} ${ev.stage} started`
+    case 'stage_output':
+      return `  ${(String(ev.chunk ?? '')).trim().slice(0, 120)}`
+    case 'stage_complete':
+      return `  ${ev.passed ? '✅' : '❌'} ${ev.stage} ${ev.passed ? 'passed' : 'failed'} (exit ${ev.exit_code}, ${ev.duration_ms}ms)`
+    case 'stage_skipped':
+      return `  ⏭ ${ev.stage} skipped — ${ev.reason}`
+    case 'stage_diagnostics':
+      return `  📋 ${ev.stage}: ${ev.errors ?? 0} error(s), ${ev.warnings ?? 0} warning(s)`
+    case 'validation_complete':
+      return `🏁 ${ev.overall ?? 'complete'} — ${ev.total_errors ?? 0} error(s)`
+    case 'error':
+      return `❌ error`
+    default:
+      return ev.event
+  }
+}
 
 const streamSlice = createSlice({
   name: 'stream',
@@ -142,6 +189,21 @@ const streamSlice = createSlice({
           (state.planning[resourceId] = { events: [] })
         bucket.events.push(ev)
         if (typeof ev.stage === 'string') bucket.stage = ev.stage
+      }
+
+      if (channel === 'validation') {
+        const ev = event as ValidationSocketEvent
+        const bucket =
+          state.validation[resourceId] ??
+          (state.validation[resourceId] = { events: [], complete: false })
+        bucket.events.push({
+          seq: (typeof ev.seq === 'number' ? ev.seq : undefined) ?? bucket.events.length,
+          kind: ev.event,
+          label: labelValidationEvent(ev),
+          raw: ev,
+        })
+        if (bucket.events.length > 500) bucket.events.shift()
+        if (TERMINAL_VALIDATION.has(ev.event)) bucket.complete = true
       }
     })
   },

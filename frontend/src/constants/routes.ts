@@ -20,6 +20,7 @@ export const ROUTES = {
   taskPlan: '/tasks/:id/plan',
   taskExecution: '/tasks/:id/execution',
   taskWorkspace: '/tasks/:id/workspace',
+  taskValidation: '/tasks/:id/validation',
 
   organizations: '/organizations',
   settings: '/settings',
@@ -40,4 +41,5 @@ export const routeTo = {
   taskPlan: (id: string) => `/tasks/${id}/plan`,
   taskExecution: (id: string) => `/tasks/${id}/execution`,
   taskWorkspace: (id: string) => `/tasks/${id}/workspace`,
+  taskValidation: (id: string) => `/tasks/${id}/validation`,
 }

@@ -1,0 +1,282 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.emptyWrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) 1fr;
+  gap: var(--space-5);
+  padding: var(--space-6) var(--space-8);
+  overflow-y: auto;
+  align-items: start;
+}
+
+/* ── Left column ─────────────────────────────────────────────── */
+.left {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+/* ── Right column ────────────────────────────────────────────── */
+.right {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+/* ── Stage list ──────────────────────────────────────────────── */
+.stageList {
+  display: flex;
+  flex-direction: column;
+}
+
+.stageRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background var(--duration-fast) var(--ease);
+  user-select: none;
+}
+
+.stageRow:last-child {
+  border-bottom: none;
+}
+
+.stageRow:hover {
+  background: var(--surface-2);
+}
+
+.stageRow.active {
+  background: var(--accent-subtle);
+}
+
+.stageIcon {
+  font-size: 15px;
+  flex-shrink: 0;
+  width: 20px;
+  text-align: center;
+}
+
+.stageName {
+  flex: 1;
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+  text-transform: capitalize;
+}
+
+.stageMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.stageDuration {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.stageCounts {
+  display: flex;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.errorCount {
+  color: var(--danger);
+}
+
+.warnCount {
+  color: var(--warning);
+}
+
+/* ── Result banner ───────────────────────────────────────────── */
+.resultBanner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+}
+
+.resultBanner.passed {
+  background: var(--success-subtle);
+  color: var(--success);
+}
+
+.resultBanner.failed_repairable {
+  background: var(--warning-subtle);
+  color: var(--warning);
+}
+
+.resultBanner.failed_requires_human {
+  background: var(--danger-subtle);
+  color: var(--danger);
+}
+
+/* ── Summary stats ───────────────────────────────────────────── */
+.summaryGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.statValue {
+  font-size: var(--text-xl);
+  font-weight: var(--font-bold);
+  color: var(--text-primary);
+  line-height: 1;
+}
+
+.statValue.danger {
+  color: var(--danger);
+}
+
+.statValue.warning {
+  color: var(--warning);
+}
+
+.statValue.success {
+  color: var(--success);
+}
+
+.statLabel {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+/* ── Live log ─────────────────────────────────────────────────── */
+.log {
+  padding: var(--space-3) var(--space-4);
+}
+
+/* ── Diagnostics table ───────────────────────────────────────── */
+.diagList {
+  display: flex;
+  flex-direction: column;
+}
+
+.diagRow {
+  display: grid;
+  grid-template-columns: 20px 1fr auto;
+  gap: var(--space-3);
+  align-items: baseline;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+}
+
+.diagRow:last-child {
+  border-bottom: none;
+}
+
+.diagSev {
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+.diagSev.error {
+  color: var(--danger);
+}
+
+.diagSev.warning {
+  color: var(--warning);
+}
+
+.diagSev.info {
+  color: var(--info);
+}
+
+.diagBody {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.diagMessage {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagLocation {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagMeta {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+  align-items: center;
+}
+
+.toolBadge {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  background: var(--surface-2);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+}
+
+.emptyDiag {
+  padding: var(--space-5) var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--text-md);
+  text-align: center;
+}
+
+/* ── Stage detail panel ─────────────────────────────────────────── */
+.stageDetail {
+  padding: var(--space-3) var(--space-4);
+}
+
+.stageCommand {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-inset);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-3);
+  overflow-x: auto;
+  white-space: nowrap;
+}

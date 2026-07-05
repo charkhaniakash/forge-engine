@@ -458,9 +458,82 @@ func (d *DockerSandboxDriver) CopyFile(ctx context.Context, containerID string, 
 	return nil
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ProvisionWithVolume creates a container that mounts an existing named volume
+// at /workspace instead of creating a fresh volume. Used by the validation
+// pipeline to share the Phase 7 code with a language-specific sandbox image.
+func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg WorkspaceConfig, volumeName string) (*DriverInfo, error) {
+	containerName := fmt.Sprintf("forge-val-%s", cfg.WorkspaceID)
 
-// parseCPU converts a CPU limit string (e.g. "1.0") to Docker's NanoCPU unit.
+	env := make([]string, 0, len(cfg.EnvVars))
+	for k, v := range cfg.EnvVars {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	nanoCPU := parseCPU(cfg.CPULimit)
+	memoryBytes := int64(cfg.MemoryLimitMB) * 1024 * 1024
+	pidsLimit := int64(cfg.PIDLimit)
+
+	hostConfig := &container.HostConfig{
+		NetworkMode: "bridge",
+		Resources: container.Resources{
+			NanoCPUs:  nanoCPU,
+			Memory:    memoryBytes,
+			PidsLimit: &pidsLimit,
+		},
+		ReadonlyRootfs: true,
+		// Mount the EXISTING workspace volume (not a new one).
+		Binds: []string{
+			fmt.Sprintf("%s:%s", volumeName, workspaceMountPath),
+		},
+		Tmpfs: map[string]string{
+			"/tmp":  "size=256m,mode=1777",
+			"/root": "size=64m,mode=0700", // npm/pip cache writeable location
+		},
+		AutoRemove:  false,
+		SecurityOpt: []string{"no-new-privileges"},
+	}
+
+	containerConfig := &container.Config{
+		Image:        cfg.Image,
+		User:         "forge",
+		Env:          env,
+		OpenStdin:    true,
+		AttachStdin:  false,
+		AttachStdout: false,
+		AttachStderr: false,
+		Tty:          false,
+		WorkingDir:   workspaceMountPath,
+		Labels: map[string]string{
+			"forge.validation": "true",
+			"forge.managed":    "true",
+		},
+	}
+
+	created, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, containerName)
+	if err != nil {
+		return nil, fmt.Errorf("docker create validation container failed: %w", err)
+	}
+
+	if err := d.client.ContainerStart(ctx, created.ID, types.ContainerStartOptions{}); err != nil {
+		_ = d.client.ContainerRemove(context.Background(), created.ID,
+			types.ContainerRemoveOptions{Force: true})
+		return nil, fmt.Errorf("docker start validation container failed: %w", err)
+	}
+
+	d.logger.Infow("validation_container_started",
+		"container_id", created.ID[:12],
+		"container_name", containerName,
+		"image", cfg.Image,
+		"volume", volumeName,
+	)
+
+	return &DriverInfo{
+		ContainerID:   created.ID,
+		ContainerName: containerName,
+	}, nil
+}
+
+
 func parseCPU(limit string) int64 {
 	var f float64
 	if _, err := fmt.Sscanf(limit, "%f", &f); err != nil || f <= 0 {

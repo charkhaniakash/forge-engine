@@ -4,7 +4,7 @@ import type { Citation } from './qa'
  * Channel kinds the WebSocket layer can subscribe to. Each maps to a backend
  * streaming endpoint under /v1/... and carries a discriminated event payload.
  */
-export type SocketChannel = 'qa' | 'planning' | 'execution'
+export type SocketChannel = 'qa' | 'planning' | 'execution' | 'validation'
 
 export type ConnectionState =
   | 'idle'

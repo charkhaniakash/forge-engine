@@ -24,6 +24,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
+	"github.com/charkhaniakash/forge-engine/backend/internal/validation"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
 
@@ -77,6 +78,7 @@ func main() {
 	workItemRepo := repository.NewWorkItemRepository(dbConn)
 	wsRepo := repository.NewWorkspaceRepository(dbConn)
 	execRepo := repository.NewExecutionRepository(dbConn)
+	valRepo := validation.NewValidationRepository(dbConn)
 
 	// ── Auth handlers ─────────────────────────────────────────────────────────
 	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -93,6 +95,7 @@ func main() {
 	var taskHandlers *handlers.TaskHandlers
 	var workspaceHandlers *handlers.WorkspaceHandlers
 	var executionHandlers *handlers.ExecutionHandlers
+	var validationHandlers *handlers.ValidationHandlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -226,19 +229,46 @@ func main() {
 
 				// ── Execution engine (Phase 7) ────────────────────────────────
 				agentExecClient := execution.NewAgentExecClient(agentURL, jwtSecret)
-				orchestrator := execution.NewExecutionOrchestrator(
+				execOrchestrator := execution.NewExecutionOrchestrator(
 					execRepo, wsRepo, wsManager,
 					agentExecClient,
 					nil, // publisher wired by NewExecutionHandlers
 					jwtSecret, sugar,
 				)
+
+				// ── Validation (Phase 8) ──────────────────────────────────────
+				// Built before executionHandlers so we can wire the trigger below.
+				agentParseClient := validation.NewAgentParseClient(agentURL, jwtSecret)
+				detector := validation.NewStackDetector(wsManager)
+				valOrchestrator := validation.NewValidationOrchestrator(
+					valRepo, wsManager, agentParseClient, detector,
+					nil, // publisher wired by NewValidationHandlers
+					sugar,
+				)
+				validationHandlers = handlers.NewValidationHandlers(
+					valRepo, workItemRepo, execRepo, valOrchestrator, sugar,
+				)
+
+				// Wire automatic validation trigger into the execution orchestrator.
+				// When execution finishes, it fires this closure in a goroutine.
+				// The closure is defined here so it captures valOrchestrator without
+				// creating a circular package dependency.
+				execOrchestrator.SetValidationTrigger(func(ctx context.Context, taskExecutionID, workspaceID, traceID string) {
+					if err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change"); err != nil {
+						sugar.Errorw("auto_validation_failed",
+							"task_execution_id", taskExecutionID,
+							"error", err,
+						)
+					}
+				})
+
 				executionHandlers = handlers.NewExecutionHandlers(
 					execRepo, workItemRepo, wsRepo,
-					githubRepoRepo, orchestrator, wsManager,
+					githubRepoRepo, execOrchestrator, wsManager,
 					jwtSecret, sugar,
 				)
 
-				sugar.Info("workspace execution sandbox and execution engine initialised")
+				sugar.Info("workspace execution sandbox, execution engine, and validation pipeline initialised")
 			}
 
 			sugar.Info("GitHub integration and ingestion worker initialised")
@@ -371,6 +401,20 @@ func main() {
 		app.Post("/v1/internal/workspaces/:workspaceID/tool",
 			middleware.RequireInternalAuth(jwtSecret, sugar),
 			executionHandlers.ToolDispatch)
+	}
+
+	if validationHandlers != nil {
+		// Phase 8 — Validation pipeline
+		app.Post("/v1/repos/:repoID/tasks/:taskID/validate",
+			middleware.RequireAuth(sugar), validationHandlers.StartValidation)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/validation",
+			middleware.RequireAuth(sugar), validationHandlers.GetValidation)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/validation/diagnostics",
+			middleware.RequireAuth(sugar), validationHandlers.GetDiagnostics)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/validation/stream",
+			validationHandlers.StreamUpgrade,
+			websocket.New(validationHandlers.StreamWS),
+		)
 	}
 
 	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────

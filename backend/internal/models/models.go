@@ -369,6 +369,89 @@ type ExecutionCheckpoint struct {
 	CreatedAt       time.Time `json:"created_at"`
 }
 
+// ── Phase 8 — Validation models ──────────────────────────────────────────────
+
+// ValidationRun is the canonical domain object consumed by Phase 9.
+// It is assembled by ValidationRepository.GetRunWithFullResult and
+// provides a single interface over the three validation tables.
+// Phase 9 never reads validation_runs, validation_stages, or
+// validation_diagnostics directly — it only calls GetRunWithFullResult.
+type ValidationRun struct {
+	ID               string               `json:"id"`
+	TaskExecutionID  string               `json:"task_execution_id"`
+	WorkspaceID      string               `json:"workspace_id"`
+	Stack            string               `json:"stack"`
+	Language         string               `json:"language"`
+	Framework        string               `json:"framework"`
+	PackageManager   string               `json:"package_manager"`
+	ProfileID        string               `json:"profile_id"`
+	RunType          string               `json:"run_type"`   // "baseline" | "post_change"
+	BaselineRunID    *string              `json:"baseline_run_id,omitempty"`
+	BaselineEnabled  bool                 `json:"baseline_enabled"`
+	Status           string               `json:"status"`     // pending|running|passed|failed|error
+	OverallResult    *string              `json:"overall_result,omitempty"` // passed|failed_repairable|failed_requires_human
+	Error            *string              `json:"error,omitempty"`
+	StartedAt        *time.Time           `json:"started_at,omitempty"`
+	CompletedAt      *time.Time           `json:"completed_at,omitempty"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
+
+	// Populated by GetRunWithFullResult
+	Stages      []*ValidationStage      `json:"stages,omitempty"`
+	Diagnostics []*ValidationDiagnostic `json:"diagnostics,omitempty"`
+	Summary     *ValidationSummary      `json:"summary,omitempty"`
+	Baseline    *ValidationRun          `json:"baseline,omitempty"` // linked baseline run
+}
+
+// ValidationStage is one stage within a validation run.
+type ValidationStage struct {
+	ID              string     `json:"id"`
+	ValidationRunID string     `json:"validation_run_id"`
+	Stage           string     `json:"stage"`          // install|build|test|lint|format
+	SequenceNumber  int        `json:"sequence_number"` // explicit ordering for Phase 11 replay
+	Status          string     `json:"status"`
+	Command         []string   `json:"command,omitempty"`
+	ExitCode        *int       `json:"exit_code,omitempty"`
+	Stdout          *string    `json:"stdout,omitempty"`
+	Stderr          *string    `json:"stderr,omitempty"`
+	CombinedOutput  *string    `json:"combined_output,omitempty"`
+	DurationMS      *int       `json:"duration_ms,omitempty"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+}
+
+// ValidationDiagnostic is one parsed error or warning from a validation stage.
+type ValidationDiagnostic struct {
+	ID              string  `json:"id"`
+	ValidationRunID string  `json:"validation_run_id"`
+	Stage           string  `json:"stage"`
+	Severity        string  `json:"severity"`        // error|warning|info
+	Category        string  `json:"category"`        // compile_error|test_failure|...
+	FilePath        *string `json:"file_path,omitempty"`
+	LineNumber      *int    `json:"line_number,omitempty"`
+	ColumnNumber    *int    `json:"column_number,omitempty"`
+	SymbolName      *string `json:"symbol_name,omitempty"`
+	Message         string  `json:"message"`
+	RawOutput       *string `json:"raw_output,omitempty"`
+	Tool            string  `json:"tool"`           // go_compiler|go_test|eslint|...
+	Origin          string  `json:"origin"`         // stdout|stderr
+	Confidence      float32 `json:"confidence"`     // 1.0=structured; 0.5=regex; 0.3=generic
+	RepairCategory  *string `json:"repair_category,omitempty"` // auto_fixable|needs_human|unknown
+	CreatedAt       time.Time `json:"created_at"`
+}
+
+// ValidationSummary is a pre-computed summary for fast Phase 9 routing.
+type ValidationSummary struct {
+	TotalErrors       int  `json:"total_errors"`
+	TotalWarnings     int  `json:"total_warnings"`
+	BuildPassed       bool `json:"build_passed"`
+	TestsPassed       bool `json:"tests_passed"`
+	LintPassed        bool `json:"lint_passed"`
+	AutoFixableCount  int  `json:"auto_fixable_count"`
+	NeedsHumanCount   int  `json:"needs_human_count"`
+}
+
 // IngestionJob represents one attempt to index a repository at a specific commit SHA.
 // The (repo_id, commit_sha) pair is the logical snapshot key.
 // Retrieval (Phase 4+) must only read code_chunks where the associated job has

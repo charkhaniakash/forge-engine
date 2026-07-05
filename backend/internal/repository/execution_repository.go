@@ -103,15 +103,34 @@ func (r *ExecutionRepository) UpdateCurrentStep(ctx context.Context, id, stepSta
 	return err
 }
 
-// MarkCompleted transitions to completed.
-func (r *ExecutionRepository) MarkCompleted(ctx context.Context, id string) error {
+// MarkStepSkipped marks a step as skipped with a reason (blocked dependency).
+func (r *ExecutionRepository) MarkStepSkipped(ctx context.Context, id, reason string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE step_executions
+		SET status = 'skipped', deviation_note = $2, completed_at = NOW()
+		WHERE id = $1
+	`, id, reason)
+	return err
+}
+
+// MarkCompletedWithStatus transitions to a final completed status.
+// Accepts "completed" or "completed_with_deviations".
+func (r *ExecutionRepository) MarkCompletedWithStatus(ctx context.Context, id, status string) error {
+	if status != "completed" && status != "completed_with_deviations" {
+		status = "completed"
+	}
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE task_executions
-		SET status = 'completed', current_step_stable_id = NULL,
+		SET status = $2, current_step_stable_id = NULL,
 		    completed_at = NOW(), updated_at = NOW()
 		WHERE id = $1
-	`, id)
+	`, id, status)
 	return err
+}
+
+// MarkCompleted transitions to completed (alias for backward compatibility).
+func (r *ExecutionRepository) MarkCompleted(ctx context.Context, id string) error {
+	return r.MarkCompletedWithStatus(ctx, id, "completed")
 }
 
 // MarkFailed transitions to failed with an error message.

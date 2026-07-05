@@ -107,9 +107,6 @@ ACTIVE marker below.
 > Only work within this phase's scope (see Phase 8 below) until the human moves
 > this marker forward.
 
-*(Update this section only when the human says a phase is complete and to move
-on. Do not move it yourself.)*
-
 ---
 
 ## COMPLETED PHASES
@@ -153,7 +150,37 @@ on. Do not move it yourself.)*
 - Frontend: recovery banner shown when sync returns 404
 - ADR 0003: defer LangGraph adoption documented
 
-### ✅ Phase 7 — Code Modification Execution
+### ✅ Phase 8 — Intelligent Build & Validation Pipeline
+- Database: validation_runs — stack detection fields, profile_id, run_type, baseline_run_id, overall_result (migration 011)
+- Database: validation_stages — sequence_number (explicit ordering for Phase 11 replay), combined_output
+- Database: validation_diagnostics — tool, origin, confidence, symbol_name, repair_category
+- Go: ValidationProfile as the central abstraction — owns stack, sandbox image, stages, timeouts, stop-on-build-fail, optional flag
+- Go: StackDetector — detects language → framework → packageManager → profileID deterministically (no LLM)
+- Go: ValidationRepository — CRUD for all 3 tables + GetRunWithFullResult (canonical Phase 9 interface)
+- Go: AgentParseClient — POST /v1/agent/parse-stage per stage (non-streaming JSON, fast)
+- Go: ValidationOrchestrator — stage loop, per-stage parse+persist, WebSocket fan-out, overall_result classification
+- Go: ValidationHandlers — POST/GET/GET-diagnostics/WS endpoints
+- Go: forge-sandbox-go/node/python Dockerfiles — language-specific sandbox images with runtimes
+- Agent: ValidationParser — routes per stage to language-specific parsers
+- Agent: GoParser — go build (regex, confidence=1.0) + go test -json (structured, confidence=1.0)
+- Agent: NodeParser — jest --json (structured) + eslint --format json (structured)
+- Agent: PythonParser — pytest --json-report (structured) + ruff --output-format json (structured)
+- Agent: GenericParser — cross-language regex fallback (confidence=0.3), uses combined_output
+- Agent: POST /v1/agent/parse-stage — non-streaming JSON endpoint
+- Agent: parser.py — dispatches to correct parser; always builds combined from stderr+stdout when combined_output empty
+- Frontend: types/validation.ts — ValidationRun, ValidationStage, ValidationDiagnostic, ValidationSocketEvent
+- Frontend: services/api/validationApi.ts — RTK Query endpoints (getValidation, getDiagnostics, startValidation)
+- Frontend: store/slices/streamSlice.ts — validation stream bucket, labelValidationEvent
+- Frontend: constants/status.ts — VALIDATION_RUN_STATUS, VALIDATION_STAGE_STATUS, VALIDATION_OVERALL_RESULT
+- Frontend: constants/routes.ts — taskValidation route added
+- Frontend: types/websocket.ts — SocketChannel extended with 'validation'
+- Frontend: pages/Validation/Validation.tsx — full page with CSS modules, RTK Query, design tokens
+- Frontend: Validation page — stage pipeline list, live log, stage detail + command output, diagnostics table
+- Frontend: Execution page — "Validation" nav button after execution completes
+- Frontend: app/router.tsx — Validation route registered with lazy loading
+- Phase 9 interface: GetRunWithFullResult() returns canonical ValidationRun domain object — Phase 9 never reads raw tables
+
+---
 - Database: task_executions, step_executions, execution_events, code_diffs, execution_checkpoints (migration 010)
 - Go: ExecutionOrchestrator — single-step loop, Go decides every "next step", topological sort with depends_on
 - Go: AgentExecClient — POST /v1/agent/execute-step streaming NDJSON reader

@@ -9,6 +9,7 @@ from src.ingestion.router import router as ingestion_router
 from src.qa.router import router as qa_router
 from src.planning.router import router as planning_router
 from src.execution.router import router as execution_router
+from src.validation.router import router as validation_router
 
 # Configure structlog — structured JSON, ISO timestamps, trace ID on every line.
 structlog.configure(
@@ -96,6 +97,10 @@ app.include_router(planning_router)
 # ── Phase 7 — Code Modification Execution ────────────────────────────────────
 # POST /v1/agent/execute-step  (streaming NDJSON — see execution/router.py)
 app.include_router(execution_router)
+
+# ── Phase 8 — Validation Parsing ─────────────────────────────────────────────
+# POST /v1/agent/parse-stage  (JSON — see validation/router.py)
+app.include_router(validation_router)
 
 
 if __name__ == "__main__":

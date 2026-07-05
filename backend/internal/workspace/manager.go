@@ -600,6 +600,61 @@ func (m *WorkspaceManager) Stat(ctx context.Context, workspaceID, path string) (
 	}, nil
 }
 
+// ── Validation container helpers (Phase 8) ────────────────────────────────────
+
+// ProvisionValidationContainer creates an ephemeral language-specific container
+// for Phase 8 validation. The container mounts the same named volume as the
+// Phase 7 workspace so it sees the post-execution code state.
+//
+// The container is NOT tracked in the workspaces table — it is ephemeral and
+// managed entirely by the ValidationOrchestrator. The caller must call
+// DestroyValidationContainer when the validation run completes.
+func (m *WorkspaceManager) ProvisionValidationContainer(
+	ctx context.Context,
+	workspaceID string,
+	sandboxImage string,
+) (string, error) {
+	// The Phase 7 workspace volume name follows the convention set in DockerSandboxDriver.Provision.
+	volumeName := fmt.Sprintf("forge-workspace-%s", workspaceID)
+
+	cfg := WorkspaceConfig{
+		// Use a unique ID derived from the workspace ID + timestamp so container
+		// names never collide if multiple validation runs are in flight.
+		WorkspaceID:    fmt.Sprintf("%s-val-%d", workspaceID[:8], time.Now().UnixNano()/1e6),
+		Image:          sandboxImage,
+		CPULimit:       m.cfg.DefaultCPULimit,
+		MemoryLimitMB:  m.cfg.DefaultMemoryLimitMB,
+		PIDLimit:       m.cfg.DefaultPIDLimit,
+		TimeoutSeconds: m.cfg.DefaultTimeoutSeconds,
+		EnvVars: map[string]string{
+			"GIT_TERMINAL_PROMPT": "0",
+		},
+	}
+
+	// Override the volume binding so the validation container uses the existing
+	// workspace volume (not a fresh empty one).
+	info, err := m.driver.ProvisionWithVolume(ctx, cfg, volumeName)
+	if err != nil {
+		return "", fmt.Errorf("provision validation container (image=%s, volume=%s): %w", sandboxImage, volumeName, err)
+	}
+	return info.ContainerID, nil
+}
+
+// ExecInValidationContainer runs a command inside an ephemeral validation container
+// by its Docker container ID. This bypasses the workspaces table entirely.
+func (m *WorkspaceManager) ExecInValidationContainer(
+	ctx context.Context,
+	containerID string,
+	req ExecRequest,
+) (<-chan ExecutionEvent, error) {
+	return m.driver.Execute(ctx, containerID, req)
+}
+
+// DestroyValidationContainer removes an ephemeral validation container by ID.
+func (m *WorkspaceManager) DestroyValidationContainer(ctx context.Context, containerID string) error {
+	return m.driver.Destroy(ctx, containerID)
+}
+
 // Destroy tears down the workspace: stops/removes the container and updates DB.
 func (m *WorkspaceManager) Destroy(ctx context.Context, workspaceID string) error {
 	ws, err := m.wsRepo.GetByID(ctx, workspaceID)

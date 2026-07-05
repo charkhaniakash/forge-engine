@@ -29,6 +29,7 @@ const Task = lazy(() => import('@/pages/Task/Task'))
 const PlanReview = lazy(() => import('@/pages/PlanReview/PlanReview'))
 const Execution = lazy(() => import('@/pages/Execution/Execution'))
 const Workspace = lazy(() => import('@/pages/Workspace/Workspace'))
+const Validation = lazy(() => import('@/pages/Validation/Validation'))
 const Organizations = lazy(() => import('@/pages/Organizations/Organizations'))
 const Settings = lazy(() => import('@/pages/Settings/Settings'))
 
@@ -57,6 +58,7 @@ export const router = createBrowserRouter([
       { path: ROUTES.taskPlan, element: <PlanReview /> },
       { path: ROUTES.taskExecution, element: <Execution /> },
       { path: ROUTES.taskWorkspace, element: <Workspace /> },
+      { path: ROUTES.taskValidation, element: <Validation /> },
       { path: ROUTES.organizations, element: <Organizations /> },
       { path: ROUTES.settings, element: <Settings /> },
       // Future-phase placeholders.

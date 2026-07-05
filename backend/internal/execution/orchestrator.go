@@ -24,6 +24,12 @@ const (
 	stepTimeout = 15 * time.Minute
 )
 
+// ValidationTrigger is a function the ExecutionOrchestrator calls to start
+// validation automatically when execution completes. The call is non-blocking
+// (fire-and-forget goroutine). This avoids a circular import between the
+// execution and validation packages.
+type ValidationTrigger func(ctx context.Context, taskExecutionID, workspaceID, traceID string)
+
 // EventPublisher is a function that fans an execution event to the WebSocket hub.
 // Keeping it as a function type keeps the orchestrator decoupled from the WS layer.
 type EventPublisher func(taskExecutionID string, event ExecStreamEvent)
@@ -37,13 +43,14 @@ type EventPublisher func(taskExecutionID string, event ExecStreamEvent)
 //   - Go checks the control queue between every step.
 //   - The agent is stateless; it never sees the full plan.
 type ExecutionOrchestrator struct {
-	execRepo   *repository.ExecutionRepository
-	wsRepo     *repository.WorkspaceRepository
-	wsManager  *workspace.WorkspaceManager
-	agentClient *AgentExecClient
-	publisher  EventPublisher
-	jwtSecret  string
-	logger     *zap.SugaredLogger
+	execRepo        *repository.ExecutionRepository
+	wsRepo          *repository.WorkspaceRepository
+	wsManager       *workspace.WorkspaceManager
+	agentClient     *AgentExecClient
+	publisher       EventPublisher
+	validationTrigger ValidationTrigger
+	jwtSecret       string
+	logger          *zap.SugaredLogger
 }
 
 // NewExecutionOrchestrator constructs an ExecutionOrchestrator.
@@ -71,6 +78,12 @@ func NewExecutionOrchestrator(
 // Called by NewExecutionHandlers to avoid an import cycle.
 func (o *ExecutionOrchestrator) SetPublisher(pub EventPublisher) {
 	o.publisher = pub
+}
+
+// SetValidationTrigger wires the automatic post-execution validation trigger.
+// Called by NewExecutionHandlers after both orchestrators are constructed.
+func (o *ExecutionOrchestrator) SetValidationTrigger(trigger ValidationTrigger) {
+	o.validationTrigger = trigger
 }
 
 // Run executes an approved plan step-by-step. Called as a goroutine.
@@ -106,12 +119,15 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 	// Track artifacts across all steps for the final checkpoint.
 	var modifiedFiles, createdFiles, deletedFiles []string
 
+	// deviatedOrFailed tracks stable_ids of steps that deviated or failed.
+	// Any step whose depends_on contains a deviated/failed step is skipped.
+	deviatedOrFailed := map[string]bool{}
+
 	for i, step := range steps {
 		stableID, _ := step["stable_id"].(string)
 		log = log.With("step", stableID, "step_num", i+1)
 
 		// ── Control queue check ───────────────────────────────────────────────
-		// Phase 7: only "cancel" is processed. Phase 12 adds "pause".
 		if o.isCancelled(ctx, execID) {
 			log.Infow("execution_cancelled_between_steps")
 			_ = o.execRepo.MarkCancelled(ctx, execID)
@@ -119,8 +135,24 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 			return
 		}
 
-		// ── Create step_execution row ─────────────────────────────────────────
+		// ── Dependency skip check ─────────────────────────────────────────────
+		// If any prerequisite step deviated or failed, skip this step rather
+		// than executing it and producing a meaningless deviation.
 		order, _ := intFromStep(step, "order")
+		if blockedBy := o.findBlockingDep(step, deviatedOrFailed); blockedBy != "" {
+			log.Infow("step_skipped_blocked_dep",
+				"step", stableID, "blocked_by", blockedBy)
+			stepExec, err := o.execRepo.CreateStepExecution(ctx, execID, stableID, order)
+			if err == nil {
+				skipNote := fmt.Sprintf("skipped: dependency '%s' deviated or failed", blockedBy)
+				_ = o.execRepo.MarkStepSkipped(ctx, stepExec.ID, skipNote)
+				o.publishLifecycle(execID, "step_skipped", fmt.Sprintf(
+					"Step %s skipped — dependency '%s' did not complete", stableID, blockedBy))
+			}
+			// Propagate: this step is also blocked for downstream steps.
+			deviatedOrFailed[stableID] = true
+			continue
+		}
 		stepExec, err := o.execRepo.CreateStepExecution(ctx, execID, stableID, order)
 		if err != nil {
 			log.Errorw("create_step_exec_failed", "error", err)
@@ -189,7 +221,6 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 			stepErr = streamErr
 		}
 		if pipelineError || stepErr != nil {
-			// Pipeline error or stream error — mark step as failed.
 			errMsg := "execution pipeline error"
 			if stepErr != nil {
 				errMsg = stepErr.Error()
@@ -204,8 +235,6 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 			if strings.HasPrefix(stepDeviation, "execution_error:") {
 				_ = o.execRepo.MarkStepFailed(ctx, stepExec.ID,
 					strings.TrimPrefix(stepDeviation, "execution_error: "))
-				// execution_error is a retryable infrastructure failure — not fatal
-				// to the overall execution in Phase 7. Log and continue.
 				o.publishLifecycle(execID, "execution_error",
 					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
 			} else if strings.HasPrefix(stepDeviation, "requires_human:") {
@@ -218,9 +247,9 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 				_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
 				o.publishLifecycle(execID, "plan_deviation",
 					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
-				// Plan deviation is not fatal — continue with remaining steps.
-				// Phase 9 adds replanning when a deviation is detected.
 			}
+			// Mark step as blocked so downstream dependents are skipped.
+			deviatedOrFailed[stableID] = true
 		} else {
 			_ = o.execRepo.MarkStepCompleted(ctx, stepExec.ID, stepReasoning)
 		}
@@ -237,14 +266,70 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		log.Infow("step_completed", "step", stableID)
 	}
 
-	_ = o.execRepo.MarkCompleted(ctx, execID)
-	o.publishLifecycle(execID, "exec_complete", fmt.Sprintf(
-		"Execution complete — %d steps, %d files modified",
-		len(steps), len(modifiedFiles),
-	))
+	// Determine the accurate final status based on what actually happened.
+	// "completed" means every step succeeded.
+	// "completed_with_deviations" means we finished but some steps deviated/skipped.
+	// "failed" is reserved for hard infrastructure failures (handled above with early return).
+	hasDeviations := len(deviatedOrFailed) > 0
+	completedSteps := 0
+	skippedSteps := 0
+	deviatedSteps := 0
+	for _, step := range steps {
+		sid, _ := step["stable_id"].(string)
+		if deviatedOrFailed[sid] {
+			// Count deviations vs skips from the step records.
+			deviatedSteps++
+		} else {
+			completedSteps++
+		}
+	}
+	// Separate skipped from deviated using the execRepo.
+	stepExecs, _ := o.execRepo.ListStepExecutions(ctx, execID)
+	for _, se := range stepExecs {
+		if se.Status == "skipped" {
+			skippedSteps++
+			deviatedSteps-- // it was counted above as deviated, correct the count
+		}
+	}
+
+	var finalStatus, finalMsg string
+	if hasDeviations {
+		finalStatus = "completed_with_deviations"
+		finalMsg = fmt.Sprintf(
+			"Execution complete with deviations — %d/%d steps completed, %d deviated, %d skipped, %d files modified",
+			completedSteps, len(steps), deviatedSteps, skippedSteps, len(modifiedFiles),
+		)
+	} else {
+		finalStatus = "completed"
+		finalMsg = fmt.Sprintf(
+			"Execution complete — %d/%d steps completed, %d files modified",
+			completedSteps, len(steps), len(modifiedFiles),
+		)
+	}
+
+	if err := o.execRepo.MarkCompletedWithStatus(ctx, execID, finalStatus); err != nil {
+		log.Errorw("mark_completed_failed", "error", err)
+	}
+
+	o.publishLifecycle(execID, "exec_complete", finalMsg)
 	log.Infow("execution_complete",
-		"steps", len(steps),
+		"status", finalStatus,
+		"steps_total", len(steps),
+		"steps_completed", completedSteps,
+		"steps_deviated", deviatedSteps,
+		"steps_skipped", skippedSteps,
 		"modified", len(modifiedFiles))
+
+	// ── Automatic validation trigger ──────────────────────────────────────────
+	// Validation is part of the execution pipeline, not a user action.
+	// We trigger it automatically after every execution (completed or
+	// completed_with_deviations). Failed executions (hard infrastructure
+	// errors) skip validation because the workspace state is unreliable.
+	if o.validationTrigger != nil && (finalStatus == "completed" || finalStatus == "completed_with_deviations") {
+		o.publishLifecycle(execID, "validation_queued", "Execution complete — starting automatic validation")
+		log.Infow("auto_validation_triggered", "exec_id", execID)
+		go o.validationTrigger(context.Background(), execID, execCtx.WorkspaceID, execCtx.TraceID)
+	}
 }
 
 // handleStepEvent processes one event from the agent and persists it.
@@ -346,7 +431,22 @@ func (o *ExecutionOrchestrator) trackArtifact(
 	}
 }
 
-// isCancelled checks the control queue for a cancel signal.
+// findBlockingDep returns the stable_id of the first dependency that is in
+// deviatedOrFailed, or "" if all dependencies passed.
+// Each step in the ordered list has a "_dep_stable_ids" annotation injected
+// by resolveOrderedSteps — a []string of the resolved stable_ids for depends_on.
+func (o *ExecutionOrchestrator) findBlockingDep(
+	step map[string]interface{},
+	deviatedOrFailed map[string]bool,
+) string {
+	deps := extractStringSlice(step["_dep_stable_ids"])
+	for _, depStableID := range deps {
+		if deviatedOrFailed[depStableID] {
+			return depStableID
+		}
+	}
+	return ""
+}
 func (o *ExecutionOrchestrator) isCancelled(ctx context.Context, execID string) bool {
 	// Phase 7: simple DB-level check — look for status=cancelled already set.
 	exec, err := o.execRepo.GetExecution(ctx, execID)
@@ -427,6 +527,16 @@ func resolveOrderedSteps(planBody json.RawMessage) ([]map[string]interface{}, er
 				}
 			}
 			if ready {
+				// Annotate the step with resolved dependency stable_ids so the
+				// Run loop can check them against deviatedOrFailed without
+				// re-resolving the UUID→stable_id mapping.
+				depStableIDs := make([]interface{}, 0)
+				for _, depID := range deps {
+					if ds, ok := idToStableID[depID]; ok {
+						depStableIDs = append(depStableIDs, ds)
+					}
+				}
+				step["_dep_stable_ids"] = depStableIDs
 				ordered = append(ordered, step)
 				done[sid] = true
 				progress = true

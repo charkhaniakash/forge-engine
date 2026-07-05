@@ -166,6 +166,49 @@ services:
     networks:
       - forge-network
 
+  # Phase 8 — Language-specific sandbox images for validation.
+  sandbox-go:
+    build:
+      context: ../infra/sandbox
+      dockerfile: Dockerfile.go
+      tags:
+        - forge-sandbox-go:latest
+    image: forge-sandbox-go:latest
+    container_name: forge-sandbox-go-builder
+    command: echo "forge-sandbox-go image built"
+    networks:
+      - forge-network
+    depends_on:
+      - sandbox-builder
+
+  sandbox-node:
+    build:
+      context: ../infra/sandbox
+      dockerfile: Dockerfile.node
+      tags:
+        - forge-sandbox-node:latest
+    image: forge-sandbox-node:latest
+    container_name: forge-sandbox-node-builder
+    command: echo "forge-sandbox-node image built"
+    networks:
+      - forge-network
+    depends_on:
+      - sandbox-builder
+
+  sandbox-python:
+    build:
+      context: ../infra/sandbox
+      dockerfile: Dockerfile.python
+      tags:
+        - forge-sandbox-python:latest
+    image: forge-sandbox-python:latest
+    container_name: forge-sandbox-python-builder
+    command: echo "forge-sandbox-python image built"
+    networks:
+      - forge-network
+    depends_on:
+      - sandbox-builder
+
 volumes:
   postgres_data:
   clone_storage:

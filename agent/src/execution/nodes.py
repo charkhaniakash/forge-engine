@@ -52,14 +52,23 @@ Available tools:
 When done with a step, respond with:
   {"action": "complete", "summary": "what was accomplished"}
 
+IMPORTANT — already satisfied:
+  If you read the files and discover the desired state ALREADY EXISTS
+  (e.g. the import is already present, the function is already implemented,
+  the file already has the correct content), respond with:
+  {"action": "already_satisfied", "summary": "what already exists and why no change is needed"}
+  This is a SUCCESSFUL outcome, not a deviation. The step is complete with no modifications.
+  Use this instead of plan_deviation when the code already has what the step asks for.
+
 To call a tool, respond with:
   {"action": "tool", "tool": "<name>", "args": {...}, "reasoning": "why"}
 
-Use these three distinct outcomes when you cannot complete the step:
+Use these three distinct outcomes ONLY when you genuinely cannot complete the step:
 
-1. plan_deviation — the repository state no longer matches what the plan assumed.
-   Use ONLY when the codebase itself has changed (file missing, API renamed,
-   structure changed, etc.) and the approved plan needs to be reconsidered.
+1. plan_deviation — the repository structure no longer matches what the plan assumed,
+   AND the desired state does NOT already exist. Use ONLY when the codebase itself
+   has changed (file missing, API renamed, structure changed) and the approved plan
+   needs to be reconsidered. Do NOT use this when the desired change is already done.
    {"action": "plan_deviation", "message": "what the plan assumed vs. what exists now"}
 
 2. requires_human — you cannot proceed because the step needs human judgement
@@ -296,6 +305,26 @@ async def node_complete_step(state: ExecutionState) -> dict:
     }
 
 
+async def node_already_satisfied(state: ExecutionState) -> dict:
+    """The desired state already exists — no modifications needed.
+
+    This is a SUCCESSFUL completion. The step is marked complete with no diffs.
+    It does NOT block downstream dependent steps.
+    Distinct from plan_deviation: the plan was correct, the work was already done.
+    """
+    action: dict = state.get("_pending_action", {}) or {}
+    if not isinstance(action, dict):
+        action = {}
+    summary = action.get("summary", "Desired state already exists — no changes required")
+    logger.info("step_already_satisfied",
+                summary=summary, step_id=state["ctx"].step_id)
+    return {
+        "reasoning": (state.get("reasoning") or "") + "\n[already satisfied] " + summary,
+        "complete": True,
+        "_pending_action": None,
+    }
+
+
 # ── Edge routing ──────────────────────────────────────────────────────────────
 
 def route_after_reason(state: ExecutionState) -> str:
@@ -315,13 +344,15 @@ def route_after_reason(state: ExecutionState) -> str:
 
     if a == "tool":
         return "call_tool"
+    if a == "already_satisfied":
+        return "already_satisfied"
     if a == "plan_deviation":
         return "plan_deviation"
     if a == "requires_human":
         return "requires_human"
     if a == "execution_error":
         return "execution_error"
-    # Legacy "deviation" key and anything else → plan_deviation as safe default.
+    # Legacy "deviation" key → plan_deviation as safe default.
     if a == "deviation":
         return "plan_deviation"
     return "complete_step"  # "complete" or unknown

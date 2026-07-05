@@ -84,12 +84,13 @@ class ExecutionPipeline:
 
             if final_state.get("deviation"):
                 # Emit the typed terminal event from the final state.
+                # already_satisfied is NOT a deviation — skip it here.
                 dev_type = final_state.get("deviation_type") or "plan_deviation"
-                yield _event(dev_type, message=final_state["deviation"])
+                if dev_type != "already_satisfied":
+                    yield _event(dev_type, message=final_state["deviation"])
 
             summary = _extract_summary(final_state)
             yield _event("step_complete", summary=summary)
-
         except Exception as exc:
             logger.error(
                 "execution_pipeline_error",

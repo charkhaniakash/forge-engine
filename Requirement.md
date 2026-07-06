@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 8 — Intelligent Build & Validation Pipeline**
+> ### 🔵 ACTIVE PHASE: **Phase 9 — Autonomous Self-Repair & Recovery Loop**
 >
-> Only work within this phase's scope (see Phase 8 below) until the human moves
+> Only work within this phase's scope (see Phase 9 below) until the human moves
 > this marker forward.
 
 ---
@@ -159,13 +159,19 @@ ACTIVE marker below.
 - Go: ValidationRepository — CRUD for all 3 tables + GetRunWithFullResult (canonical Phase 9 interface)
 - Go: AgentParseClient — POST /v1/agent/parse-stage per stage (non-streaming JSON, fast)
 - Go: ValidationOrchestrator — stage loop, per-stage parse+persist, WebSocket fan-out, overall_result classification
+- Go: ValidationOrchestrator — automatic validation trigger after execution (no manual trigger required)
+- Go: ValidationOrchestrator — cascading failure prevention (skip build/test/lint if install fails)
+- Go: ValidationOrchestrator — OOM exit code (134) diagnostic classification as environment_error
+- Go: ValidationOrchestrator — already_satisfied deviation type (doesn't block downstream execution)
+- Go: ValidationOrchestrator — diagnostic logging for ESLint investigation (pwd, eslintignore, workspace files)
 - Go: ValidationHandlers — POST/GET/GET-diagnostics/WS endpoints
+- Go: Docker memory limit increased (512MB → 2GB) to prevent OOM during npm ci
 - Go: forge-sandbox-go/node/python Dockerfiles — language-specific sandbox images with runtimes
-- Agent: ValidationParser — routes per stage to language-specific parsers
+- Agent: ValidationParser — routes per stage to language-specific parsers with fallback to generic_parser
 - Agent: GoParser — go build (regex, confidence=1.0) + go test -json (structured, confidence=1.0)
 - Agent: NodeParser — jest --json (structured) + eslint --format json (structured)
 - Agent: PythonParser — pytest --json-report (structured) + ruff --output-format json (structured)
-- Agent: GenericParser — cross-language regex fallback (confidence=0.3), uses combined_output
+- Agent: GenericParser — cross-language regex fallback with category mapping (compile_error, test_failure, runtime_panic, lint_violation)
 - Agent: POST /v1/agent/parse-stage — non-streaming JSON endpoint
 - Agent: parser.py — dispatches to correct parser; always builds combined from stderr+stdout when combined_output empty
 - Frontend: types/validation.ts — ValidationRun, ValidationStage, ValidationDiagnostic, ValidationSocketEvent
@@ -176,7 +182,7 @@ ACTIVE marker below.
 - Frontend: types/websocket.ts — SocketChannel extended with 'validation'
 - Frontend: pages/Validation/Validation.tsx — full page with CSS modules, RTK Query, design tokens
 - Frontend: Validation page — stage pipeline list, live log, stage detail + command output, diagnostics table
-- Frontend: Execution page — "Validation" nav button after execution completes
+- Frontend: Execution page — "View validation report" button (validation is automatic)
 - Frontend: app/router.tsx — Validation route registered with lazy loading
 - Phase 9 interface: GetRunWithFullResult() returns canonical ValidationRun domain object — Phase 9 never reads raw tables
 
@@ -861,6 +867,9 @@ Responsibilities include:
 - Enforce token and cost budgets
 - Enforce workspace boundaries
 - Execute Phase 7 and Phase 8 between repair iterations
+- Compare Baseline Validation against every Post-Change Validation
+- Repair only newly introduced regressions by default
+- Reuse the original Baseline Validation throughout the repair session
 - Persist complete repair history
 - Persist every repair attempt
 - Persist generated diffs

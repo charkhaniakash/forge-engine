@@ -314,6 +314,59 @@ func (o *ValidationOrchestrator) runStage(
 	for _, cmd := range stageCfg.Commands {
 		stageCtx, cancel := context.WithTimeout(ctx, time.Duration(stageCfg.TimeoutSeconds)*time.Second)
 
+		// Diagnostic logging for ESLint investigation
+		if stageCfg.Name == "lint" && len(cmd) > 0 && cmd[0] == "npx" {
+			// Log working directory
+			pwdCh, _ := o.wsManager.ExecInValidationContainer(stageCtx, validationContainerID, workspace.ExecRequest{
+				Command:        []string{"pwd"},
+				TimeoutSeconds: 5,
+			})
+			pwdOutput := ""
+			for ev := range pwdCh {
+				if ev.Type == "stdout" {
+					pwdOutput += string(ev.Data)
+				}
+			}
+			log.Infow("lint_diagnostic_working_dir", "pwd", strings.TrimSpace(pwdOutput))
+
+			// Check for .eslintignore
+			ignoreCh, _ := o.wsManager.ExecInValidationContainer(stageCtx, validationContainerID, workspace.ExecRequest{
+				Command:        []string{"cat", ".eslintignore"},
+				TimeoutSeconds: 5,
+			})
+			ignoreOutput := ""
+			for ev := range ignoreCh {
+				if ev.Type == "stdout" {
+					ignoreOutput += string(ev.Data)
+				}
+			}
+			if ignoreOutput != "" {
+				log.Infow("lint_diagnostic_eslintignore", "content", strings.TrimSpace(ignoreOutput))
+			} else {
+				log.Infow("lint_diagnostic_eslintignore", "content", "not_found")
+			}
+
+			// List workspace contents (first 50 files)
+			lsCh, _ := o.wsManager.ExecInValidationContainer(stageCtx, validationContainerID, workspace.ExecRequest{
+				Command:        []string{"find", ".", "-type", "f", "-name", "*.js", "-o", "-name", "*.jsx", "-o", "-name", "*.ts", "-o", "-name", "*.tsx"},
+				TimeoutSeconds: 10,
+			})
+			lsOutput := ""
+			for ev := range lsCh {
+				if ev.Type == "stdout" {
+					lsOutput += string(ev.Data)
+				}
+			}
+			files := strings.Split(lsOutput, "\n")
+			fileCount := len(files)
+			filePreview := ""
+			if fileCount > 0 {
+				previewCount := min(20, fileCount)
+				filePreview = strings.Join(files[:previewCount], "\n")
+			}
+			log.Infow("lint_diagnostic_workspace_files", "count", fileCount, "preview", filePreview)
+		}
+
 		ch, execErr := o.wsManager.ExecInValidationContainer(stageCtx, validationContainerID, workspace.ExecRequest{
 			Command:        cmd,
 			WorkingDir:     ".",

@@ -78,8 +78,9 @@ def build_execution_graph() -> StateGraph:
         "receive_result",
         route_after_result,
         {
-            "reason":        "reason",
-            "complete_step": "complete_step",
+            "reason":           "reason",
+            "complete_step":    "complete_step",
+            "already_satisfied":"already_satisfied",
         },
     )
 

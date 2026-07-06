@@ -15,13 +15,33 @@ import (
 // ParseStageRequest is the body sent to POST /v1/agent/parse-stage.
 // One request per completed stage — not a batch of all stages.
 type ParseStageRequest struct {
-	ValidationRunID string `json:"validation_run_id"`
-	Stage           string `json:"stage"`
-	Stack           string `json:"stack"`
-	ExitCode        int    `json:"exit_code"`
-	Stdout          string `json:"stdout"`
-	Stderr          string `json:"stderr"`
-	CombinedOutput  string `json:"combined_output"`
+	ValidationRunID string        `json:"validation_run_id"`
+	Stage           string        `json:"stage"`
+	Stack           string        `json:"stack"`
+	ExitCode        int           `json:"exit_code"`
+	Stdout          string        `json:"stdout"`
+	Stderr          string        `json:"stderr"`
+	CombinedOutput  string        `json:"combined_output"`
+	// RepoEvidence carries repository metadata gathered on stage failure.
+	// Only populated when ExitCode != 0 — zero overhead on passing stages.
+	RepoEvidence    *RepoEvidence `json:"repo_evidence,omitempty"`
+}
+
+// RepoEvidence is repository metadata collected by the orchestrator when a
+// stage fails. It gives the agent's FailureDiagnosis enough context to
+// distinguish environment failures from code failures.
+type RepoEvidence struct {
+	// Node.js
+	NodeVersionFile        string `json:"node_version_file,omitempty"`        // .nvmrc / .node-version contents
+	EnginesField           string `json:"engines_field,omitempty"`            // package.json "engines" as JSON
+	NodeVersionInSandbox   string `json:"node_version_in_sandbox,omitempty"` // output of `node --version`
+	// Python
+	PythonRequires         string `json:"python_requires,omitempty"`
+	// Go
+	GoVersionInMod         string `json:"go_version_in_mod,omitempty"`
+	// General
+	LockfilePresent        bool   `json:"lockfile_present"`
+	LockfileName           string `json:"lockfile_name,omitempty"`
 }
 
 // AgentParseClient calls POST /v1/agent/parse-stage (JSON, non-streaming).

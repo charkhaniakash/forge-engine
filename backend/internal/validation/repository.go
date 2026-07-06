@@ -494,10 +494,16 @@ type AgentDiagnostic struct {
 
 // AgentParseResponse is what POST /v1/agent/parse-stage returns.
 type AgentParseResponse struct {
-	Diagnostics  []AgentDiagnostic `json:"diagnostics"`
-	StagePassed  bool              `json:"stage_passed"`
-	ErrorCount   int               `json:"error_count"`
-	WarningCount int               `json:"warning_count"`
+	Diagnostics        []AgentDiagnostic `json:"diagnostics"`
+	StagePassed        bool              `json:"stage_passed"`
+	ErrorCount         int               `json:"error_count"`
+	WarningCount       int               `json:"warning_count"`
+	// FailureOrigin classifies whether the failure is "code", "environment",
+	// or "unknown". Only meaningful when StagePassed=false.
+	FailureOrigin      string            `json:"failure_origin,omitempty"`
+	// FailureExplanation is a human-readable description of why the stage
+	// failed and what category of failure it is.
+	FailureExplanation string            `json:"failure_explanation,omitempty"`
 }
 
 // ── null helpers ──────────────────────────────────────────────────────────────

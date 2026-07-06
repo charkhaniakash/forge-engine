@@ -448,21 +448,19 @@ func (o *ValidationOrchestrator) publish(runID, eventType string, payload map[st
 
 // computeOverallResult classifies the validation run for Phase 9 consumption.
 //
-// Rules (in priority order):
-//  1. Any required stage failed or timed out → at minimum failed_repairable.
-//  2. Any diagnostic with repair_category=needs_human → failed_requires_human.
-//  3. Any error-severity diagnostic → failed_repairable.
-//  4. Otherwise → passed.
+// Priority order:
+//  1. Any stage failed with failure_origin=environment → "failed_environment"
+//     (environment cannot reproduce the project — not a code failure)
+//  2. Any stage failed with needs_human diagnostic → "failed_requires_human"
+//  3. Any stage failed (code error) → "failed_repairable"
+//  4. All stages passed or skipped → "passed"
 //
-// Critically: stage exit codes and statuses are the PRIMARY signal.
-// Diagnostic counts are secondary — a stage can fail with zero diagnostics
-// (e.g. exit 127 / tool not found) and must still produce a failed result.
+// Stage statuses are the PRIMARY signal. Diagnostic counts are secondary.
 func computeOverallResult(stages []*models.ValidationStage, s *models.ValidationSummary) string {
 	// Check stage statuses first — this catches infrastructure failures
 	// (exit 127, timeouts) that produce no structured diagnostics.
 	for _, st := range stages {
 		if st.Status == "failed" || st.Status == "error" {
-			// A required stage (not skipped) failed → at minimum repairable.
 			if s != nil && s.NeedsHumanCount > 0 {
 				return "failed_requires_human"
 			}
@@ -481,6 +479,36 @@ func computeOverallResult(stages []*models.ValidationStage, s *models.Validation
 		return "failed_repairable"
 	}
 	return "passed"
+}
+
+// computeOverallResultWithOrigin extends computeOverallResult to distinguish
+// environment failures from code failures. Called when failure_origin data
+// is available from the parse-stage responses.
+func computeOverallResultWithOrigin(stages []*models.ValidationStage, s *models.ValidationSummary, hasEnvironmentFailure bool) string {
+	allFailed := false
+	for _, st := range stages {
+		if st.Status == "failed" || st.Status == "error" {
+			allFailed = true
+			break
+		}
+	}
+	if !allFailed {
+		if s == nil || (s.TotalErrors == 0 && s.NeedsHumanCount == 0) {
+			return "passed"
+		}
+		if s.NeedsHumanCount > 0 {
+			return "failed_requires_human"
+		}
+		return "failed_repairable"
+	}
+	// A stage failed. Distinguish environment vs code.
+	if hasEnvironmentFailure {
+		return "failed_environment"
+	}
+	if s != nil && s.NeedsHumanCount > 0 {
+		return "failed_requires_human"
+	}
+	return "failed_repairable"
 }
 
 func truncateStr(s string, max int) string {

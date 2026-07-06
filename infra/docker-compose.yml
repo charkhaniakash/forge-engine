@@ -60,7 +60,7 @@ services:
       # Phase 6 — execution sandbox
       SANDBOX_IMAGE: forge-sandbox:latest
       SANDBOX_CPU_LIMIT: "1.0"
-      SANDBOX_MEMORY_LIMIT_MB: "512"
+      SANDBOX_MEMORY_LIMIT_MB: "2048"
       SANDBOX_PID_LIMIT: "128"
       SANDBOX_TIMEOUT_SECONDS: "1800"
       SANDBOX_REAPER_INTERVAL_SECONDS: "300"

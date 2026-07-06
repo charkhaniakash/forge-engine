@@ -5,6 +5,7 @@ export type ValidationOverallResult =
   | 'passed'
   | 'failed_repairable'
   | 'failed_requires_human'
+  | 'failed_environment'
 
 export type ValidationStageStatus =
   | 'pending'

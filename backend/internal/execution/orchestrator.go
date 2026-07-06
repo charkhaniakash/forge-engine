@@ -237,19 +237,27 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 					strings.TrimPrefix(stepDeviation, "execution_error: "))
 				o.publishLifecycle(execID, "execution_error",
 					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
+				deviatedOrFailed[stableID] = true
 			} else if strings.HasPrefix(stepDeviation, "requires_human:") {
 				_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
 				o.publishLifecycle(execID, "requires_human",
 					fmt.Sprintf("Step %s requires human input: %s",
 						stableID, strings.TrimPrefix(stepDeviation, "requires_human: ")))
+				deviatedOrFailed[stableID] = true
+			} else if strings.HasPrefix(stepDeviation, "already_satisfied:") {
+				// Already satisfied - no changes needed, don't block downstream
+				_ = o.execRepo.MarkStepCompleted(ctx, stepExec.ID, stepReasoning)
+				o.publishLifecycle(execID, "already_satisfied",
+					fmt.Sprintf("Step %s already satisfied: %s",
+						stableID, strings.TrimPrefix(stepDeviation, "already_satisfied: ")))
+				// Do NOT mark as deviatedOrFailed - allow downstream to continue
 			} else {
 				// plan_deviation (including legacy deviation events)
 				_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
 				o.publishLifecycle(execID, "plan_deviation",
 					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
+				deviatedOrFailed[stableID] = true
 			}
-			// Mark step as blocked so downstream dependents are skipped.
-			deviatedOrFailed[stableID] = true
 		} else {
 			_ = o.execRepo.MarkStepCompleted(ctx, stepExec.ID, stepReasoning)
 		}

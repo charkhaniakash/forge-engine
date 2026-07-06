@@ -200,9 +200,23 @@ func (o *ValidationOrchestrator) Run(
 
 	// 5. Run stages in sequence inside the validation container.
 	buildPassed := true
+	installPassed := true // track install separately to skip downstream stages
+	hasEnvironmentFailure := false // tracks if any stage was diagnosed as environment failure
 	for _, stageCfg := range profile.Stages {
+		// Skip stages if install failed (cascading failure prevention)
+		if !installPassed && !stageCfg.RunOnBuildFail {
+			stage, _ := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, nil)
+			if stage != nil {
+				_ = o.repo.SkipStage(ctx, stage.ID)
+			}
+			o.publish(run.ID, "stage_skipped", map[string]interface{}{
+				"stage":  stageCfg.Name,
+				"reason": "install_failed",
+			})
+			continue
+		}
+		// Skip stages if build failed (existing logic)
 		if !buildPassed && !stageCfg.RunOnBuildFail {
-			// Skip this stage — build failed and it's not configured to run anyway.
 			stage, _ := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, nil)
 			if stage != nil {
 				_ = o.repo.SkipStage(ctx, stage.ID)
@@ -214,12 +228,16 @@ func (o *ValidationOrchestrator) Run(
 			continue
 		}
 
-		stagePassed, err := o.runStage(ctx, run, profile, stageCfg, validationContainerID, log)
+		stagePassed, isEnvFailure, err := o.runStage(ctx, run, profile, stageCfg, validationContainerID, log)
 		if err != nil {
 			log.Errorw("stage_run_error", "stage", stageCfg.Name, "error", err)
-			// Non-fatal for the overall pipeline — continue to next stage.
 		}
-
+		if isEnvFailure {
+			hasEnvironmentFailure = true
+		}
+		if stageCfg.Name == "install" && !stagePassed {
+			installPassed = false
+		}
 		if stageCfg.Name == "build" && !stagePassed {
 			buildPassed = false
 		}
@@ -233,7 +251,7 @@ func (o *ValidationOrchestrator) Run(
 		return err
 	}
 
-	overallResult := computeOverallResult(fullRun.Stages, fullRun.Summary)
+	overallResult := computeOverallResultWithOrigin(fullRun.Stages, fullRun.Summary, hasEnvironmentFailure)
 	if overallResult == "passed" {
 		_ = o.repo.MarkCompleted(ctx, run.ID, overallResult)
 	} else {
@@ -257,8 +275,9 @@ func (o *ValidationOrchestrator) Run(
 }
 
 // runStage executes one stage inside the validation container, persists results,
-// calls the agent to parse output, and streams events.
-// Returns (stagePassed, error).
+// collects repo evidence on failure, calls the agent to parse and diagnose output,
+// and streams events.
+// Returns (stagePassed, isEnvironmentFailure, error).
 func (o *ValidationOrchestrator) runStage(
 	ctx context.Context,
 	run *models.ValidationRun,
@@ -266,7 +285,7 @@ func (o *ValidationOrchestrator) runStage(
 	stageCfg StageConfig,
 	validationContainerID string,
 	log *zap.SugaredLogger,
-) (bool, error) {
+) (bool, bool, error) {
 	log = log.With("stage", stageCfg.Name, "seq", stageCfg.SequenceNumber)
 
 	var allCmds []string
@@ -275,7 +294,7 @@ func (o *ValidationOrchestrator) runStage(
 	}
 	stage, err := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, allCmds)
 	if err != nil {
-		return false, fmt.Errorf("create stage row: %w", err)
+		return false, false, fmt.Errorf("create stage row: %w", err)
 	}
 	_ = o.repo.MarkStageRunning(ctx, stage.ID)
 
@@ -292,7 +311,6 @@ func (o *ValidationOrchestrator) runStage(
 	timedOut := false
 	start := time.Now()
 
-	// Execute each command in the stage sequentially inside the validation container.
 	for _, cmd := range stageCfg.Commands {
 		stageCtx, cancel := context.WithTimeout(ctx, time.Duration(stageCfg.TimeoutSeconds)*time.Second)
 
@@ -309,9 +327,9 @@ func (o *ValidationOrchestrator) runStage(
 					"stage":  stageCfg.Name,
 					"reason": "tool_not_found",
 				})
-				return true, nil
+				return true, false, nil
 			}
-			return false, fmt.Errorf("exec %v: %w", cmd, execErr)
+			return false, false, fmt.Errorf("exec %v: %w", cmd, execErr)
 		}
 
 		for event := range ch {
@@ -340,9 +358,6 @@ func (o *ValidationOrchestrator) runStage(
 		}
 		cancel()
 
-		// Exit 127 = executable not found in the container.
-		// Optional stages (e.g. lint) are silently skipped.
-		// Required stages produce a structured environment_error diagnostic.
 		if exitCode == 127 {
 			if stageCfg.Optional {
 				_ = o.repo.SkipStage(ctx, stage.ID)
@@ -350,10 +365,8 @@ func (o *ValidationOrchestrator) runStage(
 					"stage":  stageCfg.Name,
 					"reason": "tool_not_found",
 				})
-				return true, nil
+				return true, false, nil
 			}
-			// Required stage: synthesize a diagnostic so the UI shows something
-			// meaningful instead of an empty diagnostics panel.
 			toolName := ""
 			if len(cmd) > 0 {
 				toolName = cmd[0]
@@ -365,10 +378,10 @@ func (o *ValidationOrchestrator) runStage(
 				Tool:           "validation_orchestrator",
 				Origin:         "stderr",
 				Confidence:     1.0,
-				RepairCategory: "needs_human",
+				RepairCategory: "environment_limitation",
 			}
 			_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{infraDiag})
-			break // stop running further commands in this stage
+			break
 		}
 
 		if exitCode != 0 || timedOut {
@@ -383,7 +396,6 @@ func (o *ValidationOrchestrator) runStage(
 	stderr := truncateStr(stderrBuf.String(), 256*1024)
 	combined := truncateStr(combinedBuf.String(), 512*1024)
 
-	// Synthesize a timeout diagnostic so the user knows what happened.
 	if timedOut {
 		timeoutDiag := AgentDiagnostic{
 			Severity:       "error",
@@ -392,9 +404,23 @@ func (o *ValidationOrchestrator) runStage(
 			Tool:           "validation_orchestrator",
 			Origin:         "stderr",
 			Confidence:     1.0,
-			RepairCategory: "needs_human",
+			RepairCategory: "environment_limitation",
 		}
 		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{timeoutDiag})
+	}
+
+	// Exit code 134 = SIGABRT (often caused by OOM in Node.js)
+	if exitCode == 134 {
+		oomDiag := AgentDiagnostic{
+			Severity:       "error",
+			Category:       "environment_error",
+			Message:        fmt.Sprintf("Stage '%s' failed with exit code 134 (SIGABRT). This is typically caused by out-of-memory conditions during npm ci or similar operations. The validation container may need more memory.", stageCfg.Name),
+			Tool:           "validation_orchestrator",
+			Origin:         "stderr",
+			Confidence:     1.0,
+			RepairCategory: "environment_limitation",
+		}
+		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{oomDiag})
 	}
 
 	_ = o.repo.CompleteStage(ctx, stage.ID, exitCode, stdout, stderr, combined, durationMS, stagePassed)
@@ -406,9 +432,16 @@ func (o *ValidationOrchestrator) runStage(
 		"passed":      stagePassed,
 	})
 
-	// Call the agent to parse structured output (only for non-infrastructure failures).
-	// If exitCode == 127 we already synthesized the diagnostic above; skip parsing.
+	// ── Parse output via agent with failure diagnosis ─────────────────────────
+	// Skip if exit 127 (already synthesized above) or timeout.
+	isEnvironmentFailure := false
 	if exitCode != 127 && !timedOut {
+		// Collect repo evidence only when the stage failed — zero overhead on success.
+		var evidence *RepoEvidence
+		if !stagePassed {
+			evidence = o.collectRepoEvidence(ctx, run.WorkspaceID, validationContainerID, run.Stack)
+		}
+
 		parseReq := ParseStageRequest{
 			ValidationRunID: run.ID,
 			Stage:           stageCfg.Name,
@@ -417,6 +450,7 @@ func (o *ValidationOrchestrator) runStage(
 			Stdout:          stdout,
 			Stderr:          stderr,
 			CombinedOutput:  combined,
+			RepoEvidence:    evidence,
 		}
 
 		parseResp, parseErr := o.parseClient.ParseStage(ctx, parseReq)
@@ -424,20 +458,169 @@ func (o *ValidationOrchestrator) runStage(
 			log.Warnw("stage_parse_failed", "error", parseErr)
 		}
 
-		if parseResp != nil && len(parseResp.Diagnostics) > 0 {
-			if insertErr := o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, parseResp.Diagnostics); insertErr != nil {
-				log.Warnw("insert_diagnostics_failed", "error", insertErr)
+		if parseResp != nil {
+			// Propagate environment failure classification.
+			if parseResp.FailureOrigin == "environment" {
+				isEnvironmentFailure = true
+				log.Infow("stage_environment_failure_diagnosed",
+					"stage", stageCfg.Name,
+					"explanation", parseResp.FailureExplanation)
+				o.publish(run.ID, "stage_environment_failure", map[string]interface{}{
+					"stage":       stageCfg.Name,
+					"explanation": parseResp.FailureExplanation,
+				})
 			}
-			o.publish(run.ID, "stage_diagnostics", map[string]interface{}{
-				"stage":    stageCfg.Name,
-				"count":    len(parseResp.Diagnostics),
-				"errors":   parseResp.ErrorCount,
-				"warnings": parseResp.WarningCount,
-			})
+			if len(parseResp.Diagnostics) > 0 {
+				if insertErr := o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, parseResp.Diagnostics); insertErr != nil {
+					log.Warnw("insert_diagnostics_failed", "error", insertErr)
+				}
+				o.publish(run.ID, "stage_diagnostics", map[string]interface{}{
+					"stage":          stageCfg.Name,
+					"count":          len(parseResp.Diagnostics),
+					"errors":         parseResp.ErrorCount,
+					"warnings":       parseResp.WarningCount,
+					"failure_origin": parseResp.FailureOrigin,
+				})
+			}
 		}
+	} else if exitCode == 127 {
+		// exit 127 is always an environment failure.
+		isEnvironmentFailure = true
 	}
 
-	return stagePassed, nil
+	return stagePassed, isEnvironmentFailure, nil
+}
+
+// collectRepoEvidence gathers repository metadata from the workspace to help
+// the agent's FailureDiagnosis classify the failure origin.
+// All reads are best-effort — missing files produce empty strings, never errors.
+func (o *ValidationOrchestrator) collectRepoEvidence(
+	ctx context.Context,
+	workspaceID, validationContainerID, stack string,
+) *RepoEvidence {
+	ev := &RepoEvidence{}
+	evCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	switch strings.ToLower(stack) {
+	case "javascript", "node":
+		// .nvmrc or .node-version
+		if data, err := o.wsManager.ReadFile(evCtx, workspaceID, ".nvmrc"); err == nil {
+			ev.NodeVersionFile = strings.TrimSpace(string(data))
+		} else if data, err := o.wsManager.ReadFile(evCtx, workspaceID, ".node-version"); err == nil {
+			ev.NodeVersionFile = strings.TrimSpace(string(data))
+		}
+		// package.json engines field
+		if data, err := o.wsManager.ReadFile(evCtx, workspaceID, "package.json"); err == nil {
+			ev.EnginesField = extractJSONField(string(data), "engines")
+		}
+		// Runtime version inside the validation container
+		ch, err := o.wsManager.ExecInValidationContainer(evCtx, validationContainerID, workspace.ExecRequest{
+			Command:        []string{"node", "--version"},
+			TimeoutSeconds: 5,
+		})
+		if err == nil {
+			var verBuf strings.Builder
+			for event := range ch {
+				if event.Type == "stdout" {
+					verBuf.Write(event.Data)
+				}
+			}
+			ev.NodeVersionInSandbox = strings.TrimSpace(verBuf.String())
+		}
+		// Lockfile
+		for _, lf := range []string{"package-lock.json", "yarn.lock", "pnpm-lock.yaml"} {
+			if ok, _ := o.wsManager.Exists(evCtx, workspaceID, lf); ok {
+				ev.LockfilePresent = true
+				ev.LockfileName = lf
+				break
+			}
+		}
+
+	case "python":
+		if data, err := o.wsManager.ReadFile(evCtx, workspaceID, "pyproject.toml"); err == nil {
+			ev.PythonRequires = extractTOMLField(string(data), "requires-python")
+		}
+		if ok, _ := o.wsManager.Exists(evCtx, workspaceID, "Pipfile.lock"); ok {
+			ev.LockfilePresent = true
+			ev.LockfileName = "Pipfile.lock"
+		}
+
+	case "go":
+		if data, err := o.wsManager.ReadFile(evCtx, workspaceID, "go.mod"); err == nil {
+			ev.GoVersionInMod = extractGoVersion(string(data))
+		}
+		if ok, _ := o.wsManager.Exists(evCtx, workspaceID, "go.sum"); ok {
+			ev.LockfilePresent = true
+			ev.LockfileName = "go.sum"
+		}
+	}
+	return ev
+}
+
+// ── Evidence extraction helpers ───────────────────────────────────────────────
+
+// extractJSONField extracts a top-level field from a JSON string without
+// importing a full JSON parser — avoids having to unmarshal the whole object.
+func extractJSONField(jsonStr, field string) string {
+	// Look for "field": { ... } or "field": "..."
+	// Simple approach: find the key and extract the value as a raw substring.
+	key := `"` + field + `"`
+	idx := strings.Index(jsonStr, key)
+	if idx < 0 {
+		return ""
+	}
+	after := strings.TrimSpace(jsonStr[idx+len(key):])
+	if !strings.HasPrefix(after, ":") {
+		return ""
+	}
+	val := strings.TrimSpace(after[1:])
+	if strings.HasPrefix(val, "{") {
+		// Object value — find matching closing brace.
+		depth := 0
+		for i, ch := range val {
+			if ch == '{' {
+				depth++
+			} else if ch == '}' {
+				depth--
+				if depth == 0 {
+					return val[:i+1]
+				}
+			}
+		}
+	}
+	if strings.HasPrefix(val, `"`) {
+		end := strings.Index(val[1:], `"`)
+		if end >= 0 {
+			return val[1 : end+1]
+		}
+	}
+	return ""
+}
+
+// extractTOMLField extracts a simple key = "value" field from a TOML string.
+func extractTOMLField(tomlStr, field string) string {
+	for _, line := range strings.Split(tomlStr, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, field) {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				return strings.Trim(strings.TrimSpace(parts[1]), `"'`)
+			}
+		}
+	}
+	return ""
+}
+
+// extractGoVersion extracts the "go X.Y" version line from go.mod.
+func extractGoVersion(gomod string) string {
+	for _, line := range strings.Split(gomod, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "go ") {
+			return strings.TrimPrefix(line, "go ")
+		}
+	}
+	return ""
 }
 
 func (o *ValidationOrchestrator) publish(runID, eventType string, payload map[string]interface{}) {

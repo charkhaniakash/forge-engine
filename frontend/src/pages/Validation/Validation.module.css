@@ -301,3 +301,20 @@
   letter-spacing: 0.06em;
   background: var(--surface-inset);
 }
+
+/* ── Environment limitation banner ─────────────────────────────── */
+.resultBanner.failed_environment {
+  background: var(--info-subtle, #e8f4fd);
+  color: var(--info, #0969da);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+}
+
+.resultNote {
+  font-size: var(--text-sm);
+  font-weight: var(--font-normal);
+  color: inherit;
+  opacity: 0.85;
+  line-height: 1.5;
+}

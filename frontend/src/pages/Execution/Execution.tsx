@@ -189,7 +189,7 @@ export function Execution() {
                 ) : valRun?.status === 'running' ? (
                   <>Validation — Running…</>
                 ) : (
-                  <>View validation</>
+                  <>View validation report</>
                 )}
               </Button>
             )}

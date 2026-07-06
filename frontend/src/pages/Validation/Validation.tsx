@@ -208,13 +208,20 @@ export function Validation() {
                   name={
                     run.overall_result === 'passed'
                       ? 'check'
-                      : run.overall_result === 'failed_requires_human'
+                      : run.overall_result === 'failed_environment'
                         ? 'alert'
-                        : 'x'
+                        : run.overall_result === 'failed_requires_human'
+                          ? 'alert'
+                          : 'x'
                   }
                   size={16}
                 />
                 {resolveStatus(VALIDATION_OVERALL_RESULT, run.overall_result).label}
+                {run.overall_result === 'failed_environment' && (
+                  <span className={styles.resultNote}>
+                    The code change may be correct. The project could not be validated because the execution environment could not reproduce the required runtime.
+                  </span>
+                )}
               </div>
             )}
 

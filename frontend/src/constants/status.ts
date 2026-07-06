@@ -98,6 +98,7 @@ export const VALIDATION_OVERALL_RESULT: Record<string, StatusMeta> = {
   passed: meta('success', 'Passed'),
   failed_repairable: meta('warning', 'Failed — repairable'),
   failed_requires_human: meta('danger', 'Failed — needs human'),
+  failed_environment: meta('info', 'Environment limitation'),
 }
 
 export const RISK_LEVEL: Record<string, StatusMeta> = {

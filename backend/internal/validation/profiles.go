@@ -24,6 +24,9 @@ type StageConfig struct {
 	// RunOnBuildFail: if true, this stage runs even if the build stage failed.
 	// Lint is typically true; test is false.
 	RunOnBuildFail bool
+	// RunOnInstallFail: if true, this stage runs even if the install stage failed.
+	// Most stages should be false (install failure is a hard dependency).
+	RunOnInstallFail bool
 	// Optional: if the tool is not found (exit 127), skip rather than fail.
 	Optional bool
 }
@@ -57,6 +60,7 @@ var profiles = map[string]*ValidationProfile{
 				Commands:       [][]string{{"go", "test", "-json", "-timeout", "120s", "./..."}},
 				TimeoutSeconds: 180,
 				RunOnBuildFail: false,
+				RunOnInstallFail: false,
 			},
 			{
 				Name:           "lint",
@@ -64,6 +68,7 @@ var profiles = map[string]*ValidationProfile{
 				Commands:       [][]string{{"golangci-lint", "run", "--out-format", "json"}},
 				TimeoutSeconds: 120,
 				RunOnBuildFail: true,
+				RunOnInstallFail: false,
 				Optional:       true,
 			},
 		},
@@ -97,6 +102,7 @@ var profiles = map[string]*ValidationProfile{
 				Commands:       [][]string{{"npm", "test", "--", "--json", "--forceExit"}},
 				TimeoutSeconds: 180,
 				RunOnBuildFail: false,
+				RunOnInstallFail: false,
 			},
 			{
 				Name:           "lint",
@@ -104,6 +110,7 @@ var profiles = map[string]*ValidationProfile{
 				Commands:       [][]string{{"npx", "eslint", ".", "--format", "json"}},
 				TimeoutSeconds: 60,
 				RunOnBuildFail: true,
+				RunOnInstallFail: false,
 				Optional:       true,
 			},
 		},
@@ -128,14 +135,14 @@ var profiles = map[string]*ValidationProfile{
 				SequenceNumber: 2,
 				Commands:       [][]string{{"pytest", "--json-report", "--json-report-file=.pytest-report.json", "-v"}},
 				TimeoutSeconds: 180,
-				RunOnBuildFail: false,
+				RunOnInstallFail: false,
 			},
 			{
 				Name:           "lint",
 				SequenceNumber: 3,
 				Commands:       [][]string{{"ruff", "check", ".", "--output-format", "json"}},
 				TimeoutSeconds: 60,
-				RunOnBuildFail: true,
+				RunOnInstallFail: false,
 				Optional:       true,
 			},
 		},
@@ -160,14 +167,14 @@ var profiles = map[string]*ValidationProfile{
 				SequenceNumber: 2,
 				Commands:       [][]string{{"pytest", "--json-report", "--json-report-file=.pytest-report.json", "-v"}},
 				TimeoutSeconds: 180,
-				RunOnBuildFail: false,
+				RunOnInstallFail: false,
 			},
 			{
 				Name:           "lint",
 				SequenceNumber: 3,
 				Commands:       [][]string{{"ruff", "check", ".", "--output-format", "json"}},
 				TimeoutSeconds: 60,
-				RunOnBuildFail: true,
+				RunOnInstallFail: false,
 				Optional:       true,
 			},
 		},

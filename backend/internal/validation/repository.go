@@ -488,7 +488,7 @@ type AgentDiagnostic struct {
 	RawOutput      string  `json:"raw_output,omitempty"`
 	Tool           string  `json:"tool"`
 	Origin         string  `json:"origin"`
-	Confidence     float32 `json:"confidence"`
+	Confidence     float64 `json:"confidence"`
 	RepairCategory string  `json:"repair_category,omitempty"`
 }
 

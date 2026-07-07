@@ -11,6 +11,7 @@ import (
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/validation/environment"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
 
@@ -58,6 +59,7 @@ type ValidationOrchestrator struct {
 	wsManager   *workspace.WorkspaceManager
 	parseClient *AgentParseClient
 	detector    *StackDetector
+	envDetector *environment.Detector
 	publisher   ValidationEventPublisher
 	logger      *zap.SugaredLogger
 }
@@ -75,6 +77,7 @@ func NewValidationOrchestrator(
 		wsManager:   wsManager,
 		parseClient: parseClient,
 		detector:    detector,
+		envDetector: environment.NewDetector(),
 		publisher:   publisher,
 		logger:      logger,
 	}
@@ -204,7 +207,7 @@ func (o *ValidationOrchestrator) Run(
 	hasEnvironmentFailure := false // tracks if any stage was diagnosed as environment failure
 	for _, stageCfg := range profile.Stages {
 		// Skip stages if install failed (cascading failure prevention)
-		if !installPassed && !stageCfg.RunOnBuildFail {
+		if !installPassed && !stageCfg.RunOnInstallFail {
 			stage, _ := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, nil)
 			if stage != nil {
 				_ = o.repo.SkipStage(ctx, stage.ID)
@@ -449,6 +452,26 @@ func (o *ValidationOrchestrator) runStage(
 	stderr := truncateStr(stderrBuf.String(), 256*1024)
 	combined := truncateStr(combinedBuf.String(), 512*1024)
 
+	// ── Environment failure detection (before agent parsing) ─────────────────
+	// Detect infrastructure failures that should not be treated as code errors.
+	// This runs BEFORE the agent parser to ensure correct classification.
+	isEnvironmentFailure := false
+	envResult := o.envDetector.Detect(combined, exitCode, stageCfg.Name)
+	if envResult != nil && envResult.IsFailure() {
+		envDiag := AgentDiagnostic{
+			Severity:       "error",
+			Category:       envResult.Category,
+			Message:        envResult.Message,
+			Tool:           "validation_orchestrator",
+			Origin:         "stderr",
+			Confidence:     envResult.Confidence,
+			RepairCategory: "environment_limitation",
+		}
+		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{envDiag})
+		// Mark as environment failure so we skip agent parsing
+		isEnvironmentFailure = true
+	}
+
 	if timedOut {
 		timeoutDiag := AgentDiagnostic{
 			Severity:       "error",
@@ -460,6 +483,7 @@ func (o *ValidationOrchestrator) runStage(
 			RepairCategory: "environment_limitation",
 		}
 		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{timeoutDiag})
+		isEnvironmentFailure = true
 	}
 
 	// Exit code 134 = SIGABRT (often caused by OOM in Node.js)
@@ -474,6 +498,7 @@ func (o *ValidationOrchestrator) runStage(
 			RepairCategory: "environment_limitation",
 		}
 		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{oomDiag})
+		isEnvironmentFailure = true
 	}
 
 	_ = o.repo.CompleteStage(ctx, stage.ID, exitCode, stdout, stderr, combined, durationMS, stagePassed)
@@ -486,9 +511,9 @@ func (o *ValidationOrchestrator) runStage(
 	})
 
 	// ── Parse output via agent with failure diagnosis ─────────────────────────
-	// Skip if exit 127 (already synthesized above) or timeout.
-	isEnvironmentFailure := false
-	if exitCode != 127 && !timedOut {
+	// Skip if environment failure detected (above), exit 127 (already synthesized), or timeout.
+	// Environment failures are already classified correctly by the orchestrator.
+	if !isEnvironmentFailure && exitCode != 127 && !timedOut {
 		// Collect repo evidence only when the stage failed — zero overhead on success.
 		var evidence *RepoEvidence
 		if !stagePassed {

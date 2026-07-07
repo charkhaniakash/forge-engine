@@ -79,7 +79,7 @@ func (h *ValidationHandlers) StartValidation(c *fiber.Ctx) error {
 		"workspace_id", exec.WorkspaceID, "trace_id", traceID)
 
 	go func() {
-		if err := h.orchestrator.Run(
+		if _, err := h.orchestrator.Run(
 			context.Background(),
 			exec.ID, exec.WorkspaceID, traceID, "post_change",
 		); err != nil {

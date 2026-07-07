@@ -23,6 +23,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
+	"github.com/charkhaniakash/forge-engine/backend/internal/repair"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 	"github.com/charkhaniakash/forge-engine/backend/internal/validation"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
@@ -96,6 +97,7 @@ func main() {
 	var workspaceHandlers *handlers.WorkspaceHandlers
 	var executionHandlers *handlers.ExecutionHandlers
 	var validationHandlers *handlers.ValidationHandlers
+	var repairHandlers *repair.Handlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -249,16 +251,90 @@ func main() {
 					valRepo, workItemRepo, execRepo, valOrchestrator, sugar,
 				)
 
-				// Wire automatic validation trigger into the execution orchestrator.
+				// ── Repair (Phase 9) ──────────────────────────────────────────
+				// Built after validation so the repair orchestrator can re-run validation.
+				agentRepairClient := repair.NewAgentRepairClient(agentURL, jwtSecret)
+				repairPolicy := repair.NewRepairPolicy()
+				repairRepo := repair.NewRepairRepository(dbConn)
+				repairOrch := repair.NewOrchestrator(
+					repairRepo, valRepo, execRepo, workItemRepo, wsManager,
+					valOrchestrator, agentRepairClient, repairPolicy,
+					jwtSecret, sugar,
+				)
+				repairHandlers = repair.NewHandlers(repairRepo, repairOrch, sugar)
+
+				// Wire automatic validation + repair trigger into the execution orchestrator.
 				// When execution finishes, it fires this closure in a goroutine.
-				// The closure is defined here so it captures valOrchestrator without
-				// creating a circular package dependency.
+				// The closure orchestrates Phase 8 → Phase 9 based on validation results.
+				// 
+				// Architecture:
+				//   Phase 8 (ValidationOrchestrator) produces validation results.
+				//   This trigger consumes those results and decides whether Phase 9 begins.
+				//   Phase 8 never decides whether Phase 9 runs - only THIS layer does.
 				execOrchestrator.SetValidationTrigger(func(ctx context.Context, taskExecutionID, workspaceID, traceID string) {
-					if err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change"); err != nil {
-						sugar.Errorw("auto_validation_failed",
-							"task_execution_id", taskExecutionID,
-							"error", err,
+					log := sugar.With(
+						"task_execution_id", taskExecutionID,
+						"workspace_id", workspaceID,
+						"trace_id", traceID,
+					)
+
+					// Work item transitions require work_items.id, not task_executions.id.
+					exec, execErr := execRepo.GetExecution(ctx, taskExecutionID)
+					if execErr != nil {
+						log.Errorw("validation_trigger_exec_load_failed", "error", execErr)
+						return
+					}
+					workItemID := exec.WorkItemID
+					log = log.With("work_item_id", workItemID)
+
+					// Phase 8: Validation
+					log.Info("phase_8_auto_validation_starting")
+					validationRun, err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change")
+					if err != nil {
+						log.Errorw("phase_8_validation_failed", "error", err)
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, fmt.Sprintf("validation error: %v", err))
+						return
+					}
+
+					if validationRun.OverallResult == nil {
+						log.Errorw("validation_overall_result_is_nil",
+							"validation_run_id", validationRun.ID,
 						)
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, "validation completed without overall_result")
+						return
+					}
+
+					overallResult := *validationRun.OverallResult
+					log.Infow("phase_8_validation_complete", "overall_result", overallResult)
+
+					// Phase 9 Decision Point
+					// This is where the task orchestration layer decides whether repair begins.
+					switch overallResult {
+					case "passed":
+						log.Info("validation_passed_marking_done")
+						_ = workItemRepo.TransitionToDone(ctx, workItemID)
+
+					case "failed_repairable":
+						// Phase 9: RepairOrchestrator evaluates RepairPolicy and transitions
+						// to repairing only when repair is permitted.
+						log.Info("validation_failed_repairable_triggering_repair")
+						if err := repairOrch.Run(ctx, taskExecutionID, workspaceID, validationRun.ID, traceID); err != nil {
+							log.Errorw("phase_9_repair_failed", "error", err)
+						} else {
+							log.Info("phase_9_repair_complete")
+						}
+
+					case "failed_environment":
+						log.Warn("validation_failed_environment_marking_done")
+						_ = workItemRepo.TransitionToDone(ctx, workItemID)
+
+					case "failed_requires_human":
+						log.Warn("validation_failed_requires_human_marking_failed")
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, "validation failed: requires human intervention")
+
+					default:
+						log.Warnw("unexpected_overall_result", "result", overallResult)
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, fmt.Sprintf("unexpected validation result: %s", overallResult))
 					}
 				})
 
@@ -414,6 +490,23 @@ func main() {
 		app.Get("/v1/repos/:repoID/tasks/:taskID/validation/stream",
 			validationHandlers.StreamUpgrade,
 			websocket.New(validationHandlers.StreamWS),
+		)
+	}
+
+	if repairHandlers != nil {
+		// Phase 9 — Autonomous Self-Repair
+		app.Get("/v1/repair/sessions/:id",
+			middleware.RequireAuth(sugar), repairHandlers.GetSession)
+		app.Get("/v1/repair/sessions/by-task/:taskExecutionID",
+			middleware.RequireAuth(sugar), repairHandlers.GetSessionByTaskExecution)
+		app.Get("/v1/repair/sessions/:id/attempts",
+			middleware.RequireAuth(sugar), repairHandlers.ListAttempts)
+		app.Get("/v1/repair/sessions/:id/checkpoints",
+			middleware.RequireAuth(sugar), repairHandlers.ListCheckpoints)
+		// WebSocket — live repair events
+		app.Get("/v1/repair/sessions/:id/stream",
+			repairHandlers.StreamUpgrade,
+			websocket.New(repairHandlers.StreamWS),
 		)
 	}
 

@@ -162,6 +162,7 @@ const (
 	WorkItemStatusPlanReady      = "plan_ready"
 	WorkItemStatusPlanApproved   = "plan_approved"
 	WorkItemStatusExecuting      = "executing" // Phase 7+
+	WorkItemStatusRepairing      = "repairing" // Phase 9+
 	WorkItemStatusDone           = "done"
 	WorkItemStatusFailed         = "failed"
 	WorkItemStatusCancelled      = "cancelled"
@@ -472,4 +473,62 @@ type IngestionJob struct {
     Error           *string    `json:"error,omitempty"`
     CreatedAt       time.Time  `json:"created_at"`
     UpdatedAt       time.Time  `json:"updated_at"`
+}
+
+// ── Phase 9 — Repair models ───────────────────────────────────────────────────
+
+// RepairSession tracks one autonomous repair loop for a task.
+type RepairSession struct {
+	ID                       string     `json:"id"`
+	TaskExecutionID          string     `json:"task_execution_id"`
+	WorkspaceID              string     `json:"workspace_id"`
+	TriggerValidationRunID   string     `json:"trigger_validation_run_id"`
+	MaxAttempts              int        `json:"max_attempts"`
+	AttemptsUsed             int        `json:"attempts_used"`
+	MaxDurationSecs          int        `json:"max_duration_secs"`
+	Status                   string     `json:"status"` // running|completed|exhausted|escalated|cancelled
+	FinalValidationRunID     *string    `json:"final_validation_run_id,omitempty"`
+	EscalationReason         *string    `json:"escalation_reason,omitempty"`
+	StartedAt                time.Time  `json:"started_at"`
+	CompletedAt              *time.Time `json:"completed_at,omitempty"`
+	CreatedAt                time.Time  `json:"created_at"`
+}
+
+// RepairAttempt is one RepairGraph invocation within a session.
+type RepairAttempt struct {
+	ID               string          `json:"id"`
+	RepairSessionID  string          `json:"repair_session_id"`
+	AttemptNumber    int             `json:"attempt_number"`
+	DiagnosticsInput json.RawMessage `json:"diagnostics_input"`
+	Reasoning        json.RawMessage `json:"reasoning,omitempty"`
+	Strategy         *string         `json:"strategy,omitempty"`
+	Confidence       *float64        `json:"confidence,omitempty"`
+	ModifiedFiles    []string        `json:"modified_files"`
+	ValidationRunID  *string         `json:"validation_run_id,omitempty"`
+	Outcome          *string         `json:"outcome,omitempty"` // improved|no_change|regressed|error
+	AgentVersion     string          `json:"agent_version"`
+	StartedAt        time.Time       `json:"started_at"`
+	CompletedAt      *time.Time      `json:"completed_at,omitempty"`
+	CreatedAt        time.Time       `json:"created_at"`
+}
+
+// RepairCheckpoint is a workspace snapshot after each repair attempt.
+type RepairCheckpoint struct {
+	ID                   string          `json:"id"`
+	RepairSessionID      string          `json:"repair_session_id"`
+	AttemptNumber        int             `json:"attempt_number"`
+	ModifiedFiles        []string        `json:"modified_files"`
+	CreatedFiles         []string        `json:"created_files"`
+	DeletedFiles         []string        `json:"deleted_files"`
+	UnifiedDiffs         json.RawMessage `json:"unified_diffs"` // [{file_path, diff_unified, lines_added, lines_removed}]
+	ContainerSnapshotID  *string         `json:"container_snapshot_id,omitempty"`
+	CreatedAt            time.Time       `json:"created_at"`
+}
+
+// RepairDiff is one entry in a RepairCheckpoint.UnifiedDiffs array.
+type RepairDiff struct {
+	FilePath     string `json:"file_path"`
+	DiffUnified  string `json:"diff_unified"`
+	LinesAdded   int    `json:"lines_added"`
+	LinesRemoved int    `json:"lines_removed"`
 }

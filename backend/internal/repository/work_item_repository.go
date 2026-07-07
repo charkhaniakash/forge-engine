@@ -71,6 +71,39 @@ func (r *WorkItemRepository) TransitionToExecuting(ctx context.Context, id strin
 	return err
 }
 
+// TransitionToRepairing moves a work item from executing → repairing.
+// Called by RepairOrchestrator when repair loop starts.
+func (r *WorkItemRepository) TransitionToRepairing(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items
+		SET status = $2, updated_at = NOW()
+		WHERE id = $1 AND status = $3
+	`, id, models.WorkItemStatusRepairing, models.WorkItemStatusExecuting)
+	return err
+}
+
+// TransitionToDone moves a work item to done status.
+// Called when execution completes successfully or repair succeeds.
+func (r *WorkItemRepository) TransitionToDone(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items
+		SET status = $2, error = NULL, updated_at = NOW()
+		WHERE id = $1 AND status IN ($3, $4)
+	`, id, models.WorkItemStatusDone, models.WorkItemStatusExecuting, models.WorkItemStatusRepairing)
+	return err
+}
+
+// TransitionToFailed moves a work item to failed status with an error message.
+// Called when execution or repair fails.
+func (r *WorkItemRepository) TransitionToFailed(ctx context.Context, id, errMsg string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items
+		SET status = $2, error = $3, updated_at = NOW()
+		WHERE id = $1 AND status IN ($4, $5)
+	`, id, models.WorkItemStatusFailed, errMsg, models.WorkItemStatusExecuting, models.WorkItemStatusRepairing)
+	return err
+}
+
 // GetByIDInternal returns a work item by UUID without org scoping.
 // Only used by internal goroutines (e.g. the planning background goroutine).
 // Never expose this to HTTP handlers.

@@ -99,7 +99,7 @@ func (o *ValidationOrchestrator) Run(
 	ctx context.Context,
 	taskExecutionID, workspaceID, traceID string,
 	runType string,
-) error {
+) (*models.ValidationRun, error) {
 	ctx = ingestion.WithTraceID(ctx, traceID)
 	log := o.logger.With("task_exec_id", taskExecutionID, "workspace_id", workspaceID)
 
@@ -107,7 +107,7 @@ func (o *ValidationOrchestrator) Run(
 	detection, err := o.detector.Detect(ctx, workspaceID)
 	if err != nil {
 		log.Errorw("stack_detection_failed", "error", err)
-		return fmt.Errorf("stack detection: %w", err)
+		return nil, fmt.Errorf("stack detection: %w", err)
 	}
 	log.Infow("stack_detected",
 		"stack", detection.Language,
@@ -117,13 +117,13 @@ func (o *ValidationOrchestrator) Run(
 	// 2. Load validation profile — this tells us which sandbox image to use.
 	profile := GetProfile(detection.ProfileID)
 	if profile == nil {
-		return fmt.Errorf("no validation profile found for %s", detection.ProfileID)
+		return nil, fmt.Errorf("no validation profile found for %s", detection.ProfileID)
 	}
 
 	// 3. Create run row before provisioning the container (captures detection result).
 	run, err := o.repo.CreateRun(ctx, taskExecutionID, workspaceID, detection, runType)
 	if err != nil {
-		return fmt.Errorf("create validation run: %w", err)
+		return nil, fmt.Errorf("create validation run: %w", err)
 	}
 	log = log.With("validation_run_id", run.ID)
 
@@ -147,7 +147,7 @@ func (o *ValidationOrchestrator) Run(
 		o.publish(run.ID, "error", map[string]interface{}{
 			"message": fmt.Sprintf("Could not start %s validation container: %v", profile.SandboxImage, provisionErr),
 		})
-		return provisionErr
+		return nil, provisionErr
 	}
 	// Always destroy the ephemeral container when done — even on error.
 	defer func() {
@@ -194,7 +194,7 @@ func (o *ValidationOrchestrator) Run(
 					"message": fmt.Sprintf("'%s' not found in container from image %s. Run 'docker compose build sandbox-%s' to rebuild the image.", primaryTool, profile.SandboxImage, detection.Language),
 				})
 				pfCancel()
-				return fmt.Errorf("toolchain missing: %s not found in %s", primaryTool, profile.SandboxImage)
+				return nil, fmt.Errorf("toolchain missing: %s not found in %s", primaryTool, profile.SandboxImage)
 			}
 			log.Infow("validation_toolchain_verified", "tool", primaryTool, "image", profile.SandboxImage)
 		}
@@ -251,7 +251,7 @@ func (o *ValidationOrchestrator) Run(
 	if err != nil {
 		log.Errorw("get_full_result_failed", "error", err)
 		_ = o.repo.MarkError(ctx, run.ID, err.Error())
-		return err
+		return nil, err
 	}
 
 	overallResult := computeOverallResultWithOrigin(fullRun.Stages, fullRun.Summary, hasEnvironmentFailure)
@@ -274,7 +274,7 @@ func (o *ValidationOrchestrator) Run(
 	})
 
 	log.Infow("validation_complete", "overall", overallResult)
-	return nil
+	return fullRun, nil
 }
 
 // runStage executes one stage inside the validation container, persists results,

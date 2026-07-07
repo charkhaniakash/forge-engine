@@ -856,11 +856,12 @@ The repair engine fixes implementation code only unless the user explicitly inst
 
 ---
 
-**Backend (Go):**
+## Backend (Go)
 
 Owns the complete repair orchestration pipeline.
 
 Responsibilities include:
+
 - Start autonomous repair sessions
 - Enforce maximum repair attempts
 - Enforce execution time limits
@@ -883,13 +884,69 @@ The Backend is the final authority for repair safety. The Agent can never exceed
 
 ---
 
-**Agent (Python):**
+## Agent (Python)
 
 Responsible only for repair reasoning.
 
-The repair workflow is implemented internally as a **LangGraph-based Repair Graph**. The graph manages repair state, branching decisions, retries, strategy selection, and checkpointing while remaining an internal implementation detail of the Python Agent. The Go Backend continues interacting with the Agent exclusively through the existing ToolCallRequest / ToolCallResult contract.
+The repair workflow is implemented internally as a **LangGraph-based Repair Graph**. The graph manages repair state, branching decisions, retries, strategy selection, repository investigation, and checkpointing while remaining an internal implementation detail of the Python Agent.
+
+The Go Backend continues interacting with the Agent exclusively through the existing **ToolCallRequest / ToolCallResult** contract.
+
+### LangGraph Integration Principles
+
+The Repair Graph is an internal reasoning engine—not a workflow engine.
+
+The Go Backend must treat every Repair Graph invocation as an opaque reasoning request.
+
+The Go Backend must never depend on or have knowledge of:
+
+- LangGraph nodes
+- Graph edges
+- Internal graph state
+- Branching logic
+- Retry logic
+- Checkpoints
+- Conditional routing
+- Graph implementation details
+
+From the Go Backend's perspective, every repair attempt is simply:
+
+```
+Repair Request
+        ↓
+Python Agent
+ (Internal Repair Graph)
+        ↓
+Structured Repair Result
+```
+
+All workflow orchestration remains exclusively owned by the Go Backend, including:
+
+- Repair iteration control
+- Validation retries
+- Execution ordering
+- Budget enforcement
+- Session lifecycle
+- Workspace execution
+- Persistence
+- Streaming
+- Escalation
+
+The Repair Graph reasons about **one repair attempt only**.
+
+Once reasoning is complete, it returns control back to the Go Backend.
+
+The Repair Graph never:
+
+- Executes Phase 7
+- Executes Phase 8
+- Starts another repair iteration
+- Invokes another LangGraph
+- Decides when the repair session ends
+- Controls workflow sequencing
 
 Responsibilities include:
+
 - Analyze structured validation failures
 - Perform root-cause analysis
 - Gather additional repository context when necessary
@@ -910,11 +967,13 @@ Responsibilities include:
 
 ---
 
-**Definition of Done:**
+## Definition of Done
 
 Given a validation failure:
 
 - The repair workflow executes through the LangGraph-based Repair Graph.
+- The Go Backend remains the only orchestration engine for the repair session.
+- The Repair Graph performs reasoning for one repair attempt and always returns control to Go.
 - Validation failures are classified before repair begins.
 - Root-cause analysis is performed prior to every repair attempt.
 - Only approved repair categories are attempted automatically.

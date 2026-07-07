@@ -14,7 +14,7 @@ export const repositoryApi = baseApi.injectEndpoints({
           : [{ type: 'Repository' as const, id: 'LIST' }],
     }),
 
-    getInstallUrl: builder.query<{ url: string }, void>({
+    getInstallUrl: builder.query<{ install_url: string; expires_at: string }, void>({
       query: () => '/github/install/url',
     }),
 

@@ -46,7 +46,7 @@ export function Repositories() {
   async function onInstall() {
     try {
       const res = await getInstallUrl().unwrap()
-      if (res.url) window.location.href = res.url
+      if (res.install_url) window.location.href = res.install_url
     } catch {
       toast.error('Could not start GitHub App install')
     }

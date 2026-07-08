@@ -293,7 +293,7 @@ func scanSession(sc scanner) (*models.RepairSession, error) {
 
 func scanAttempt(sc scanner) (*models.RepairAttempt, error) {
 	var a models.RepairAttempt
-	var reasoning json.RawMessage
+	var reasoning []byte // scan as []byte to handle NULL JSONB correctly
 	var strategy, validationRunID, outcome sql.NullString
 	var confidence sql.NullFloat64
 	var completedAt sql.NullTime
@@ -308,8 +308,9 @@ func scanAttempt(sc scanner) (*models.RepairAttempt, error) {
 		}
 		return nil, err
 	}
+	// Only assign reasoning when non-NULL — json.RawMessage cannot hold nil
 	if len(reasoning) > 0 {
-		a.Reasoning = reasoning
+		a.Reasoning = json.RawMessage(reasoning)
 	}
 	if strategy.Valid {
 		a.Strategy = &strategy.String

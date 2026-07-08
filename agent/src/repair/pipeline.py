@@ -4,32 +4,18 @@ Phase 9 — RepairPipeline
 Runs the RepairGraph and streams NDJSON events back to Go.
 This file is the ONLY place in Phase 9 where tool calls are executed.
 
-Architectural contract:
-    Nodes set _pending_tool_call = {tool, args, reasoning}.
-    The pipeline's tool-broker loop:
-        1. Detects _pending_tool_call in the LangGraph snapshot
-        2. Emits tool_call NDJSON event to Go
-        3. Calls RepairToolClient → Go executes workspace tool
-        4. Receives result; emits tool_result NDJSON event
-        5. Injects result into state as _last_tool_result
-        6. Resumes the graph with updated state
+Tool broker design (interrupt_before + MemorySaver):
+    The graph is compiled with interrupt_before=["call_tool_gather","call_tool_fix"]
+    and a MemorySaver checkpointer. When LangGraph hits an intercepted node it
+    pauses and returns control here. The pipeline executes the tool via
+    RepairToolClient, injects _last_tool_result into the state, then calls
+    astream() again with the SAME thread_id — LangGraph resumes from the
+    checkpoint rather than restarting from the entry point.
 
-    The graph is driven via LangGraph's interrupt_before mechanism on the two
-    placeholder tool-execution nodes (call_tool_gather, call_tool_fix).
-    When LangGraph reaches either node, the pipeline intercepts, executes the
-    tool, injects the result, and resumes. The placeholder nodes themselves are
-    no-ops — they never see or execute tool calls.
+    Without a checkpointer, every astream() call would restart from gather_context,
+    causing the apply loop to repeat indefinitely.
 
-    Go sees:  reasoning | tool_call | tool_result | repair_complete | cannot_repair | error
-    Go never sees LangGraph internals.
-
-NDJSON event shapes:
-    {"version":1,"event":"reasoning",      "request_id":"...","message":"..."}
-    {"version":1,"event":"tool_call",      "request_id":"...","tool":"...","args":{...},"tool_call_id":"..."}
-    {"version":1,"event":"tool_result",    "request_id":"...","tool":"...","tool_call_id":"...","success":true,"error":""}
-    {"version":1,"event":"repair_complete","request_id":"...","strategy":"...","confidence":0.9,...}
-    {"version":1,"event":"cannot_repair",  "request_id":"...","cannot_repair_reason":"..."}
-    {"version":1,"event":"error",          "request_id":"...","error":"..."}
+Go sees:  reasoning | tool_call | tool_result | repair_complete | cannot_repair | error
 """
 from __future__ import annotations
 
@@ -38,26 +24,28 @@ import time
 import uuid
 from typing import AsyncGenerator, Dict, Any
 
+from langgraph.checkpoint.memory import MemorySaver
+
 from .graph import build_repair_graph, REPAIR_GRAPH_VERSION
 from .models import RepairRequest, RepairState
 from .tool_client import RepairToolClient
 
 logger = logging.getLogger(__name__)
 
-# Nodes that are intercepted by the pipeline before execution.
-# The pipeline executes the tool and injects the result before these nodes run.
 _TOOL_INTERCEPTED_NODES = {"call_tool_gather", "call_tool_fix"}
 
 
 class RepairPipeline:
     """
     Stateless pipeline — one instance per process.
-    Each call to run() creates a fresh graph invocation with no cross-attempt state.
+    Each call to run() creates a fresh attempt-scoped thread with its own
+    MemorySaver checkpointer so LangGraph can resume after each tool interrupt.
     """
 
     def __init__(self) -> None:
-        # Graph compiled with interrupt_before on the two tool-execution placeholders
-        # so the pipeline can intercept, execute the tool, and resume.
+        # NOTE: the graph is compiled WITHOUT interrupt_before here.
+        # We pass interrupt_before per-invocation via the config, together with
+        # a fresh MemorySaver, so each attempt gets isolated checkpoint state.
         self._graph = build_repair_graph(
             interrupt_before=list(_TOOL_INTERCEPTED_NODES)
         )
@@ -67,16 +55,6 @@ class RepairPipeline:
         request: RepairRequest,
         agent_token: str,
     ) -> AsyncGenerator[Dict[str, Any], None]:
-        """
-        Execute the RepairGraph for ONE attempt and stream NDJSON events.
-
-        Args:
-            request:     RepairRequest from Go
-            agent_token: JWT for calling Go's internal tool API
-
-        Yields:
-            NDJSON-compatible dicts (one per event)
-        """
         ctx = request.repair_context
         t0 = time.monotonic()
 
@@ -84,7 +62,7 @@ class RepairPipeline:
                     repair_session_id=ctx.repair_session_id,
                     attempt_number=ctx.attempt_number)
 
-        state: RepairState = {
+        initial_state: RepairState = {
             "ctx": ctx,
             "diagnostics": request.diagnostics,
             "previous_attempt_summaries": request.previous_attempts,
@@ -110,13 +88,13 @@ class RepairPipeline:
 
         tool_client = RepairToolClient(
             workspace_id=ctx.workspace_id,
-            repair_session_id=ctx.repair_session_id,
+            task_execution_id=ctx.task_execution_id,
             token=agent_token,
         )
 
         try:
             async for event in self._run_with_tool_broker(
-                state, request.request_id, tool_client
+                initial_state, request.request_id, tool_client
             ):
                 yield event
         except Exception as exc:
@@ -135,67 +113,81 @@ class RepairPipeline:
         tool_client: RepairToolClient,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
-        Core execution loop with tool broker.
+        Core execution loop.
 
-        Uses LangGraph interrupt_before on call_tool_gather and call_tool_fix
-        to pause the graph before those nodes, execute the tool externally,
-        inject the result into state, and resume.
-
-        The graph never touches the network. The pipeline is the sole HTTP caller.
+        Uses a fresh MemorySaver checkpointer per attempt. Each time the graph
+        hits an interrupt_before node, LangGraph saves a checkpoint.  The
+        pipeline executes the tool, injects the result via graph.update_state(),
+        then calls astream() again with the same thread_id. LangGraph resumes
+        from the saved checkpoint — it does NOT restart from gather_context.
         """
-        current_state = dict(initial_state)
-        config = {"recursion_limit": 50}
-        MAX_TOOL_ROUNDS = 40  # total tool calls allowed per attempt
+        # Fresh checkpointer per attempt — no state leaks between attempts.
+        checkpointer = MemorySaver()
+        thread_id = f"repair-{request_id}"
+        config = {
+            "configurable": {"thread_id": thread_id},
+            "recursion_limit": 100,
+        }
+
+        # Rebuild the graph with this attempt's checkpointer.
+        # We rebuild here so each attempt has a completely isolated checkpoint store.
+        graph = build_repair_graph(
+            interrupt_before=list(_TOOL_INTERCEPTED_NODES),
+            checkpointer=checkpointer,
+        )
+
+        MAX_TOOL_ROUNDS = 40
+        input_state = initial_state  # first invocation passes the full state
+        last_reasoning = ""
 
         for round_num in range(MAX_TOOL_ROUNDS + 1):
-            # Run the graph forward; it will stop at the next interrupt_before
-            # node or run to completion if no more tool calls are needed.
-            interrupted_at = None
+            interrupted = False
             final_this_run = False
 
-            async for snapshot in self._graph.astream(current_state, config=config):
+            async for snapshot in graph.astream(input_state, config=config):
                 for node_name, update in snapshot.items():
+                    if node_name == "__interrupt__":
+                        interrupted = True
+                        continue
                     if not isinstance(update, dict):
                         continue
 
-                    # Merge update into current state
-                    current_state.update(update)
-
-                    # Emit reasoning events
+                    # Emit reasoning fragments
                     new_reasoning = update.get("reasoning")
-                    if new_reasoning and isinstance(new_reasoning, str):
+                    if new_reasoning and isinstance(new_reasoning, str) and new_reasoning != last_reasoning:
                         last_line = new_reasoning.strip().split("\n")[-1].strip()
                         if last_line:
                             yield _ev("reasoning", request_id, message=last_line)
+                        last_reasoning = new_reasoning
 
-                    # Terminal node reached
-                    if current_state.get("complete") or current_state.get("cannot_repair"):
+                    if update.get("complete") or update.get("cannot_repair"):
                         final_this_run = True
-
-                # Check if graph paused at an intercepted node
-                # LangGraph signals interrupt via __interrupt__ key in snapshot
-                if "__interrupt__" in snapshot:
-                    interrupted_at = snapshot["__interrupt__"]
-                    break
 
             if final_this_run:
                 break
 
-            # Graph ran to END with no interrupt → done
-            if interrupted_at is None:
+            if not interrupted:
+                # Graph ran to END with no interrupt
                 break
 
-            # We're interrupted before a tool-execution node.
-            # _pending_tool_call was set by the node that ran just before the interrupt.
-            pending = current_state.get("_pending_tool_call")
+            # Graph is paused at an intercepted node.
+            # Get current state from the checkpointer to find _pending_tool_call.
+            current = await graph.aget_state(config)
+            pending = current.values.get("_pending_tool_call")
+
+            # The node the graph is paused *before* (interrupt_before). We must
+            # attribute the result injection to THIS node so LangGraph resumes at
+            # its successor (receive_*_result). Without as_node, aupdate_state
+            # defaults to the last executed node (apply_fix / gather_context),
+            # which re-runs that node's routing and never advances the loop.
+            paused_node = current.next[0] if current.next else None
+
             if not pending:
-                logger.warning("interrupted_but_no_pending_tool_call",
-                               interrupted_at=str(interrupted_at))
+                logger.warning("repair_interrupted_but_no_pending_tool_call")
                 break
 
-            # Execute the tool (pipeline owns all I/O)
+            # Execute the tool externally
             tool_call_id = str(uuid.uuid4())
-
             yield _ev("tool_call", request_id,
                       tool=pending["tool"],
                       args=pending["args"],
@@ -213,28 +205,41 @@ class RepairPipeline:
                       success=tool_result["success"],
                       error=tool_result.get("error") or "")
 
-            # Inject result and clear pending call — graph will continue from here
-            current_state["_pending_tool_call"] = None
-            current_state["_last_tool_result"] = tool_result
+            # Inject the result into the checkpoint via update_state, attributed
+            # to the interrupted node (as_node). This marks call_tool_fix /
+            # call_tool_gather as executed so the graph resumes at their
+            # successor (receive_fix_result / receive_context_result) instead of
+            # re-running apply_fix / gather_context and looping on the same edit.
+            update_values = {
+                "_pending_tool_call": None,
+                "_last_tool_result": tool_result,
+            }
+            if paused_node:
+                await graph.aupdate_state(config, update_values, as_node=paused_node)
+            else:
+                await graph.aupdate_state(config, update_values)
 
-        # Emit final event
-        if current_state.get("cannot_repair"):
+            # Subsequent astream calls pass None (resume from checkpoint, not restart)
+            input_state = None
+
+        # Read final state and emit terminal event
+        final = await graph.aget_state(config)
+        vals = final.values if final else {}
+
+        if vals.get("cannot_repair"):
             yield _ev("cannot_repair", request_id,
-                      cannot_repair_reason=current_state.get("cannot_repair_reason", "Unknown"))
-        elif current_state.get("complete"):
+                      cannot_repair_reason=vals.get("cannot_repair_reason", "Unknown"))
+        elif vals.get("complete"):
             yield _ev("repair_complete", request_id,
                       agent_version=REPAIR_GRAPH_VERSION,
-                      strategy=current_state.get("strategy", "unknown"),
-                      confidence=current_state.get("confidence", 0.0),
-                      modified_files=current_state.get("modified_files") or [],
-                      summary=current_state.get("repair_summary", ""))
+                      strategy=vals.get("strategy", "unknown"),
+                      confidence=vals.get("confidence", 0.0),
+                      modified_files=vals.get("modified_files") or [],
+                      summary=vals.get("repair_summary", ""))
         else:
             yield _ev("error", request_id,
                       error="Repair loop exhausted without completing")
 
 
-# ── Module-level helper ───────────────────────────────────────────────────────
-
 def _ev(event_type: str, request_id: str, **kwargs) -> dict:
-    """Build a versioned NDJSON event dict."""
     return {"version": 1, "event": event_type, "request_id": request_id, **kwargs}

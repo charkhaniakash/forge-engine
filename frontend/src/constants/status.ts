@@ -114,3 +114,11 @@ export function resolveStatus(
   if (!key) return meta('neutral', 'Unknown')
   return map[key] ?? meta('neutral', key)
 }
+
+export const REPAIR_SESSION_STATUS = {
+  RUNNING: 'running',
+  COMPLETED: 'completed',
+  EXHAUSTED: 'exhausted',
+  ESCALATED: 'escalated',
+  CANCELLED: 'cancelled',
+} as const

@@ -102,15 +102,20 @@ services:
       DATABASE_URL: postgresql://forge:forge@postgres:5432/forge
 
       # Phase 3 — embeddings
-      EMBEDDING__PROVIDER: gemini
-      EMBEDDING__MODEL: gemini-embedding-001
-      EMBEDDING__DIMENSIONS: 3072
+      # EMBEDDING__PROVIDER: gemini
+      # EMBEDDING__MODEL: gemini-embedding-001
+      # EMBEDDING__DIMENSIONS: 3072
       EMBEDDING__BATCH_SIZE: 32
       CHUNK_TOKEN_LIMIT: 512
+      EMBEDDING__PROVIDER: openai
+      EMBEDDING__MODEL: text-embedding-3-small
+      EMBEDDING__DIMENSIONS: 1536
 
       # Phase 4 — chat
-      CHAT__PROVIDER: gemini
-      CHAT__MODEL: gemini-2.5-flash
+      # CHAT__PROVIDER: gemini
+      # CHAT__MODEL: gemini-2.5-flash
+      CHAT__PROVIDER: openai
+      CHAT__MODEL: gpt-4o-mini
 
       # Phase 4 — retrieval
       RETRIEVAL__CANDIDATE_K: 50

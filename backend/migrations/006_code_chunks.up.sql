@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS code_chunks (
 
     -- Embeddings
     embedding_model  VARCHAR(128),
-    embedding        vector(768),   -- Gemini text-embedding-004
-
+    embedding        vector(1536),  -- OpenAI text-embedding-3-small (1536-dim); change to 768 for Gemini
+    -- embedding        vector(768),   -- Gemini text-embedding-004
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

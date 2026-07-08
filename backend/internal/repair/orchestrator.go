@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -720,18 +721,47 @@ func (o *Orchestrator) buildPreviousAttemptSummaries(
 // ── Outcome comparison ────────────────────────────────────────────────────────
 
 // diagnosticIdentity returns a stable string key for a diagnostic.
-// The key is: stage + ":" + tool + ":" + filePath + ":" + lineNumber + ":" + message
-// Nil pointer fields are represented as empty strings.
+//
+// The key deliberately EXCLUDES the line number: when a repair edits a file,
+// line numbers of the remaining (unfixed) diagnostics shift, and a
+// line-sensitive key would count the same logical error as both "resolved"
+// (old line) and "introduced" (new line) — producing a spurious "regressed"
+// outcome. Instead we key on stage/tool/category/severity/file plus a
+// normalized message (digits and whitespace stripped) so a diagnostic keeps a
+// stable identity across edits that only move it around.
+//
+// Key: stage : tool : category : severity : filePath : normalizedMessage
 func diagnosticIdentity(d *models.ValidationDiagnostic) string {
 	filePath := ""
 	if d.FilePath != nil {
 		filePath = *d.FilePath
 	}
-	lineNumber := ""
-	if d.LineNumber != nil {
-		lineNumber = fmt.Sprintf("%d", *d.LineNumber)
-	}
-	return strings.Join([]string{d.Stage, d.Tool, filePath, lineNumber, d.Message}, ":")
+	return strings.Join([]string{
+		d.Stage,
+		d.Tool,
+		d.Category,
+		d.Severity,
+		filePath,
+		normalizeDiagnosticMessage(d.Message),
+	}, ":")
+}
+
+// diagnosticDigits matches runs of digits (line/column numbers, counts) that
+// vary between validation runs without changing the underlying problem.
+var diagnosticDigits = regexp.MustCompile(`\d+`)
+
+// diagnosticWhitespace collapses any whitespace run to a single space.
+var diagnosticWhitespace = regexp.MustCompile(`\s+`)
+
+// normalizeDiagnosticMessage makes a diagnostic message stable across edits:
+// lower-cased, digit runs replaced with a placeholder, and whitespace
+// collapsed. This keeps distinct errors distinct while ignoring positional
+// noise like "line 42" vs "line 45".
+func normalizeDiagnosticMessage(msg string) string {
+	s := strings.ToLower(strings.TrimSpace(msg))
+	s = diagnosticDigits.ReplaceAllString(s, "#")
+	s = diagnosticWhitespace.ReplaceAllString(s, " ")
+	return s
 }
 
 // compareValidationOutcomes determines the repair outcome by identity-based

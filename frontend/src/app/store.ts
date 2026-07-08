@@ -16,6 +16,7 @@ import '@/services/api/qaApi'
 import '@/services/api/taskApi'
 import '@/services/api/executionApi'
 import '@/services/api/workspaceApi'
+import '@/services/api/repairApi'
 
 export const store = configureStore({
   reducer: {

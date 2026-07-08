@@ -19,7 +19,7 @@ router = APIRouter()
 pipeline = RepairPipeline()
 
 
-@router.post("/repair")
+@router.post("/v1/agent/repair")
 async def repair_endpoint(
     request: Request,
     authorization: Optional[str] = Header(None),

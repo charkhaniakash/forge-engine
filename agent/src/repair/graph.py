@@ -69,15 +69,19 @@ def _make_call_tool_fix_node():
     return call_tool_fix
 
 
-def build_repair_graph(interrupt_before: list[str] | None = None):
+def build_repair_graph(
+    interrupt_before: list[str] | None = None,
+    checkpointer=None,
+):
     """
     Build and compile the RepairGraph StateGraph.
 
     Args:
-        interrupt_before: node names at which LangGraph should pause before
-                          execution. The pipeline passes the two tool-execution
-                          placeholder node names here so it can intercept,
-                          execute the tool externally, and resume.
+        interrupt_before: node names at which LangGraph pauses before execution.
+        checkpointer:     LangGraph checkpointer (e.g. MemorySaver) that enables
+                          graph.aupdate_state() and resume-from-checkpoint.
+                          Required for the tool broker to inject results without
+                          restarting from the entry point.
     """
     graph = StateGraph(RepairState)
 
@@ -92,7 +96,7 @@ def build_repair_graph(interrupt_before: list[str] | None = None):
     graph.add_node("call_tool_fix",           _make_call_tool_fix_node())
     graph.add_node("receive_fix_result",      nodes.receive_fix_result)
     graph.add_node("complete_repair",         nodes.complete_repair)
-    graph.add_node("cannot_repair",           nodes.cannot_repair)
+    graph.add_node("escalate_repair",         nodes.cannot_repair)  # node renamed to avoid conflict with state key 'cannot_repair'
 
     # ── Entry point ───────────────────────────────────────────────────────────
     graph.set_entry_point("gather_context")
@@ -123,7 +127,7 @@ def build_repair_graph(interrupt_before: list[str] | None = None):
         "root_cause_analysis",
         nodes.route_after_root_cause,
         {
-            "cannot_repair":  "cannot_repair",
+            "escalate_repair": "escalate_repair",
             "select_strategy": "select_strategy",
         },
     )
@@ -133,8 +137,8 @@ def build_repair_graph(interrupt_before: list[str] | None = None):
         "select_strategy",
         nodes.route_after_strategy,
         {
-            "cannot_repair": "cannot_repair",
-            "generate_fix":  "generate_fix",
+            "escalate_repair": "escalate_repair",
+            "generate_fix":    "generate_fix",
         },
     )
 
@@ -143,8 +147,8 @@ def build_repair_graph(interrupt_before: list[str] | None = None):
         "generate_fix",
         nodes.route_after_generate,
         {
-            "cannot_repair": "cannot_repair",
-            "apply_fix":     "apply_fix",
+            "escalate_repair": "escalate_repair",
+            "apply_fix":       "apply_fix",
         },
     )
 
@@ -171,6 +175,9 @@ def build_repair_graph(interrupt_before: list[str] | None = None):
 
     # ── Terminal nodes ────────────────────────────────────────────────────────
     graph.add_edge("complete_repair", END)
-    graph.add_edge("cannot_repair",   END)
+    graph.add_edge("escalate_repair", END)
 
-    return graph.compile(interrupt_before=interrupt_before or [])
+    return graph.compile(
+        interrupt_before=interrupt_before or [],
+        checkpointer=checkpointer,
+    )

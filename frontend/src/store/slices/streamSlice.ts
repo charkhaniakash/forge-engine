@@ -1,4 +1,4 @@
-import { createSlice } from '@reduxjs/toolkit'
+import { createSlice, type PayloadAction } from '@reduxjs/toolkit'
 import { socketEventReceived } from '@/store/actions/socketActions'
 import type {
   Citation,
@@ -7,6 +7,7 @@ import type {
   QASocketEvent,
   ValidationSocketEvent,
 } from '@/types'
+import type { RepairSocketEvent } from '@/types/repair'
 
 /**
  * Live buffers fed exclusively by the websocket middleware. Feature components
@@ -52,11 +53,17 @@ interface PlanningStream {
   stage?: string
 }
 
+interface RepairStream {
+  events: RepairSocketEvent[]
+  complete: boolean
+}
+
 interface StreamState {
   execution: Record<string, ExecutionStream>
   qa: Record<string, QAStream>
   planning: Record<string, PlanningStream>
   validation: Record<string, ValidationStream>
+  repair: Record<string, RepairStream>
 }
 
 const initialState: StreamState = {
@@ -64,6 +71,7 @@ const initialState: StreamState = {
   qa: {},
   planning: {},
   validation: {},
+  repair: {},
 }
 
 function labelExecutionEvent(ev: ExecutionSocketEvent): string {
@@ -129,15 +137,32 @@ function labelValidationEvent(ev: ValidationSocketEvent): string {
   }
 }
 
+const TERMINAL_REPAIR = new Set<string>([
+  'repair_complete',
+  'repair_escalated',
+])
+
 const streamSlice = createSlice({
   name: 'stream',
   initialState,
   reducers: {
-    executionStreamCleared(state, action: { payload: string }) {
+    executionStreamCleared(state, action: PayloadAction<string>) {
       delete state.execution[action.payload]
     },
-    qaStreamCleared(state, action: { payload: string }) {
+    qaStreamCleared(state, action: PayloadAction<string>) {
       delete state.qa[action.payload]
+    },
+    appendRepairEvent(state, action: PayloadAction<{ sessionId: string; event: RepairSocketEvent }>) {
+      const { sessionId, event } = action.payload
+      const bucket =
+        state.repair[sessionId] ??
+        (state.repair[sessionId] = { events: [], complete: false })
+      bucket.events.push(event)
+      if (bucket.events.length > 500) bucket.events.shift()
+      if (TERMINAL_REPAIR.has(event.event)) bucket.complete = true
+    },
+    clearRepairEvents(state, action: PayloadAction<string>) {
+      delete state.repair[action.payload]
     },
   },
   extraReducers: (builder) => {
@@ -209,5 +234,5 @@ const streamSlice = createSlice({
   },
 })
 
-export const { executionStreamCleared, qaStreamCleared } = streamSlice.actions
+export const { executionStreamCleared, qaStreamCleared, appendRepairEvent, clearRepairEvents } = streamSlice.actions
 export default streamSlice.reducer

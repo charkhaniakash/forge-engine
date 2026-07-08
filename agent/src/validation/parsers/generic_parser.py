@@ -123,7 +123,7 @@ def parse_failed_stage(
     return [
         ParsedDiagnostic(
             severity="error",
-            category="environment_error",
+            category="compile_error",
             file_path="",
             line_number=0,
             column_number=0,
@@ -132,6 +132,6 @@ def parse_failed_stage(
             tool="generic_parser",
             origin="stderr" if stderr.strip() else "stdout",
             confidence=0.6,
-            repair_category="unknown",
+            repair_category="auto_fixable",
         )
     ]

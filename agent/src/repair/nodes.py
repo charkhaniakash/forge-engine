@@ -98,6 +98,14 @@ Respond with ONE of:
   {"action": "tool", "tool": "<name>", "args": {...}, "reasoning": "why"}
   {"action": "done", "summary": "what you now understand about the failure"}
 
+IMPORTANT — path format:
+  All paths must be RELATIVE to the workspace root. Do NOT use absolute paths.
+  CORRECT:   "path": "src/App.tsx"
+  CORRECT:   "path": "package.json"
+  CORRECT:   "path": "."
+  INCORRECT: "path": "/workspace/src/App.tsx"
+  INCORRECT: "path": "/workspace"
+
 Rules:
 - Follow imports and dependencies — don't stop at the file named in the diagnostic
 - Search for symbol definitions when you see an undefined-symbol error
@@ -107,16 +115,39 @@ Rules:
 
 _ROOT_CAUSE_SYSTEM = """\
 You are a code repair agent performing root cause analysis.
-Given repository context and diagnostics, identify the true root cause.
+Given repository context and diagnostics from multiple validation stages, analyse ALL failures.
+
+Group the diagnostics by independent failure cause and classify each group.
 
 Respond with JSON:
 {
-  "root_cause": "<one sentence describing the true cause>",
-  "affected_components": ["file_or_symbol", ...],
-  "repair_scope": "single_file" | "multi_file" | "too_large",
-  "confidence": 0.0–1.0,
-  "reasoning": "<detailed explanation>"
+  "groups": [
+    {
+      "group_id": "lint_errors",
+      "description": "<short description of this failure group>",
+      "diagnostic_indices": [0, 1, 2],
+      "root_cause": "<one sentence>",
+      "root_cause_class": "code_error" | "dependency" | "environment" | "configuration" | "unknown",
+      "repair_scope": "single_file" | "multi_file" | "too_large",
+      "confidence": 0.0–1.0,
+      "reasoning": "<explanation>"
+    },
+    ...
+  ],
+  "overall_reasoning": "<summary of what is repairable vs not>"
 }
+
+root_cause_class guide:
+  code_error     — a bug or mistake in source files that can be fixed by editing code
+  dependency     — an outdated, missing, or incompatible package/dependency
+  environment    — a runtime, build toolchain, or configuration issue
+  configuration  — missing scripts in package.json, wrong config values, build setup issues
+  unknown        — cannot determine
+
+Repair rules:
+  Only "code_error" groups should be repaired by editing source files.
+  "dependency", "environment", "configuration" groups cannot be fixed by editing code.
+  If repair_scope is "too_large", treat the group as non-repairable.
 
 Confidence guide:
   0.9+ — obvious syntactic/type error with a clear fix
@@ -228,13 +259,34 @@ async def gather_context(state: dict) -> dict:
 
     # Tool call requested — delegate to pipeline
     if action.get("action") == "tool":
+        args = action.get("args", {})
+        # Normalize path: strip leading /workspace/ prefix if the LLM added it.
+        # WorkspaceManager prepends /workspace/ itself — a double prefix causes
+        # "find: /workspace/workspace: No such file or directory".
+        if "path" in args:
+            p = args["path"]
+            if isinstance(p, str):
+                # Strip any /workspace prefix the LLM may have added
+                for prefix in ("/workspace/", "/workspace"):
+                    if p.startswith(prefix):
+                        p = p[len(prefix):] or "."
+                        break
+                args = {**args, "path": p}
+        if "dir" in args:
+            d = args["dir"]
+            if isinstance(d, str):
+                for prefix in ("/workspace/", "/workspace"):
+                    if d.startswith(prefix):
+                        d = d[len(prefix):] or "."
+                        break
+                args = {**args, "dir": d}
         return {
             "retrieved_context": retrieved_context,
             "_gather_iteration": iteration + 1,
             "_file_cache": file_cache,
             "_pending_tool_call": {
                 "tool": action["tool"],
-                "args": action.get("args", {}),
+                "args": args,
                 "reasoning": action.get("reasoning", ""),
             },
         }
@@ -302,10 +354,19 @@ async def receive_context_result(state: dict) -> dict:
 
 async def root_cause_analysis(state: dict) -> dict:
     """
-    Pure LLM reasoning: analyses retrieved_context + diagnostics and produces
-    a structured root cause summary and updated confidence.
+    Pure LLM reasoning: groups ALL diagnostics by failure cause, classifies
+    each group as repairable (code_error) or non-repairable, and filters to
+    only the repairable diagnostics.
 
-    This node has NO I/O. It only reads state and returns updated reasoning fields.
+    Key behaviours:
+    - Analyses ALL diagnostics, not just the first failure.
+    - Non-repairable groups (dependency, environment, configuration) are silently
+      dropped — the graph only attempts to fix code_error groups.
+    - If NO repairable groups exist → escalate with a clear reason.
+    - If SOME groups are repairable → continue with only those diagnostics.
+    - Confidence is the average across all repairable groups.
+
+    This node has NO I/O.
     """
     ctx = state["ctx"]
     diagnostics = state["diagnostics"]
@@ -313,16 +374,16 @@ async def root_cause_analysis(state: dict) -> dict:
     previous_attempts = state.get("previous_attempt_summaries") or []
 
     context_block = _format_context_for_llm(retrieved_context)
-    diag_text = _format_diagnostics(diagnostics)
+    diag_text = _format_diagnostics_indexed(diagnostics)
     prev_text = _format_previous_attempts(previous_attempts)
 
     messages = [
         {"role": "system", "content": _ROOT_CAUSE_SYSTEM},
         {"role": "user", "content": (
-            f"Diagnostics:\n{diag_text}\n\n"
+            f"Diagnostics (indexed):\n{diag_text}\n\n"
             f"Repository context:\n{context_block}\n\n"
             + (f"Previous repair attempts:\n{prev_text}\n\n" if prev_text else "")
-            + "Analyse the root cause."
+            + "Analyse ALL failures and group them."
         )},
     ]
 
@@ -338,22 +399,91 @@ async def root_cause_analysis(state: dict) -> dict:
             "reasoning": (state.get("reasoning") or "") + "\n[root_cause] parse failed",
         }
 
-    root_cause = analysis.get("root_cause", "Unknown")
-    confidence = float(analysis.get("confidence", 0.5))
-    repair_scope = analysis.get("repair_scope", "single_file")
-    explanation = analysis.get("reasoning", "")
+    groups = analysis.get("groups", [])
+    overall_reasoning = analysis.get("overall_reasoning", "")
 
-    # Scope too large → escalate immediately
-    if repair_scope == "too_large":
-        confidence = 0.0
+    if not groups:
+        # Fallback: treat all diagnostics as a single unknown group
+        return {
+            "root_cause": "Unknown failure — could not group diagnostics",
+            "confidence": 0.5,
+            "reasoning": (state.get("reasoning") or "") + "\n[root_cause] no groups produced",
+        }
+
+    # Separate repairable groups (code_error only) from non-repairable
+    repairable_groups = []
+    skipped_groups = []
+    for g in groups:
+        cls = g.get("root_cause_class", "unknown")
+        scope = g.get("repair_scope", "single_file")
+        confidence = float(g.get("confidence", 0.5))
+        if cls == "code_error" and scope != "too_large" and confidence >= CONFIDENCE_THRESHOLD:
+            repairable_groups.append(g)
+        else:
+            skipped_groups.append(g)
+
+    logger.info("root_cause_analysis_groups",
+                total=len(groups),
+                repairable=len(repairable_groups),
+                skipped=len(skipped_groups))
+
+    if not repairable_groups:
+        # Every group is non-repairable
+        skip_reasons = "; ".join(
+            f"{g.get('group_id','?')}: {g.get('root_cause_class','?')} — {g.get('root_cause','?')}"
+            for g in skipped_groups
+        )
+        logger.info("root_cause_all_non_repairable", reason=skip_reasons)
+        return {
+            "root_cause": "All failures are non-repairable by source code edits",
+            "confidence": 0.0,
+            "cannot_repair": True,
+            "cannot_repair_reason": (
+                f"No repairable source-code defects found. "
+                f"Skipped groups: {skip_reasons}"
+            ),
+            "reasoning": (state.get("reasoning") or "") + f"\n[root_cause] all non-repairable: {skip_reasons}",
+        }
+
+    # Collect only diagnostics from repairable groups
+    repairable_indices: set[int] = set()
+    for g in repairable_groups:
+        for idx in g.get("diagnostic_indices", []):
+            if isinstance(idx, int) and 0 <= idx < len(diagnostics):
+                repairable_indices.add(idx)
+
+    if repairable_indices:
+        repairable_diagnostics = [diagnostics[i] for i in sorted(repairable_indices)]
+    else:
+        # Group indices were missing or out of range — use all diagnostics
+        repairable_diagnostics = diagnostics
+
+    # Combined root cause from all repairable groups
+    combined_root_cause = "; ".join(g.get("root_cause", "") for g in repairable_groups)
+    avg_confidence = sum(float(g.get("confidence", 0.5)) for g in repairable_groups) / len(repairable_groups)
+
+    skipped_summary = ""
+    if skipped_groups:
+        skipped_summary = " Skipped (non-repairable): " + ", ".join(
+            f"{g.get('group_id','?')}({g.get('root_cause_class','?')})"
+            for g in skipped_groups
+        )
 
     logger.info("root_cause_analysis_complete",
-                root_cause=root_cause, confidence=confidence, scope=repair_scope)
+                root_cause=combined_root_cause,
+                confidence=avg_confidence,
+                repairable_diags=len(repairable_diagnostics))
 
     return {
-        "root_cause": root_cause,
-        "confidence": confidence,
-        "reasoning": (state.get("reasoning") or "") + f"\n[root_cause] {root_cause} (confidence={confidence:.2f})",
+        "root_cause": combined_root_cause,
+        "confidence": avg_confidence,
+        # Replace diagnostics with only the repairable subset
+        "diagnostics": repairable_diagnostics,
+        "reasoning": (
+            (state.get("reasoning") or "")
+            + f"\n[root_cause] {combined_root_cause} (confidence={avg_confidence:.2f})"
+            + skipped_summary
+        ),
     }
 
 
@@ -550,6 +680,9 @@ async def receive_fix_result(state: dict) -> dict:
     Records the result of one write_file tool call.
     Advances _apply_index and updates modified_files + confidence.
     Routing loops back to apply_fix until edit_plan is exhausted.
+
+    If the write fails with a non-retryable error (e.g. DB constraint),
+    escalate immediately rather than continuing to drain the edit plan.
     """
     result = state.get("_last_tool_result") or {}
     apply_index: int = state.get("_apply_index", 0)
@@ -557,10 +690,9 @@ async def receive_fix_result(state: dict) -> dict:
     confidence: float = float(state.get("confidence", 0.5))
 
     success = result.get("success", False)
-    data = result.get("result") or {}
     error = result.get("error")
 
-    # Determine the path from the edit_plan (not the tool result, which may omit it)
+    # Determine the path from the edit_plan
     edit_plan = state.get("edit_plan") or []
     path = ""
     if apply_index < len(edit_plan):
@@ -571,9 +703,24 @@ async def receive_fix_result(state: dict) -> dict:
             modified_files.append(path)
         logger.info("apply_fix_write_ok", path=path)
     else:
-        # Write failed — lower confidence
+        # Lower confidence on write failure
         confidence = max(0.0, confidence - 0.15)
         logger.warning("apply_fix_write_failed", path=path, error=error, new_confidence=confidence)
+
+        # If confidence has dropped below threshold after a failed write,
+        # escalate immediately — repeated failures won't improve.
+        if confidence < 0.15:
+            logger.warning("apply_fix_escalating_after_failures",
+                          path=path, error=error, confidence=confidence)
+            return {
+                "modified_files": modified_files,
+                "confidence": confidence,
+                "_apply_index": apply_index + 1,
+                "_pending_tool_call": None,
+                "_last_tool_result": None,
+                "cannot_repair": True,
+                "cannot_repair_reason": f"File write failed and confidence dropped too low: {error}",
+            }
 
     return {
         "modified_files": modified_files,
@@ -627,37 +774,43 @@ def route_gather_loop(state: dict) -> str:
 
 
 def route_after_root_cause(state: dict) -> str:
-    """After root_cause_analysis: low confidence → cannot_repair, else select_strategy."""
+    """After root_cause_analysis: escalate on non-code causes, low confidence, or cannot_repair flag."""
+    # Explicit escalation set by root_cause_analysis (e.g. dependency/environment class)
+    if state.get("cannot_repair", False):
+        return "escalate_repair"
     confidence = float(state.get("confidence", 0.5))
     if confidence < CONFIDENCE_THRESHOLD:
-        return "cannot_repair"
+        return "escalate_repair"
     return "select_strategy"
 
 
 def route_after_strategy(state: dict) -> str:
-    """After select_strategy: if cannot_repair flag is set → cannot_repair, else generate_fix."""
+    """After select_strategy: if cannot_repair flag is set → escalate_repair, else generate_fix."""
     if state.get("cannot_repair", False):
-        return "cannot_repair"
+        return "escalate_repair"
     return "generate_fix"
 
 
 def route_after_generate(state: dict) -> str:
-    """After generate_fix: if escalating → cannot_repair, else apply_fix."""
+    """After generate_fix: if escalating → escalate_repair, else apply_fix."""
     if state.get("cannot_repair", False):
-        return "cannot_repair"
+        return "escalate_repair"
     edit_plan = state.get("edit_plan") or []
     if not edit_plan:
-        return "cannot_repair"
+        return "escalate_repair"
     return "apply_fix"
 
 
 def route_apply_loop(state: dict) -> str:
     """
     After apply_fix or receive_fix_result:
+    - If cannot_repair was set (e.g. DB failure threshold) → escalate immediately
     - If _pending_tool_call is set → pipeline executes the write_file
     - If all edits applied        → complete_repair
     - Else                        → apply_fix (next edit)
     """
+    if state.get("cannot_repair", False):
+        return "escalate_repair"
     if state.get("_pending_tool_call"):
         return "call_tool_fix"
     apply_index = state.get("_apply_index", 0)
@@ -677,6 +830,19 @@ def _format_diagnostics(diagnostics: list) -> str:
         msg = d.get("message", "")
         path = d.get("file_path", "")
         parts.append(f"  {path}:{line} [{sev}] {msg}")
+    return "\n".join(parts) if parts else "(none)"
+
+
+def _format_diagnostics_indexed(diagnostics: list) -> str:
+    """Format diagnostics with 0-based index so the LLM can reference them by index."""
+    parts = []
+    for i, d in enumerate(diagnostics):
+        line = d.get("line_number", "?")
+        sev = d.get("severity", "error")
+        msg = d.get("message", "")
+        path = d.get("file_path", "")
+        stage = d.get("stage", "")
+        parts.append(f"  [{i}] {stage} {path}:{line} [{sev}] {msg}")
     return "\n".join(parts) if parts else "(none)"
 
 

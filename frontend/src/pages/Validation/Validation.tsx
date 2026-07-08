@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import {
   Badge,
@@ -13,14 +13,16 @@ import {
   StatusBadge,
   type LogLine,
 } from '@/components/common'
-import { useAppSelector } from '@/app/hooks'
+import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { useSocketChannel } from '@/hooks/useSocketChannel'
+import { useAuth } from '@/hooks/useAuth'
 import { useGetTaskQuery } from '@/services/api/taskApi'
 import { useGetExecutionQuery } from '@/services/api/executionApi'
 import {
   useGetValidationQuery,
   useGetValidationDiagnosticsQuery,
 } from '@/services/api/validationApi'
+import { useGetRepairSessionByTaskQuery } from '@/services/api/repairApi'
 import {
   VALIDATION_RUN_STATUS,
   VALIDATION_STAGE_STATUS,
@@ -28,7 +30,10 @@ import {
   resolveStatus,
 } from '@/constants/status'
 import { ROUTES, routeTo } from '@/constants/routes'
+import { appendRepairEvent } from '@/store/slices/streamSlice'
+import { websocketBase } from '@/constants/config'
 import type { ValidationDiagnostic, ValidationStage } from '@/types'
+import type { RepairSocketEvent } from '@/types/repair'
 import styles from './Validation.module.css'
 
 const STAGE_ICON: Record<string, string> = {
@@ -50,8 +55,12 @@ export function Validation() {
   const [params] = useSearchParams()
   const repoId = params.get('repo') ?? ''
   const navigate = useNavigate()
+  const dispatch = useAppDispatch()
+  const { token } = useAuth()
 
   const [selectedStage, setSelectedStage] = useState<string | null>(null)
+  // Derived repair UI state from socket events
+  const [repairStatus, setRepairStatus] = useState<'idle' | 'running' | 'passed' | 'escalated'>('idle')
 
   const withRepo = (p: string) => `${p}?repo=${repoId}`
 
@@ -101,6 +110,96 @@ export function Validation() {
     }
   }, [lastKind, live?.events.length, refetchVal, refetchDiags])
 
+  // ── Repair session polling ────────────────────────────────────────────────
+  const isRepairable = run?.overall_result === 'failed_repairable'
+  const taskExecutionId = run?.task_execution_id ?? ''
+
+  const { data: repairSession } = useGetRepairSessionByTaskQuery(
+    taskExecutionId,
+    {
+      skip: !isRepairable || !taskExecutionId,
+      pollingInterval: repairStatus === 'idle' ? 2000 : 0,
+    },
+  )
+
+  // ── Repair WebSocket ──────────────────────────────────────────────────────
+  const repairWsRef = useRef<WebSocket | null>(null)
+  const repairSessionId = repairSession?.id
+
+  // Read repair events from the stream slice for the current session
+  const repairEvents = useAppSelector((s) =>
+    repairSessionId ? (s.stream.repair[repairSessionId]?.events ?? []) : [],
+  )
+
+  useEffect(() => {
+    if (!repairSessionId || !token) return
+    // Already connected or repair finished
+    if (repairWsRef.current) return
+    if (repairStatus === 'passed' || repairStatus === 'escalated') return
+
+    const sep = `/v1/repair/sessions/${repairSessionId}/stream`.includes('?') ? '&' : '?'
+    const url = `${websocketBase()}/repair/sessions/${repairSessionId}/stream${sep}token=${encodeURIComponent(token)}`
+
+    const ws = new WebSocket(url)
+    repairWsRef.current = ws
+
+    ws.onmessage = (msg) => {
+      let ev: RepairSocketEvent
+      try {
+        ev = JSON.parse(msg.data as string) as RepairSocketEvent
+      } catch {
+        return
+      }
+      dispatch(appendRepairEvent({ sessionId: repairSessionId, event: ev }))
+      if (ev.event === 'repair_started' || ev.event === 'attempt_started') {
+        setRepairStatus('running')
+      } else if (ev.event === 'repair_complete') {
+        setRepairStatus('passed')
+        refetchVal()
+        ws.close()
+      } else if (ev.event === 'repair_escalated') {
+        setRepairStatus('escalated')
+        ws.close()
+      }
+    }
+
+    ws.onerror = () => {
+      ws.close()
+    }
+
+    ws.onclose = () => {
+      if (repairWsRef.current === ws) repairWsRef.current = null
+    }
+
+    return () => {
+      ws.close()
+      if (repairWsRef.current === ws) repairWsRef.current = null
+    }
+  // Re-run when session id or token changes; NOT when repairStatus changes
+  // to avoid reconnecting after a terminal event.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repairSessionId, token, dispatch, refetchVal])
+
+  // ── Derive repair log lines from events ──────────────────────────────────
+  function labelRepairEvent(ev: RepairSocketEvent): { text: string; tone: LogLine['tone'] } {
+    switch (ev.event) {
+      case 'repair_started':
+        return { text: `🔧 Repair session started (up to ${ev.max_attempts ?? '?'} attempts)`, tone: 'default' }
+      case 'attempt_started':
+        return { text: `🔄 Repair attempt ${ev.attempt_number ?? ev.attempt ?? '?'}`, tone: 'default' }
+      case 'tool_call':
+        return { text: `   Gathering context: ${ev.tool ?? ''}`, tone: 'default' }
+      case 'attempt_complete':
+        return { text: `   Attempt complete: ${ev.outcome ?? ''}`, tone: 'default' }
+      case 'repair_complete':
+        return { text: '✓ Repair completed — validation passed', tone: 'success' }
+      case 'repair_escalated':
+        return { text: `✗ Cannot repair: ${ev.reason ?? 'unknown reason'}`, tone: 'error' }
+      default:
+        return { text: ev.event, tone: 'default' }
+    }
+  }
+
   const visibleDiags: ValidationDiagnostic[] = useMemo(
     () =>
       selectedStage
@@ -113,20 +212,47 @@ export function Validation() {
   const warnCount = diagnostics.filter((d) => d.severity === 'warning').length
   const autoFixable = diagnostics.filter((d) => d.repair_category === 'auto_fixable').length
 
-  const logLines: LogLine[] = (live?.events ?? []).map((e) => ({
-    id: e.seq,
-    text: e.label,
-    tone:
-      e.kind === 'error'
-        ? 'error'
-        : e.kind === 'validation_complete' && run?.overall_result === 'passed'
-          ? 'success'
-          : e.kind === 'stage_complete' && (e.raw as { passed?: boolean }).passed === false
-            ? 'error'
-            : e.kind === 'stage_complete'
-              ? 'success'
-              : 'default',
-  }))
+  // Validation log lines + repair log lines appended after
+  const repairLogLines: LogLine[] = repairEvents.map((ev, i) => {
+    const { text, tone } = labelRepairEvent(ev)
+    return { id: 10000 + i, text, tone }
+  })
+
+  const logLines: LogLine[] = [
+    ...(live?.events ?? []).map((e) => ({
+      id: e.seq,
+      text: e.label,
+      tone:
+        e.kind === 'error'
+          ? 'error'
+          : e.kind === 'validation_complete' && run?.overall_result === 'passed'
+            ? 'success'
+            : e.kind === 'stage_complete' && (e.raw as { passed?: boolean }).passed === false
+              ? 'error'
+              : e.kind === 'stage_complete'
+                ? 'success'
+                : 'default',
+    } as LogLine)),
+    ...repairLogLines,
+  ]
+
+  // Derive the effective status for the header badge
+  const effectiveStatus: string | undefined = (() => {
+    if (repairStatus === 'running') return '__repairing__'
+    if (repairStatus === 'passed') return 'passed'
+    if (repairStatus === 'escalated') return '__cannot_repair__'
+    return run?.overall_result ?? run?.status
+  })()
+
+  const EFFECTIVE_STATUS_MAP: Record<string, { tone: import('@/constants/status').Tone; label: string }> = {
+    ...VALIDATION_OVERALL_RESULT,
+    ...VALIDATION_RUN_STATUS,
+    __repairing__: { tone: 'warning', label: 'Repairing…' },
+    __cannot_repair__: { tone: 'danger', label: 'Cannot Repair' },
+  }
+
+  // The live activity spinner should also show while repair is running
+  const isActivityLive = run?.status === 'running' || repairStatus === 'running'
 
   if (!repoId) {
     return (
@@ -165,8 +291,8 @@ export function Validation() {
         actions={
           run && (
             <StatusBadge
-              map={run.overall_result ? VALIDATION_OVERALL_RESULT : VALIDATION_RUN_STATUS}
-              status={run.overall_result ?? run.status}
+              map={EFFECTIVE_STATUS_MAP}
+              status={effectiveStatus ?? run.status}
             />
           )
         }
@@ -324,16 +450,16 @@ export function Validation() {
               <CardHeader
                 title="Live activity"
                 actions={
-                  run.status === 'running' ? <Spinner size={13} /> : undefined
+                  isActivityLive ? <Spinner size={13} /> : undefined
                 }
               />
               <div className={styles.log}>
                 <LogViewer
                   lines={logLines}
-                  live={run.status === 'running'}
+                  live={isActivityLive}
                   maxHeight={200}
                   emptyLabel={
-                    run.status === 'running'
+                    isActivityLive
                       ? 'Waiting for events…'
                       : 'Validation complete.'
                   }

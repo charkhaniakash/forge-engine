@@ -261,6 +261,12 @@ func (o *ValidationOrchestrator) Run(
 		_ = o.repo.MarkFailed(ctx, run.ID, overallResult)
 	}
 
+	// Stamp overallResult onto fullRun in-memory so the caller (main.go trigger)
+	// sees the populated value without a second round-trip to the DB.
+	// MarkCompleted/MarkFailed write overall_result to the DB AFTER fullRun was
+	// loaded, so fullRun.OverallResult would otherwise be nil at this point.
+	fullRun.OverallResult = &overallResult
+
 	summary := fullRun.Summary
 	if summary == nil {
 		summary = &models.ValidationSummary{}

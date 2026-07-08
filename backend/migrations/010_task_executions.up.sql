@@ -118,7 +118,8 @@ CREATE INDEX idx_execution_events_step ON execution_events(step_execution_id);
 CREATE TABLE code_diffs (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     task_execution_id   UUID        NOT NULL REFERENCES task_executions(id) ON DELETE CASCADE,
-    step_execution_id   UUID        NOT NULL REFERENCES step_executions(id) ON DELETE CASCADE,
+    -- NULL for repair-originated writes (repair has no step_execution context).
+    step_execution_id   UUID        NULL REFERENCES step_executions(id) ON DELETE CASCADE,
 
     file_path           TEXT        NOT NULL,
 

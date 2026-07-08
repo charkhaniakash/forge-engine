@@ -107,11 +107,20 @@ var profiles = map[string]*ValidationProfile{
 			{
 				Name:           "lint",
 				SequenceNumber: 4,
-				Commands:       [][]string{{"npx", "eslint", ".", "--format", "json"}},
-				TimeoutSeconds: 60,
-				RunOnBuildFail: true,
+				// Ignore build artifacts and vendored code. Without these, a
+				// SUCCESSFUL build creates build/ (minified JS) which eslint then
+				// lints and chokes on — making lint fail *because* the build
+				// passed, so repair could never reach a clean "passed".
+				Commands: [][]string{{
+					"npx", "eslint", ".", "--format", "json",
+					"--ignore-pattern", "build/",
+					"--ignore-pattern", "dist/",
+					"--ignore-pattern", "coverage/",
+				}},
+				TimeoutSeconds:   60,
+				RunOnBuildFail:   true,
 				RunOnInstallFail: false,
-				Optional:       true,
+				Optional:         true,
 			},
 		},
 	},

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -261,9 +262,20 @@ func (o *Orchestrator) Run(
 
 		lastValidationRunID = postRepairRun.ID
 
-		// Compare outcomes using identity-based diagnostic comparison
+		// Compare outcomes (error-count + stage-transition based).
 		outcome := o.compareValidationOutcomes(validationRun, postRepairRun, log)
 		log.Infow("repair_outcome_determined", "outcome", outcome)
+
+		// Concise per-attempt summary for observability.
+		log.Infow("repair_attempt_summary",
+			"attempt_number", attemptNum,
+			"files_modified", attemptResult.ModifiedFiles,
+			"errors_before", countErrorDiagnostics(validationRun.Diagnostics),
+			"errors_after", countErrorDiagnostics(postRepairRun.Diagnostics),
+			"stages_before", failingStageList(validationRun.Diagnostics),
+			"stages_after", failingStageList(postRepairRun.Diagnostics),
+			"repair_outcome", outcome,
+		)
 
 		// Update attempt outcome
 		_ = o.repairRepo.UpdateAttemptResult(
@@ -720,6 +732,42 @@ func (o *Orchestrator) buildPreviousAttemptSummaries(
 
 // ── Outcome comparison ────────────────────────────────────────────────────────
 
+// countErrorDiagnostics counts diagnostics with error severity (warnings and
+// info are ignored — they don't block and shouldn't drive the repair verdict).
+func countErrorDiagnostics(diags []*models.ValidationDiagnostic) int {
+	n := 0
+	for _, d := range diags {
+		if d.Severity == "error" {
+			n++
+		}
+	}
+	return n
+}
+
+// failingStages returns the set of stages that have at least one error
+// diagnostic. Used to detect a stage that regressed from passing → failing.
+func failingStages(diags []*models.ValidationDiagnostic) map[string]struct{} {
+	stages := map[string]struct{}{}
+	for _, d := range diags {
+		if d.Severity == "error" {
+			stages[d.Stage] = struct{}{}
+		}
+	}
+	return stages
+}
+
+// failingStageList returns the sorted names of stages that have at least one
+// error diagnostic. Log-friendly variant of failingStages.
+func failingStageList(diags []*models.ValidationDiagnostic) []string {
+	set := failingStages(diags)
+	out := make([]string, 0, len(set))
+	for stage := range set {
+		out = append(out, stage)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // diagnosticIdentity returns a stable string key for a diagnostic.
 //
 // The key deliberately EXCLUDES the line number: when a repair edits a file,
@@ -772,11 +820,11 @@ func normalizeDiagnosticMessage(msg string) string {
 //  2. after.OverallResult == nil                 → "error"
 //  3. after.OverallResult == "failed_environment" → "no_change" (env issue, not code)
 //  4. after.OverallResult == "failed_requires_human" → "no_change" (cannot repair)
-//  5. Identity-based set comparison:
-//     - identical sets                            → "no_change"
-//     - resolved > 0 AND introduced == 0         → "improved"
-//     - introduced > 0                           → "regressed"
-//     - fallthrough                              → "error"
+//  5. Error-count + stage-transition comparison:
+//     - a stage that passed before but fails now → "regressed"
+//     - fewer errors than before                 → "improved"
+//     - more errors than before                  → "regressed"
+//     - equal                                     → "no_change"
 func (o *Orchestrator) compareValidationOutcomes(
 	before, after *models.ValidationRun,
 	log *zap.SugaredLogger,
@@ -827,27 +875,46 @@ func (o *Orchestrator) compareValidationOutcomes(
 		}
 	}
 
-	log.Debugw("comparing_validation_outcomes",
-		"before_diagnostics", len(before.Diagnostics),
-		"after_diagnostics", len(after.Diagnostics),
-		"resolved", resolved,
-		"introduced", introduced,
-	)
+	// Error-count + stage-transition verdict. The identity sets above are kept
+	// for observability, but the DECISION must not be "any new diagnostic id →
+	// regressed": a single new/changed lint diagnostic would otherwise mask
+	// fixing the build and tests. Instead:
+	//   - a stage that PASSED before but fails now → genuine regression
+	//   - otherwise judge by net error count (errors only, warnings ignored)
+	beforeErrors := countErrorDiagnostics(before.Diagnostics)
+	afterErrors := countErrorDiagnostics(after.Diagnostics)
+	beforeFailing := failingStages(before.Diagnostics)
+	afterFailing := failingStages(after.Diagnostics)
 
-	// Identical sets
-	if resolved == 0 && introduced == 0 {
-		return "no_change"
+	var newlyFailing []string
+	for stage := range afterFailing {
+		if _, wasFailing := beforeFailing[stage]; !wasFailing {
+			newlyFailing = append(newlyFailing, stage)
+		}
 	}
 
-	// Any new regression overrides any improvement
-	if introduced > 0 {
+	log.Infow("comparing_validation_outcomes",
+		"before_diagnostics", len(before.Diagnostics),
+		"after_diagnostics", len(after.Diagnostics),
+		"before_errors", beforeErrors,
+		"after_errors", afterErrors,
+		"resolved_identities", resolved,
+		"introduced_identities", introduced,
+		"newly_failing_stages", newlyFailing,
+	)
+
+	// A previously-passing stage that now fails means the repair broke
+	// something that worked — a genuine regression regardless of net count.
+	if len(newlyFailing) > 0 {
 		return "regressed"
 	}
 
-	// Some diagnostics resolved, none introduced
-	if resolved > 0 {
+	switch {
+	case afterErrors < beforeErrors:
 		return "improved"
+	case afterErrors > beforeErrors:
+		return "regressed"
+	default:
+		return "no_change"
 	}
-
-	return "error"
 }

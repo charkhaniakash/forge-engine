@@ -152,6 +152,42 @@ func (r *WorkItemRepository) ListForRepo(
 	return items, rows.Err()
 }
 
+// ListRecentByOrg returns the most recent work items across ALL repositories
+// in an org. Powers the Mission-centric sidebar/home, where a Mission (work
+// item) is the primary object rather than a per-repo table row.
+func (r *WorkItemRepository) ListRecentByOrg(
+	ctx context.Context,
+	orgID string,
+	limit int,
+) ([]*models.WorkItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 30
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, repo_id, org_id, user_id, parent_id, template_id, type,
+		       intent, status, approval_status, approval_policy, error,
+		       created_at, updated_at
+		FROM work_items
+		WHERE org_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, orgID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []*models.WorkItem
+	for rows.Next() {
+		item, err := scanWorkItemRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 // ── Status transitions (Go-owned state machine) ───────────────────────────────
 
 // StartPlanning transitions status: draft → planning.

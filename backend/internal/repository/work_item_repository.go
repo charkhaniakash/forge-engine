@@ -93,6 +93,17 @@ func (r *WorkItemRepository) TransitionToDone(ctx context.Context, id string) er
 	return err
 }
 
+// TransitionToPublishing moves a work item from done → publishing.
+// Called by the PublishingOrchestrator when the publishing pipeline starts.
+func (r *WorkItemRepository) TransitionToPublishing(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items
+		SET status = 'publishing', updated_at = NOW()
+		WHERE id = $1 AND status = $2
+	`, id, models.WorkItemStatusDone)
+	return err
+}
+
 // TransitionToFailed moves a work item to failed status with an error message.
 // Called when execution or repair fails.
 func (r *WorkItemRepository) TransitionToFailed(ctx context.Context, id, errMsg string) error {

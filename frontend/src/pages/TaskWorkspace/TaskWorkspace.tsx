@@ -50,7 +50,12 @@ import {
   useGetWorkspaceQuery,
   useProvisionWorkspaceMutation,
 } from '@/services/api/workspaceApi'
-import { APPROVAL_STATUS, WORK_ITEM_STATUS } from '@/constants/status'
+import {
+  useGetPublishSessionQuery,
+  useStartPublishMutation,
+} from '@/services/api/publishingApi'
+import { usePublishingStream } from '@/features/task-workspace/usePublishingStream'
+import { APPROVAL_STATUS, PUBLISHING_STATUS, WORK_ITEM_STATUS } from '@/constants/status'
 import { ROUTES } from '@/constants/routes'
 import styles from './TaskWorkspace.module.css'
 
@@ -101,6 +106,18 @@ export function TaskWorkspace() {
     { skip: !repoId || !taskId, pollingInterval: 3000 },
   )
 
+  // Phase 10 — publishing. Session id bootstraps the WebSocket; live progress
+  // comes over usePublishingStream, not the poll.
+  const { data: publishData, refetch: refetchPublish } = useGetPublishSessionQuery(
+    { repoId, taskId },
+    { skip: !repoId || !taskId, pollingInterval: 3000 },
+  )
+  const publishSession = publishData?.session ?? null
+  const publishTerminal =
+    publishSession != null &&
+    ['completed', 'failed', 'cancelled'].includes(publishSession.status)
+  const publishActive = publishSession != null && !publishTerminal
+
   const isPlanning = task?.status === 'planning' || task?.status === 'draft' || task?.status === 'plan_ready'
   const isPlanningLive = task?.status === 'planning' || task?.status === 'draft'
 
@@ -124,12 +141,16 @@ export function TaskWorkspace() {
     enabled: Boolean(repoId && taskId) && Boolean(valLiveState),
   })
   useRepairStream(repairSession?.id, Boolean(repairSession))
+  usePublishingStream(publishSession?.id, publishActive)
 
   const planEvents = useAppSelector((s) => (taskId ? s.stream.planning[taskId]?.events ?? [] : []))
   const execEvents = useAppSelector((s) => (taskId ? s.stream.execution[taskId]?.events ?? [] : []))
   const valEvents = useAppSelector((s) => (taskId ? s.stream.validation[taskId]?.events ?? [] : []))
   const repairEvents = useAppSelector((s) =>
     repairSession?.id ? s.stream.repair[repairSession.id]?.events ?? [] : [],
+  )
+  const pubEvents = useAppSelector((s) =>
+    publishSession?.id ? s.stream.publishing[publishSession.id]?.events ?? [] : [],
   )
 
   // React only to the COMMITTED terminal events the backend emits after it has
@@ -175,6 +196,14 @@ export function TaskWorkspace() {
     }
   }, [lastRepair, repairEvents.length, refetchVal, refetchTask, refetchRepair])
 
+  const lastPub = pubEvents[pubEvents.length - 1]?.event
+  useEffect(() => {
+    if (lastPub === 'publishing_complete') {
+      refetchPublish() // pull final pr_url / status
+      refetchTask()
+    }
+  }, [lastPub, pubEvents.length, refetchPublish, refetchTask])
+
   // ── Normalize ──────────────────────────────────────────────────────────────
   const validationStages = useMemo(
     () => buildValidationStages(valSnap?.stages ?? [], valEvents),
@@ -186,8 +215,8 @@ export function TaskWorkspace() {
   )
   const fileChanges = useMemo(() => buildFileChanges(diffs), [diffs])
   const activity = useMemo(
-    () => buildActivity({ planning: planEvents, execution: execEvents, validation: valEvents, repair: repairEvents }),
-    [planEvents, execEvents, valEvents, repairEvents],
+    () => buildActivity({ planning: planEvents, execution: execEvents, validation: valEvents, repair: repairEvents, publishing: pubEvents }),
+    [planEvents, execEvents, valEvents, repairEvents, pubEvents],
   )
   const phases = useMemo<LifecyclePhase[]>(() => {
     if (!task) return []
@@ -199,12 +228,13 @@ export function TaskWorkspace() {
       validationStages,
       repairSession,
       repairAttempts,
+      publishingSession: publishSession,
     })
-  }, [task, plan, execSnap, valRun, validationStages, repairSession, repairAttempts])
+  }, [task, plan, execSnap, valRun, validationStages, repairSession, repairAttempts, publishSession])
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const activeKey = selectedKey ?? defaultActivePhaseKey(phases)
-  const live = isPlanningLive || execLive || Boolean(valLiveState) || repairSession?.status === 'running'
+  const live = isPlanningLive || execLive || Boolean(valLiveState) || repairSession?.status === 'running' || publishActive
 
   // Scroll a section into view when the user picks a phase. Query at click time
   // (event handler) rather than holding render-time refs.
@@ -224,6 +254,7 @@ export function TaskWorkspace() {
   const [cancelExec] = useCancelExecutionMutation()
   const [startValidation, { isLoading: validating }] = useStartValidationMutation()
   const [provisionWorkspace, { isLoading: provisioning }] = useProvisionWorkspaceMutation()
+  const [startPublish, { isLoading: publishStarting }] = useStartPublishMutation()
 
   async function run<T>(p: Promise<T>, ok: string, err: string) {
     try {
@@ -274,18 +305,7 @@ export function TaskWorkspace() {
   const canValidate = execDone && !valRun && !validating
   const missionDone = status === 'done' || overall === 'passed'
   const missionFailed = status === 'failed' || status === 'cancelled'
-
-  // Debug logging
-  console.log('TaskWorkspace state:', {
-    status,
-    approvalStatus: task.approval_status,
-    approved,
-    workspaceStatus,
-    workspaceReady,
-    needsWorkspace,
-    canExecute,
-    execution: execution?.status,
-  })
+  const prUrl = publishSession?.status === 'completed' ? publishSession.pr_url : null
 
   const actions: React.ReactNode[] = []
   if (canApprove) {
@@ -353,6 +373,32 @@ export function TaskWorkspace() {
         Run validation
       </Button>,
     )
+  } else if (missionDone && !isExecuting && !repairing) {
+    // Validation passed (or repair succeeded) → the next step is shipping it.
+    if (prUrl) {
+      actions.push(
+        <a key="pr" className={styles.prLink} href={prUrl} target="_blank" rel="noreferrer">
+          <Icon name="git" size={15} /> View pull request
+          {publishSession?.pr_number ? ` #${publishSession.pr_number}` : ''}
+        </a>,
+      )
+    } else if (publishActive) {
+      // handled by the live "Publishing…" chip below
+    } else if (!publishSession || publishSession.status === 'failed' || publishSession.status === 'cancelled') {
+      actions.push(
+        <Button key="publish" variant="primary" loading={publishStarting}
+          leadingIcon={<Icon name="git" size={15} />}
+          onClick={async () => {
+            await run(startPublish({ repoId, taskId }).unwrap(),
+              'Publishing to GitHub…',
+              'Failed to start publishing')
+            refetchPublish()
+            refetchTask()
+          }}>
+          {publishSession?.status === 'failed' ? 'Retry publish' : 'Publish to GitHub'}
+        </Button>,
+      )
+    }
   } else if (missionFailed) {
     actions.push(
       <Button key="retry" variant="primary" loading={replanning} leadingIcon={<Icon name="refresh" size={15} />}
@@ -371,7 +417,9 @@ export function TaskWorkspace() {
         ? 'Validating…'
         : repairing
           ? 'Repairing…'
-          : undefined
+          : publishActive
+            ? (publishSession?.current_step ? `Publishing · ${publishSession.current_step}` : 'Publishing…')
+            : undefined
 
   const header = (
     <div className={styles.header}>
@@ -394,13 +442,13 @@ export function TaskWorkspace() {
       <div className={styles.actions}>
         {actions.length > 0 ? (
           actions
-        ) : missionDone ? (
-          <span className={styles.doneChip}>
-            <Icon name="check" size={15} /> Mission complete
-          </span>
         ) : liveHint ? (
           <span className={styles.waitChip}>
             <Spinner size={14} /> {liveHint}
+          </span>
+        ) : missionDone ? (
+          <span className={styles.doneChip}>
+            <Icon name="check" size={15} /> {prUrl ? 'Published' : 'Mission complete'}
           </span>
         ) : null}
       </div>
@@ -460,6 +508,43 @@ export function TaskWorkspace() {
               <RepairAttemptCard key={a.attempt} attempt={a} />
             ))}
           </div>
+        </section>
+      )}
+
+      {publishSession && (
+        <section data-phase="publishing" className={styles.section}>
+          <h2 className={styles.sectionTitle}><Icon name="git" size={16} /> Publishing</h2>
+          <Card>
+            <div className={styles.pubRow}>
+              <span className={styles.pubLabel}>Status</span>
+              <StatusBadge map={PUBLISHING_STATUS} status={publishSession.status} dot />
+            </div>
+            {publishSession.branch_name && (
+              <div className={styles.pubRow}>
+                <span className={styles.pubLabel}>Branch</span>
+                <code className={styles.pubMono}>
+                  <Icon name="branch" size={12} /> {publishSession.branch_name}
+                </code>
+              </div>
+            )}
+            {publishSession.draft_mode && (
+              <div className={styles.pubRow}>
+                <span className={styles.pubLabel}>Mode</span>
+                <Badge tone="neutral" size="sm">Draft PR</Badge>
+              </div>
+            )}
+            {prUrl && (
+              <div className={styles.pubRow}>
+                <span className={styles.pubLabel}>Pull request</span>
+                <a className={styles.prLink} href={prUrl} target="_blank" rel="noreferrer">
+                  <Icon name="externalLink" size={14} /> {prUrl.replace(/^https?:\/\//, '')}
+                </a>
+              </div>
+            )}
+            {publishSession.status === 'failed' && publishSession.error_message && (
+              <div className={styles.pubError}>{publishSession.error_message}</div>
+            )}
+          </Card>
         </section>
       )}
 

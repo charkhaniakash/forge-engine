@@ -8,6 +8,7 @@ import type {
   ValidationSocketEvent,
 } from '@/types'
 import type { RepairSocketEvent } from '@/types/repair'
+import type { PublishingSocketEvent } from '@/types/publishing'
 
 /**
  * Live buffers fed exclusively by the websocket middleware. Feature components
@@ -58,12 +59,18 @@ interface RepairStream {
   complete: boolean
 }
 
+interface PublishingStream {
+  events: PublishingSocketEvent[]
+  complete: boolean
+}
+
 interface StreamState {
   execution: Record<string, ExecutionStream>
   qa: Record<string, QAStream>
   planning: Record<string, PlanningStream>
   validation: Record<string, ValidationStream>
   repair: Record<string, RepairStream>
+  publishing: Record<string, PublishingStream>
 }
 
 const initialState: StreamState = {
@@ -72,6 +79,7 @@ const initialState: StreamState = {
   planning: {},
   validation: {},
   repair: {},
+  publishing: {},
 }
 
 function labelExecutionEvent(ev: ExecutionSocketEvent): string {
@@ -168,6 +176,25 @@ const streamSlice = createSlice({
     clearRepairEvents(state, action: PayloadAction<string>) {
       delete state.repair[action.payload]
     },
+    appendPublishingEvent(
+      state,
+      action: PayloadAction<{ sessionId: string; event: PublishingSocketEvent }>,
+    ) {
+      const { sessionId, event } = action.payload
+      const bucket =
+        state.publishing[sessionId] ??
+        (state.publishing[sessionId] = { events: [], complete: false })
+      // Dedup replayed events by timestamp (same pattern as repair).
+      if (event.ts && bucket.events.some((e) => e.ts === event.ts && e.event === event.event)) {
+        return
+      }
+      bucket.events.push(event)
+      if (bucket.events.length > 500) bucket.events.shift()
+      if (event.event === 'publishing_complete') bucket.complete = true
+    },
+    clearPublishingEvents(state, action: PayloadAction<string>) {
+      delete state.publishing[action.payload]
+    },
   },
   extraReducers: (builder) => {
     builder.addCase(socketEventReceived, (state, action) => {
@@ -238,5 +265,12 @@ const streamSlice = createSlice({
   },
 })
 
-export const { executionStreamCleared, qaStreamCleared, appendRepairEvent, clearRepairEvents } = streamSlice.actions
+export const {
+  executionStreamCleared,
+  qaStreamCleared,
+  appendRepairEvent,
+  clearRepairEvents,
+  appendPublishingEvent,
+  clearPublishingEvents,
+} = streamSlice.actions
 export default streamSlice.reducer

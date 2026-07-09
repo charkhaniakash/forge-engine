@@ -11,6 +11,7 @@ from src.planning.router import router as planning_router
 from src.execution.router import router as execution_router
 from src.validation.router import router as validation_router
 from src.repair.router import router as repair_router
+from src.summarization.router import router as summarization_router
 
 # Configure structlog — structured JSON, ISO timestamps, trace ID on every line.
 structlog.configure(
@@ -106,6 +107,10 @@ app.include_router(validation_router)
 # ── Phase 9 — Autonomous Self-Repair ─────────────────────────────────────────
 # POST /v1/agent/repair  (streaming NDJSON — see repair/router.py)
 app.include_router(repair_router)
+
+# ── Phase 10 — Summarization (Commit Messages & PR Descriptions) ─────────────
+# POST /v1/agent/summarize  (JSON — see summarization/router.py)
+app.include_router(summarization_router)
 
 
 

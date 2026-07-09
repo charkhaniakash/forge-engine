@@ -28,7 +28,24 @@ export const WORK_ITEM_STATUS: Record<string, StatusMeta> = {
   plan_ready: meta('warning', 'Plan ready'),
   plan_approved: meta('success', 'Approved'),
   executing: meta('info', 'Executing'),
+  repairing: meta('warning', 'Repairing'),
+  publishing: meta('info', 'Publishing'),
   done: meta('success', 'Done'),
+  failed: meta('danger', 'Failed'),
+  cancelled: meta('neutral', 'Cancelled'),
+}
+
+// Phase 10 — publishing pipeline steps.
+export const PUBLISHING_STATUS: Record<string, StatusMeta> = {
+  pending: meta('neutral', 'Pending'),
+  verifying: meta('info', 'Verifying'),
+  branching: meta('info', 'Creating branch'),
+  committing: meta('info', 'Committing'),
+  conflict_check: meta('info', 'Checking conflicts'),
+  pushing: meta('info', 'Pushing'),
+  creating_pr: meta('info', 'Opening PR'),
+  syncing: meta('info', 'Syncing'),
+  completed: meta('success', 'Published'),
   failed: meta('danger', 'Failed'),
   cancelled: meta('neutral', 'Cancelled'),
 }

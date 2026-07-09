@@ -22,6 +22,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/handlers"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
+	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repair"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
@@ -98,6 +99,7 @@ func main() {
 	var executionHandlers *handlers.ExecutionHandlers
 	var validationHandlers *handlers.ValidationHandlers
 	var repairHandlers *repair.Handlers
+	var publishingHandlers *publishing.Handlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -262,6 +264,36 @@ func main() {
 					jwtSecret, sugar,
 				)
 				repairHandlers = repair.NewHandlers(repairRepo, repairOrch, sugar)
+
+				// ── Publishing (Phase 10) ─────────────────────────────────────
+				publishingRepo := publishing.NewRepository(dbConn)
+				agentSummaryClient := publishing.NewAgentSummaryClient()
+				githubPRClient := publishing.NewGitHubPRClient(func(repoFullName string) (string, error) {
+					// Resolve installation token via the existing token cache.
+					// Uses background context since this is called from async goroutines.
+					bgCtx := context.Background()
+					repo, err := githubRepoRepo.GetByFullName(bgCtx, repoFullName)
+					if err != nil {
+						return "", fmt.Errorf("repo not found for %s: %w", repoFullName, err)
+					}
+					install, err := githubInstallationRepo.GetByID(bgCtx, repo.InstallationID)
+					if err != nil {
+						return "", fmt.Errorf("installation not found: %w", err)
+					}
+					token, err := tokenCache.GetInstallationToken(bgCtx, install.GitHubInstallationID)
+					if err != nil {
+						return "", fmt.Errorf("get installation token: %w", err)
+					}
+					return token, nil
+				})
+				publishingOrch := publishing.NewOrchestrator(
+					publishingRepo, workItemRepo, execRepo, wsManager,
+					githubPRClient, agentSummaryClient, jwtSecret, sugar,
+				)
+				publishingHandlers = publishing.NewHandlers(
+					publishingRepo, publishingOrch, workItemRepo, execRepo,
+					wsRepo, githubRepoRepo, sugar,
+				)
 
 				// Wire automatic validation + repair trigger into the execution orchestrator.
 				// When execution finishes, it fires this closure in a goroutine.
@@ -508,6 +540,19 @@ func main() {
 		app.Get("/v1/repair/sessions/:id/stream",
 			repairHandlers.StreamUpgrade,
 			websocket.New(repairHandlers.StreamWS),
+		)
+	}
+
+	if publishingHandlers != nil {
+		// Phase 10 — Git Operations & Pull Request Automation
+		app.Post("/v1/repos/:repoID/tasks/:taskID/publish",
+			middleware.RequireAuth(sugar), publishingHandlers.StartPublish)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/publish",
+			middleware.RequireAuth(sugar), publishingHandlers.GetPublishSession)
+		// WebSocket — live publishing progress
+		app.Get("/v1/publishing/sessions/:sessionID/stream",
+			publishingHandlers.StreamUpgrade,
+			websocket.New(publishingHandlers.StreamWS),
 		)
 	}
 

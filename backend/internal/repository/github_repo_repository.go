@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
@@ -229,6 +230,36 @@ func (r *GitHubRepoRepository) GetByID(ctx context.Context, id string) (*models.
 	)
 	if err != nil {
 		return nil, err
+	}
+	return &repo, nil
+}
+
+// GetByFullName retrieves a repo by its full name (owner/repo).
+// Used by the publishing pipeline to resolve installation tokens from a repo full name.
+func (r *GitHubRepoRepository) GetByFullName(ctx context.Context, fullName string) (*models.GitHubRepo, error) {
+	query := `
+		SELECT id, installation_id, github_repo_id, repo_name, repo_full_name, repo_owner, default_branch, private, last_synced_at, last_commit_sha, created_at, updated_at
+		FROM github_repos
+		WHERE repo_full_name = $1
+		LIMIT 1
+	`
+	var repo models.GitHubRepo
+	err := r.db.QueryRowContext(ctx, query, fullName).Scan(
+		&repo.ID,
+		&repo.InstallationID,
+		&repo.GitHubRepoID,
+		&repo.RepoName,
+		&repo.RepoFullName,
+		&repo.RepoOwner,
+		&repo.DefaultBranch,
+		&repo.Private,
+		&repo.LastSyncedAt,
+		&repo.LastCommitSHA,
+		&repo.CreatedAt,
+		&repo.UpdatedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("get repo by full name %q: %w", fullName, err)
 	}
 	return &repo, nil
 }

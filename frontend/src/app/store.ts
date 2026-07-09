@@ -17,6 +17,7 @@ import '@/services/api/taskApi'
 import '@/services/api/executionApi'
 import '@/services/api/workspaceApi'
 import '@/services/api/repairApi'
+import '@/services/api/publishingApi'
 
 export const store = configureStore({
   reducer: {

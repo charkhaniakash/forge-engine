@@ -15,6 +15,7 @@ import type {
   WorkItem,
 } from '@/types'
 import type { RepairSession, RepairSocketEvent } from '@/types/repair'
+import type { PublishingSession, PublishingSocketEvent } from '@/types/publishing'
 import type { ExecutionLiveEvent, ValidationLiveEvent } from '@/store/slices/streamSlice'
 import type {
   ActivityEvent,
@@ -58,9 +59,10 @@ interface ActivityInputs {
   execution: ExecutionLiveEvent[]
   validation: ValidationLiveEvent[]
   repair: RepairSocketEvent[]
+  publishing: PublishingSocketEvent[]
 }
 
-export function buildActivity({ planning, execution, validation, repair }: ActivityInputs): ActivityEvent[] {
+export function buildActivity({ planning, execution, validation, repair, publishing }: ActivityInputs): ActivityEvent[] {
   const out: ActivityEvent[] = []
   let seq = 0
   const push = (e: Omit<ActivityEvent, 'seq' | 'id'>) => {
@@ -230,6 +232,31 @@ export function buildActivity({ planning, execution, validation, repair }: Activ
     }
   }
 
+  for (const ev of publishing) {
+    switch (ev.event) {
+      case 'publishing_progress':
+        push({
+          phase: 'publishing',
+          kind: ev.status === 'failed' ? 'error' : 'status',
+          title: ev.message ?? ev.step ?? '',
+          detail: ev.branch,
+          tone: ev.status === 'completed' ? 'success' : ev.status === 'failed' ? 'danger' : 'info',
+        })
+        break
+      case 'publishing_complete':
+        push({
+          phase: 'publishing',
+          kind: 'status',
+          title: ev.pr_url
+            ? `Pull request opened${ev.pr_number ? ` #${ev.pr_number}` : ''}`
+            : 'Publishing complete',
+          detail: ev.pr_url,
+          tone: 'success',
+        })
+        break
+    }
+  }
+
   return out
 }
 
@@ -351,6 +378,21 @@ interface PhaseInputs {
   validationStages: ValidationStageVM[]
   repairSession?: RepairSession | null
   repairAttempts: RepairAttemptVM[]
+  publishingSession?: PublishingSession | null
+}
+
+const PUBLISHING_ACTIVE = new Set([
+  'pending', 'verifying', 'branching', 'committing',
+  'conflict_check', 'pushing', 'creating_pr', 'syncing',
+])
+
+function publishingState(session?: PublishingSession | null): PhaseState {
+  if (!session) return 'pending'
+  if (session.status === 'completed') return 'passed'
+  if (session.status === 'failed') return 'failed'
+  if (session.status === 'cancelled') return 'skipped'
+  if (PUBLISHING_ACTIVE.has(session.status)) return 'active'
+  return 'active'
 }
 
 function execState(task: WorkItem, exec?: ExecutionSnapshot | null): PhaseState {
@@ -375,7 +417,7 @@ function validationState(run?: ValidationRun | null): PhaseState {
 }
 
 export function buildPhases(inp: PhaseInputs): LifecyclePhase[] {
-  const { task, hasPlan, execution, validation, validationStages, repairSession, repairAttempts } = inp
+  const { task, hasPlan, execution, validation, validationStages, repairSession, repairAttempts, publishingSession } = inp
   const phases: LifecyclePhase[] = []
 
   phases.push({ kind: 'created', label: 'Task created', state: 'passed' })
@@ -427,9 +469,24 @@ export function buildPhases(inp: PhaseInputs): LifecyclePhase[] {
     }
   }
 
+  // Publishing — appears once a publish session exists (or the work item has
+  // transitioned into the publishing state).
+  if (publishingSession || task.status === 'publishing') {
+    const pState = publishingState(publishingSession)
+    phases.push({
+      kind: 'publishing',
+      label: 'Publishing',
+      state: pState,
+      hint: publishingSession?.pr_number
+        ? `PR #${publishingSession.pr_number}`
+        : (publishingSession?.current_step ?? undefined),
+    })
+  }
+
   // Completed
   let completed: PhaseState = 'pending'
-  if (task.status === 'done') completed = 'passed'
+  const published = publishingSession?.status === 'completed'
+  if (published || task.status === 'done') completed = 'passed'
   else if (task.status === 'failed' || task.status === 'cancelled') completed = 'failed'
   phases.push({
     kind: 'completed',

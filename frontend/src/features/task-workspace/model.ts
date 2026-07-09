@@ -15,6 +15,7 @@ export type LifecyclePhaseKind =
   | 'executing'
   | 'validation'
   | 'repair'
+  | 'publishing'
   | 'completed'
 
 export type PhaseState = 'pending' | 'active' | 'passed' | 'failed' | 'skipped'

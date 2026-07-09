@@ -143,6 +143,24 @@ func (h *TaskHandlers) ListTasks(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{"tasks": items})
 }
 
+// ── GET /v1/missions ──────────────────────────────────────────────────────────
+// Lists recent work items (Missions) across the whole org — the primary object
+// for the Mission-centric UI (sidebar + console), independent of any repo.
+
+func (h *TaskHandlers) ListMissions(c *fiber.Ctx) error {
+	orgID := c.Locals("org_id").(string)
+	ctx := c.Context()
+
+	items, err := h.workItemRepo.ListRecentByOrg(ctx, orgID, 30)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to list missions"})
+	}
+	if items == nil {
+		items = []*models.WorkItem{}
+	}
+	return c.JSON(fiber.Map{"missions": items})
+}
+
 // ── GET /v1/repos/:repoID/tasks/:taskID ──────────────────────────────────────
 // Returns a work item with its active plan.
 
@@ -427,6 +445,22 @@ func (h *TaskHandlers) runPlanning(
 
 	wsCh := h.getWSChannel(taskID)
 
+	// emitTerminal publishes a lifecycle event to the planning socket AFTER the
+	// DB write + status transition has committed. The agent's raw "plan" event
+	// is fanned mid-stream (before persistence) for live preview only; clients
+	// must react to these committed terminal events, never to "plan".
+	emitTerminal := func(eventType string) {
+		if wsCh == nil {
+			return
+		}
+		if raw, err := json.Marshal(map[string]interface{}{"event": eventType}); err == nil {
+			select {
+			case wsCh <- raw:
+			default:
+			}
+		}
+	}
+
 	var planBody json.RawMessage
 	var planErr string
 	var foundTerminal bool
@@ -466,6 +500,7 @@ func (h *TaskHandlers) runPlanning(
 		log.Errorw("planning_stream_error", "error", streamErr)
 		_ = h.workItemRepo.MarkPlanningFailed(ctx, taskID,
 			fmt.Sprintf("agent stream error: %v", streamErr))
+		emitTerminal("planning_failed")
 		return
 	}
 
@@ -475,6 +510,7 @@ func (h *TaskHandlers) runPlanning(
 			msg = "agent did not produce a plan"
 		}
 		_ = h.workItemRepo.MarkPlanningFailed(ctx, taskID, msg)
+		emitTerminal("planning_failed")
 		return
 	}
 
@@ -483,6 +519,7 @@ func (h *TaskHandlers) runPlanning(
 		log.Errorw("planning_validation_failed", "error", err)
 		_ = h.workItemRepo.MarkPlanningFailed(ctx, taskID,
 			fmt.Sprintf("plan validation failed: %v", err))
+		emitTerminal("planning_failed")
 		return
 	}
 
@@ -492,14 +529,18 @@ func (h *TaskHandlers) runPlanning(
 		log.Errorw("planning_persist_failed", "error", err)
 		_ = h.workItemRepo.MarkPlanningFailed(ctx, taskID,
 			fmt.Sprintf("failed to persist plan: %v", err))
+		emitTerminal("planning_failed")
 		return
 	}
 
 	if err := h.workItemRepo.MarkPlanReady(ctx, taskID); err != nil {
 		log.Errorw("planning_mark_ready_failed", "error", err)
+		emitTerminal("planning_failed")
 		return
 	}
 
+	// Status is now committed as plan_ready — safe to tell the client.
+	emitTerminal("plan_ready")
 	log.Infow("planning_complete")
 }
 

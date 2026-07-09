@@ -77,6 +77,14 @@ func (o *Orchestrator) SetPublisher(pub func(sessionID string, eventType string,
 // publish fans a repair event to the WebSocket hub (no-op if no publisher set).
 func (o *Orchestrator) publish(sessionID, eventType string, payload map[string]interface{}) {
 	if o.publisher != nil {
+		if payload == nil {
+			payload = map[string]interface{}{}
+		}
+		// Stamp every event with a server timestamp so the client can order a
+		// unified cross-stream activity feed deterministically.
+		if _, ok := payload["ts"]; !ok {
+			payload["ts"] = time.Now().UnixMilli()
+		}
 		o.publisher(sessionID, eventType, payload)
 	}
 }
@@ -527,13 +535,23 @@ func (o *Orchestrator) runAgentStream(
 			reasoning = append(reasoning, map[string]interface{}{
 				"message": event.Message,
 			})
+			// Stream the agent's live thinking to the client. The Python repair
+			// graph already emits this; it was previously only persisted, never
+			// broadcast — so the repair reasoning panel had nothing to show.
+			o.publish(session.ID, "reasoning", map[string]interface{}{
+				"attempt_number": req.RepairContext.AttemptNumber,
+				"message":        event.Message,
+			})
 
 		case "tool_call":
 			log.Debugw("repair_tool_call", "tool", event.ToolName, "tool_call_id", event.ToolCallID)
-			// Publish tool_call to WebSocket
+			// Publish tool_call to WebSocket, INCLUDING args so the client can
+			// show which file the agent is reading/writing (previously dropped).
 			o.publish(session.ID, "tool_call", map[string]interface{}{
-				"tool":         event.ToolName,
-				"tool_call_id": event.ToolCallID,
+				"attempt_number": req.RepairContext.AttemptNumber,
+				"tool":           event.ToolName,
+				"tool_call_id":   event.ToolCallID,
+				"args":           json.RawMessage(event.ToolArgs),
 			})
 			// Lazily capture before-content for write_file targets not already snapshotted.
 			// The tool_call event arrives BEFORE the tool executes, so this gives the pre-write state.
@@ -556,10 +574,28 @@ func (o *Orchestrator) runAgentStream(
 				}
 			}
 
+		case "tool_result":
+			// Stream the outcome of each repair tool call (✓/✗) so the tool
+			// panel can resolve its running rows.
+			o.publish(session.ID, "tool_result", map[string]interface{}{
+				"attempt_number": req.RepairContext.AttemptNumber,
+				"tool":           event.ToolName,
+				"tool_call_id":   event.ToolCallID,
+				"success":        event.Success,
+			})
+
 		case "repair_complete":
 			result.Strategy = &event.Strategy
 			result.Confidence = &event.Confidence
 			result.ModifiedFiles = event.ModifiedFiles
+			// Forward strategy/confidence/summary so the repair panel shows the
+			// agent's chosen approach the moment the attempt finishes.
+			o.publish(session.ID, "attempt_reasoning", map[string]interface{}{
+				"attempt_number": req.RepairContext.AttemptNumber,
+				"strategy":       event.Strategy,
+				"confidence":     event.Confidence,
+				"summary":        event.Summary,
+			})
 			reasoningJSON, _ := json.Marshal(map[string]interface{}{
 				"summary":   event.Summary,
 				"reasoning": reasoning,

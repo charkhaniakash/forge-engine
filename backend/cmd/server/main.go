@@ -424,6 +424,7 @@ func main() {
 
 	if taskHandlers != nil {
 		// Phase 5 — Task creation & planning
+		app.Get("/v1/missions", middleware.RequireAuth(sugar), taskHandlers.ListMissions)
 		app.Post("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.CreateTask)
 		app.Get("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.ListTasks)
 		app.Get("/v1/repos/:repoID/tasks/:taskID", middleware.RequireAuth(sugar), taskHandlers.GetTask)

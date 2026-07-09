@@ -185,6 +185,12 @@
   font-size: var(--text-xs);
   color: var(--success);
 }
+.commitSha {
+  font-family: var(--font-mono, monospace);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  opacity: 0.75;
+}
 
 .recent {
   width: 100%;

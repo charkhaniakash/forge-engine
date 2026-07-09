@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 9 — Autonomous Self-Repair & Recovery Loop**
+> ### 🔵 ACTIVE PHASE: **Phase 10 — Git Operations, Review Preparation & Pull Request Automation**
 >
-> Only work within this phase's scope (see Phase 9 below) until the human moves
+> Only work within this phase's scope (see Phase 10 below) until the human moves
 > this marker forward.
 
 ---
@@ -185,6 +185,34 @@ ACTIVE marker below.
 - Frontend: Execution page — "View validation report" button (validation is automatic)
 - Frontend: app/router.tsx — Validation route registered with lazy loading
 - Phase 9 interface: GetRunWithFullResult() returns canonical ValidationRun domain object — Phase 9 never reads raw tables
+
+### ✅ Phase 9 — Autonomous Self-Repair & Recovery Loop
+- Database: repair_sessions, repair_attempts, repair_checkpoints tables (migration 012)
+- Database: code_diffs.step_execution_id made nullable for repair writes (migration 013)
+- Go: RepairOrchestrator — repair session loop, budget enforcement (max attempts, time, cost), validation comparison
+- Go: RepairPolicy — gates repair based on diagnostic categories (only code_error auto-repaired)
+- Go: AgentRepairClient — NDJSON streaming client to POST /v1/agent/repair
+- Go: RepairRepository — full CRUD for repair_sessions, repair_attempts, repair_checkpoints
+- Go: RepairHandlers — REST (GET/POST) + WebSocket streaming endpoints
+- Go: RepairConstants — centralized config defaults (max attempts, timeouts, budgets)
+- Go: Validation trigger closure wired to repair orchestrator in main.go
+- Go: Automatic repair trigger when validation result is failed_repairable
+- Go: Re-runs Phase 7 (execution) → Phase 8 (validation) after every repair attempt
+- Go: Baseline validation reused throughout repair session (no re-baseline)
+- Go: Escalation to user when budgets exhausted or confidence too low
+- Agent: LangGraph StateGraph with MemorySaver checkpointer for tool interrupt/resume
+- Agent: Repair Graph nodes — gather_context, root_cause_analysis, select_strategy, generate_fix, apply_fix, receive_fix_result, complete_repair, cannot_repair (escalate)
+- Agent: RepairPipeline — tool broker using interrupt_before + MemorySaver to checkpoint, execute tool via RepairToolClient, inject result via aupdate_state(), resume with astream(None)
+- Agent: RepairToolClient — HTTP client to Go's /v1/internal/workspaces/:id/tool (ONLY tool execution path)
+- Agent: Multi-group root cause analysis — filters non-repairable groups, repairs code_error groups only
+- Agent: Path normalizer strips /workspace/ prefix from LLM-generated paths
+- Agent: POST /v1/agent/repair — streaming NDJSON endpoint
+- Agent: Repair models — RepairState TypedDict, RepairRequest, RepairContext dataclasses
+- Frontend: Validation.tsx — shows repair events in combined validation+repair page
+- Frontend: repair.ts — RepairSession, RepairSocketEvent types
+- Frontend: repairApi.ts — RTK Query endpoints for repair session polling
+- Frontend: streamSlice.ts — repair event bucket in Redux store
+- Frontend: WebSocket middleware handles repair channel events
 
 ---
 - Database: task_executions, step_executions, execution_events, code_diffs, execution_checkpoints (migration 010)

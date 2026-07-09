@@ -25,15 +25,24 @@ type Handlers struct {
 	// Lifecycle: connID entry created on WS open, removed on WS close.
 	wsHub map[string]map[string]chan []byte
 	wsMu  sync.RWMutex
+
+	// eventLog buffers all published events per session so that late-connecting
+	// WebSocket subscribers receive a full replay. Without this, subscribers that
+	// connect after the repair starts (common due to frontend polling lag) would
+	// miss reasoning events. The buffer is capped and cleaned up when sessions
+	// complete.
+	eventLog   map[string][][]byte
+	eventLogMu sync.RWMutex
 }
 
 // NewHandlers constructs Handlers and wires the orchestrator's WS publisher.
 func NewHandlers(repo *RepairRepository, orch *Orchestrator, logger *zap.SugaredLogger) *Handlers {
 	h := &Handlers{
-		repo:   repo,
-		orch:   orch,
-		logger: logger,
-		wsHub:  make(map[string]map[string]chan []byte),
+		repo:     repo,
+		orch:     orch,
+		logger:   logger,
+		wsHub:    make(map[string]map[string]chan []byte),
+		eventLog: make(map[string][][]byte),
 	}
 	if orch != nil {
 		orch.SetPublisher(h.publish)
@@ -151,6 +160,8 @@ func (h *Handlers) StreamUpgrade(c *fiber.Ctx) error {
 // StreamWS is the WebSocket handler registered with websocket.New().
 // Multiple concurrent subscribers for the same sessionID are fully supported —
 // each gets its own buffered channel and is cleaned up independently on disconnect.
+// On connect, any previously published events for this session are replayed
+// immediately so late subscribers don't miss reasoning/tool events.
 func (h *Handlers) StreamWS(c *websocket.Conn) {
 	sessionID, _ := c.Locals("sessionID").(string)
 	connID := uuid.New().String()
@@ -163,6 +174,16 @@ func (h *Handlers) StreamWS(c *websocket.Conn) {
 		h.removeWSSubscriber(sessionID, connID)
 		h.logger.Infow("repair_ws_disconnected", "session_id", sessionID, "conn_id", connID)
 	}()
+
+	// Replay buffered events so the subscriber catches up on anything missed.
+	h.eventLogMu.RLock()
+	replay := h.eventLog[sessionID]
+	h.eventLogMu.RUnlock()
+	for _, msg := range replay {
+		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
 
 	pingTicker := time.NewTicker(20 * time.Second)
 	defer pingTicker.Stop()
@@ -188,6 +209,7 @@ func (h *Handlers) StreamWS(c *websocket.Conn) {
 
 // publish broadcasts a repair event to every active subscriber for this session.
 // Subscribers whose channels are full (slow readers) are skipped — they are not blocked.
+// Events are also appended to eventLog so late-connecting subscribers get a replay.
 func (h *Handlers) publish(sessionID, eventType string, payload map[string]interface{}) {
 	event := map[string]interface{}{
 		"v":          1,
@@ -201,6 +223,26 @@ func (h *Handlers) publish(sessionID, eventType string, payload map[string]inter
 	if err != nil {
 		return
 	}
+
+	// Buffer for late subscribers (capped at 500 events per session).
+	h.eventLogMu.Lock()
+	buf := h.eventLog[sessionID]
+	if len(buf) < 500 {
+		h.eventLog[sessionID] = append(buf, raw)
+	}
+	// Clean up terminal events — once a session ends, we keep the buffer for a
+	// few minutes for stragglers, then it gets cleaned on next session creation
+	// or when the subscriber slice empties.
+	if eventType == "repair_complete" || eventType == "repair_escalated" {
+		// Schedule cleanup after 2 minutes (non-blocking).
+		go func() {
+			time.Sleep(2 * time.Minute)
+			h.eventLogMu.Lock()
+			delete(h.eventLog, sessionID)
+			h.eventLogMu.Unlock()
+		}()
+	}
+	h.eventLogMu.Unlock()
 
 	h.wsMu.RLock()
 	defer h.wsMu.RUnlock()

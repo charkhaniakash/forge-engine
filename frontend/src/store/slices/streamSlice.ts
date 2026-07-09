@@ -157,6 +157,10 @@ const streamSlice = createSlice({
       const bucket =
         state.repair[sessionId] ??
         (state.repair[sessionId] = { events: [], complete: false })
+      // Deduplicate by timestamp — replayed events carry the same ts as originals.
+      if (event.ts && bucket.events.some((e) => e.ts === event.ts && e.event === event.event)) {
+        return
+      }
       bucket.events.push(event)
       if (bucket.events.length > 500) bucket.events.shift()
       if (TERMINAL_REPAIR.has(event.event)) bucket.complete = true

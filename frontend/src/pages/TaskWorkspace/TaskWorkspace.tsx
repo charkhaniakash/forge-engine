@@ -91,9 +91,8 @@ export function TaskWorkspace() {
   const valRun = valSnap?.run
   const valLiveState = valRun?.status === 'running' || valRun?.status === 'pending'
 
-  const isRepairable = valRun?.overall_result === 'failed_repairable'
-  const { data: repairSession } = useGetRepairSessionByTaskQuery(taskExecutionId, {
-    skip: !isRepairable || !taskExecutionId,
+  const { data: repairSession, refetch: refetchRepair } = useGetRepairSessionByTaskQuery(taskExecutionId, {
+    skip: !taskExecutionId,
     pollingInterval: 3000,
   })
 
@@ -102,7 +101,8 @@ export function TaskWorkspace() {
     { skip: !repoId || !taskId, pollingInterval: 3000 },
   )
 
-  const isPlanning = task?.status === 'planning' || task?.status === 'draft'
+  const isPlanning = task?.status === 'planning' || task?.status === 'draft' || task?.status === 'plan_ready'
+  const isPlanningLive = task?.status === 'planning' || task?.status === 'draft'
 
   // ── Live subscriptions ──────────────────────────────────────────────────
   useSocketChannel({
@@ -123,7 +123,7 @@ export function TaskWorkspace() {
     path: `/repos/${repoId}/tasks/${taskId}/validation/stream`,
     enabled: Boolean(repoId && taskId) && Boolean(valLiveState),
   })
-  useRepairStream(repairSession?.id, repairSession?.status === 'running')
+  useRepairStream(repairSession?.id, Boolean(repairSession))
 
   const planEvents = useAppSelector((s) => (taskId ? s.stream.planning[taskId]?.events ?? [] : []))
   const execEvents = useAppSelector((s) => (taskId ? s.stream.execution[taskId]?.events ?? [] : []))
@@ -168,8 +168,12 @@ export function TaskWorkspace() {
     if (lastRepair === 'repair_complete' || lastRepair === 'repair_escalated') {
       refetchVal()
       refetchTask()
+      refetchRepair()
+    } else if (lastRepair === 'attempt_complete') {
+      // Refetch repair session to pick up updated attempts_used count
+      refetchRepair()
     }
-  }, [lastRepair, repairEvents.length, refetchVal, refetchTask])
+  }, [lastRepair, repairEvents.length, refetchVal, refetchTask, refetchRepair])
 
   // ── Normalize ──────────────────────────────────────────────────────────────
   const validationStages = useMemo(
@@ -200,7 +204,7 @@ export function TaskWorkspace() {
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null)
   const activeKey = selectedKey ?? defaultActivePhaseKey(phases)
-  const live = isPlanning || execLive || Boolean(valLiveState) || repairSession?.status === 'running'
+  const live = isPlanningLive || execLive || Boolean(valLiveState) || repairSession?.status === 'running'
 
   // Scroll a section into view when the user picks a phase. Query at click time
   // (event handler) rather than holding render-time refs.
@@ -294,9 +298,27 @@ export function TaskWorkspace() {
         onClick={() => run(cancel({ repoId, taskId }).unwrap(), 'Plan rejected', 'Failed to reject')}>
         Reject
       </Button>,
-      <Button key="approve" variant="primary" loading={approving} leadingIcon={<Icon name="check" size={15} />}
-        onClick={() => run(approve({ repoId, taskId }).unwrap(), 'Plan approved', 'Failed to approve')}>
-        Approve plan
+      <Button key="approve" variant="primary" loading={approving || provisioning || starting} leadingIcon={<Icon name="check" size={15} />}
+        onClick={async () => {
+          try {
+            await approve({ repoId, taskId }).unwrap()
+            toast.success('Plan approved — provisioning workspace…')
+            const ws = await provisionWorkspace({ repoId, taskId }).unwrap()
+            refetchWorkspace()
+            refetchTask()
+            if (ws?.status === 'ready') {
+              toast.success('Workspace ready — starting execution…')
+              await startExec({ repoId, taskId }).unwrap()
+              refetchExec()
+              refetchTask()
+            }
+          } catch {
+            toast.error('Failed to start — check the console')
+            refetchTask()
+            refetchWorkspace()
+          }
+        }}>
+        Approve &amp; run
       </Button>,
     )
   } else if (needsWorkspace) {
@@ -341,7 +363,7 @@ export function TaskWorkspace() {
   }
 
   // A live phase drives itself — surface what it's doing, not a dead end.
-  const liveHint = isPlanning
+  const liveHint = isPlanningLive
     ? 'Planning…'
     : isExecuting
       ? 'Executing…'

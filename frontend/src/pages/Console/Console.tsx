@@ -197,6 +197,19 @@ export function Console() {
           {repoId && indexed && (
             <div className={styles.indexed}>
               <Icon name="check" size={13} /> {repoName(repoId)} is indexed and ready
+              {indexJob?.commit_sha && (
+                <span className={styles.commitSha} title={indexJob.commit_sha}>
+                  @ {indexJob.commit_sha.slice(0, 7)}
+                </span>
+              )}
+              <button
+                type="button"
+                className={styles.indexBtn}
+                onClick={() => triggerIndex(repoId)}
+                disabled={indexingTrigger}
+              >
+                {indexingTrigger ? 'Starting…' : 'Re-index'}
+              </button>
             </div>
           )}
         </form>

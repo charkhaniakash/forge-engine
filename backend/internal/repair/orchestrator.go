@@ -294,6 +294,7 @@ func (o *Orchestrator) Run(
 
 		// Publish attempt complete event
 		o.publish(session.ID, "attempt_complete", map[string]interface{}{
+			"attempt_number": attemptNum,
 			"outcome":        outcome,
 			"modified_files": attemptResult.ModifiedFiles,
 		})

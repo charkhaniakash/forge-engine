@@ -42,6 +42,12 @@ type TaskHandlers struct {
 	// Used to stream "thinking" events to the frontend during planning.
 	wsHub map[string]chan []byte
 	wsMu  sync.RWMutex
+
+	// planEventLog buffers planning events per taskID so late-connecting
+	// WebSocket subscribers receive the full history. Planning is fast (5-10s)
+	// and the frontend often connects after it's already done.
+	planEventLog   map[string][][]byte
+	planEventLogMu sync.RWMutex
 }
 
 // NewTaskHandlers constructs TaskHandlers.
@@ -59,6 +65,7 @@ func NewTaskHandlers(
 		jwtSecret:    jwtSecret,
 		logger:       logger,
 		wsHub:        make(map[string]chan []byte),
+		planEventLog: make(map[string][][]byte),
 	}
 }
 
@@ -380,6 +387,16 @@ func (h *TaskHandlers) StreamWS(c *websocket.Conn) {
 	h.setWSChannel(taskID, ch)
 	defer h.removeWSChannel(taskID)
 
+	// Replay buffered planning events so late subscribers catch up.
+	h.planEventLogMu.RLock()
+	replay := h.planEventLog[taskID]
+	h.planEventLogMu.RUnlock()
+	for _, msg := range replay {
+		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
+
 	pingTicker := time.NewTicker(20 * time.Second)
 	defer pingTicker.Stop()
 
@@ -443,21 +460,38 @@ func (h *TaskHandlers) runPlanning(
 	defer cancel()
 	planCtx = ingestion.WithTraceID(planCtx, traceID)
 
-	wsCh := h.getWSChannel(taskID)
-
 	// emitTerminal publishes a lifecycle event to the planning socket AFTER the
 	// DB write + status transition has committed. The agent's raw "plan" event
 	// is fanned mid-stream (before persistence) for live preview only; clients
 	// must react to these committed terminal events, never to "plan".
 	emitTerminal := func(eventType string) {
+		raw, err := json.Marshal(map[string]interface{}{"event": eventType})
+		if err != nil {
+			return
+		}
+
+		// Buffer the terminal event for late subscribers.
+		h.planEventLogMu.Lock()
+		if buf := h.planEventLog[taskID]; len(buf) < 200 {
+			h.planEventLog[taskID] = append(buf, raw)
+		}
+		h.planEventLogMu.Unlock()
+
+		// Clean up the buffer after 2 minutes — planning is done.
+		go func() {
+			time.Sleep(2 * time.Minute)
+			h.planEventLogMu.Lock()
+			delete(h.planEventLog, taskID)
+			h.planEventLogMu.Unlock()
+		}()
+
+		wsCh := h.getWSChannel(taskID)
 		if wsCh == nil {
 			return
 		}
-		if raw, err := json.Marshal(map[string]interface{}{"event": eventType}); err == nil {
-			select {
-			case wsCh <- raw:
-			default:
-			}
+		select {
+		case wsCh <- raw:
+		default:
 		}
 	}
 
@@ -468,12 +502,25 @@ func (h *TaskHandlers) runPlanning(
 	streamErr := h.agentClient.Plan(planCtx, planReq, agentToken,
 		func(event ingestion.PlanStreamEvent) {
 			// Fan every event to the WebSocket immediately.
+			// Re-read the channel on every event so late-connecting subscribers
+			// still receive events (previously captured once → nil if WS connected late).
+			raw, marshalErr := json.Marshal(event)
+			if marshalErr != nil {
+				return
+			}
+
+			// Buffer for late subscribers (planning is fast, WS often connects after).
+			h.planEventLogMu.Lock()
+			if buf := h.planEventLog[taskID]; len(buf) < 200 {
+				h.planEventLog[taskID] = append(buf, raw)
+			}
+			h.planEventLogMu.Unlock()
+
+			wsCh := h.getWSChannel(taskID)
 			if wsCh != nil {
-				if raw, err := json.Marshal(event); err == nil {
-					select {
-					case wsCh <- raw:
-					default:
-					}
+				select {
+				case wsCh <- raw:
+				default:
 				}
 			}
 

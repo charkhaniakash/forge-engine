@@ -4,33 +4,19 @@ import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { AppLayout } from '@/layouts/AppLayout/AppLayout'
 import { AuthLayout } from '@/layouts/AuthLayout/AuthLayout'
 import { ROUTES } from '@/constants/routes'
-import {
-  Audit,
-  BuildTest,
-  Git,
-  NotFound,
-  Repairs,
-  Usage,
-  WorkspacePlaceholder,
-} from '@/pages/placeholders'
 
-// Route-level code splitting for the primary feature pages.
+// Auth
 const Login = lazy(() => import('@/pages/Login/Login'))
 const Signup = lazy(() => import('@/pages/Signup/Signup'))
 const GitHubInstallCallback = lazy(
   () => import('@/pages/GitHubInstallCallback/GitHubInstallCallback'),
 )
-const Dashboard = lazy(() => import('@/pages/Dashboard/Dashboard'))
+
+// Core Mission-centric surfaces
+const Console = lazy(() => import('@/pages/Console/Console'))
+const Mission = lazy(() => import('@/pages/TaskWorkspace/TaskWorkspace'))
+const AskThread = lazy(() => import('@/pages/Ask/AskThread'))
 const Repositories = lazy(() => import('@/pages/Repositories/Repositories'))
-const Repository = lazy(() => import('@/pages/Repository/Repository'))
-const RepositoryQA = lazy(() => import('@/pages/RepositoryQA/RepositoryQA'))
-const Tasks = lazy(() => import('@/pages/Tasks/Tasks'))
-const Task = lazy(() => import('@/pages/Task/Task'))
-const PlanReview = lazy(() => import('@/pages/PlanReview/PlanReview'))
-const Execution = lazy(() => import('@/pages/Execution/Execution'))
-const Workspace = lazy(() => import('@/pages/Workspace/Workspace'))
-const Validation = lazy(() => import('@/pages/Validation/Validation'))
-const Organizations = lazy(() => import('@/pages/Organizations/Organizations'))
 const Settings = lazy(() => import('@/pages/Settings/Settings'))
 
 export const router = createBrowserRouter([
@@ -48,27 +34,12 @@ export const router = createBrowserRouter([
   {
     element: <AppLayout />,
     children: [
-      { index: true, element: <Navigate to={ROUTES.dashboard} replace /> },
-      { path: ROUTES.dashboard, element: <Dashboard /> },
+      { index: true, element: <Console /> },
+      { path: ROUTES.mission, element: <Mission /> },
+      { path: ROUTES.ask, element: <AskThread /> },
       { path: ROUTES.repositories, element: <Repositories /> },
-      { path: ROUTES.repository, element: <Repository /> },
-      { path: ROUTES.repositoryQA, element: <RepositoryQA /> },
-      { path: ROUTES.tasks, element: <Tasks /> },
-      { path: ROUTES.task, element: <Task /> },
-      { path: ROUTES.taskPlan, element: <PlanReview /> },
-      { path: ROUTES.taskExecution, element: <Execution /> },
-      { path: ROUTES.taskWorkspace, element: <Workspace /> },
-      { path: ROUTES.taskValidation, element: <Validation /> },
-      { path: ROUTES.organizations, element: <Organizations /> },
       { path: ROUTES.settings, element: <Settings /> },
-      // Future-phase placeholders.
-      { path: ROUTES.buildTest, element: <BuildTest /> },
-      { path: ROUTES.repairs, element: <Repairs /> },
-      { path: ROUTES.git, element: <Git /> },
-      { path: ROUTES.workspace, element: <WorkspacePlaceholder /> },
-      { path: ROUTES.audit, element: <Audit /> },
-      { path: ROUTES.usage, element: <Usage /> },
-      { path: '*', element: <NotFound /> },
+      { path: '*', element: <Navigate to={ROUTES.root} replace /> },
     ],
   },
 ])

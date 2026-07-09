@@ -15,7 +15,6 @@ import {
   useSyncReposMutation,
 } from '@/services/api/repositoryApi'
 import { useToast } from '@/hooks/useToast'
-import { routeTo } from '@/constants/routes'
 import styles from './Repositories.module.css'
 
 export function Repositories() {
@@ -124,7 +123,7 @@ export function Repositories() {
               <RepositoryRow
                 key={repo.id}
                 repo={repo}
-                onClick={() => navigate(routeTo.repository(repo.id))}
+                onClick={() => navigate(`/?repo=${repo.id}`)}
               />
             ))}
           </div>

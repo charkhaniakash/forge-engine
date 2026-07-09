@@ -1,0 +1,106 @@
+.root {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+.header {
+  padding: var(--space-3) var(--space-4);
+  font-weight: var(--font-semibold);
+  font-size: var(--text-md);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-1);
+}
+.stages {
+  display: flex;
+  flex-direction: column;
+}
+.stage {
+  border-bottom: 1px solid var(--border-subtle);
+}
+.stage:last-child {
+  border-bottom: none;
+}
+.stageHead {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  text-align: left;
+}
+.stageHead:hover {
+  background: var(--surface-2);
+}
+.badge {
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: #fff;
+}
+.ok {
+  background: var(--success);
+}
+.fail {
+  background: var(--danger);
+}
+.active {
+  background: var(--info);
+}
+.pending {
+  background: var(--surface-3);
+  color: var(--text-tertiary);
+  border: 1px solid var(--border-default);
+}
+.stageName {
+  flex: 1;
+  text-transform: capitalize;
+  font-weight: var(--font-medium);
+  color: var(--text-primary);
+}
+.exit {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--danger);
+}
+.duration {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+.chevron {
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) var(--ease);
+}
+.chevronOpen {
+  transform: rotate(90deg);
+}
+.log {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-inset);
+  border-top: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.spinner {
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: var(--radius-full);
+  display: inline-block;
+  animation: forge-spin 0.7s linear infinite;
+}

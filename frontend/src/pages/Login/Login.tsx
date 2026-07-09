@@ -26,7 +26,7 @@ export function Login() {
     e.preventDefault()
     try {
       await login({ email, password }).unwrap()
-      navigate(ROUTES.dashboard)
+      navigate(ROUTES.root)
     } catch {
       // Error surfaced via the `error` state below.
     }

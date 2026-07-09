@@ -3,10 +3,10 @@ import { useAuth } from '@/hooks/useAuth'
 import { ROUTES } from '@/constants/routes'
 import styles from './AuthLayout.module.css'
 
-/** Centered layout for login/signup. Redirects to dashboard if already authed. */
+/** Centered layout for login/signup. Redirects to the console if already authed. */
 export function AuthLayout() {
   const { isAuthenticated } = useAuth()
-  if (isAuthenticated) return <Navigate to={ROUTES.dashboard} replace />
+  if (isAuthenticated) return <Navigate to={ROUTES.root} replace />
 
   return (
     <div className={styles.root}>

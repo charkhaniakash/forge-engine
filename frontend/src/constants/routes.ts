@@ -16,6 +16,8 @@ export const ROUTES = {
   repositoryQA: '/repositories/:id/qa',
 
   tasks: '/tasks',
+  mission: '/mission/:id',
+  ask: '/ask/:id',
   task: '/tasks/:id',
   taskPlan: '/tasks/:id/plan',
   taskExecution: '/tasks/:id/execution',
@@ -37,6 +39,8 @@ export const ROUTES = {
 export const routeTo = {
   repository: (id: string) => `/repositories/${id}`,
   repositoryQA: (id: string) => `/repositories/${id}/qa`,
+  mission: (id: string) => `/mission/${id}`,
+  ask: (id: string) => `/ask/${id}`,
   task: (id: string) => `/tasks/${id}`,
   taskPlan: (id: string) => `/tasks/${id}/plan`,
   taskExecution: (id: string) => `/tasks/${id}/execution`,

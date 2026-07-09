@@ -17,23 +17,35 @@ export interface RepairSession {
 export type RepairEventType =
   | 'repair_started'
   | 'attempt_started'
+  | 'reasoning'
   | 'tool_call'
+  | 'tool_result'
+  | 'attempt_reasoning'
   | 'attempt_complete'
   | 'repair_complete'
   | 'repair_escalated'
 
 export interface RepairSocketEvent {
-  v: number
+  v?: number
   event: RepairEventType
-  session_id: string
+  session_id?: string
+  /** Server timestamp (unix ms) — present on all events for feed ordering. */
+  ts?: number
+  attempt_number?: number
   // repair_started
   attempt?: number
   max_attempts?: number
-  // attempt_started
-  attempt_number?: number
-  // tool_call
+  // reasoning
+  message?: string
+  // tool_call / tool_result
   tool?: string
   tool_call_id?: string
+  args?: unknown
+  success?: boolean
+  // attempt_reasoning
+  strategy?: string
+  confidence?: number
+  summary?: string
   // attempt_complete
   outcome?: string
   modified_files?: string[]

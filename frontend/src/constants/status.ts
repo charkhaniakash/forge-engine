@@ -34,8 +34,13 @@ export const WORK_ITEM_STATUS: Record<string, StatusMeta> = {
 }
 
 export const APPROVAL_STATUS: Record<string, StatusMeta> = {
-  pending: meta('warning', 'Pending review'),
+  pending_review: meta('warning', 'Pending review'),
   approved: meta('success', 'Approved'),
+  auto_approved: meta('success', 'Auto-approved'),
+  blocked: meta('danger', 'Blocked'),
+  changes_requested: meta('warning', 'Changes requested'),
+  // legacy aliases
+  pending: meta('warning', 'Pending review'),
   rejected: meta('danger', 'Rejected'),
 }
 

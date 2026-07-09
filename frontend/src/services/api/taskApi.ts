@@ -8,6 +8,13 @@ interface TaskDetail {
 
 export const taskApi = baseApi.injectEndpoints({
   endpoints: (builder) => ({
+    /** Recent Missions across the whole org — powers the sidebar + console. */
+    listMissions: builder.query<WorkItem[], void>({
+      query: () => '/missions',
+      transformResponse: (res: { missions?: WorkItem[] }) => res.missions ?? [],
+      providesTags: [{ type: 'Task', id: 'MISSIONS' }],
+    }),
+
     listTasks: builder.query<WorkItem[], string>({
       query: (repoId) => `/repos/${repoId}/tasks`,
       transformResponse: (res: { tasks?: WorkItem[] }) => res.tasks ?? [],
@@ -49,6 +56,7 @@ export const taskApi = baseApi.injectEndpoints({
       }),
       invalidatesTags: (_r, _e, { repoId }) => [
         { type: 'Task', id: `LIST-${repoId}` },
+        { type: 'Task', id: 'MISSIONS' },
       ],
     }),
 
@@ -103,6 +111,7 @@ export const taskApi = baseApi.injectEndpoints({
 })
 
 export const {
+  useListMissionsQuery,
   useListTasksQuery,
   useGetTaskQuery,
   useListPlansQuery,

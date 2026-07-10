@@ -21,6 +21,8 @@ export interface ExecutionLiveEvent {
   kind: string
   label: string
   raw: ExecutionSocketEvent
+  /** Client-perceived arrival time (ms epoch) — sockets carry no timestamp. */
+  receivedAt: number
 }
 
 export interface ValidationLiveEvent {
@@ -28,6 +30,7 @@ export interface ValidationLiveEvent {
   kind: string
   label: string
   raw: ValidationSocketEvent
+  receivedAt: number
 }
 
 interface ValidationStream {
@@ -169,7 +172,7 @@ const streamSlice = createSlice({
       if (event.ts && bucket.events.some((e) => e.ts === event.ts && e.event === event.event)) {
         return
       }
-      bucket.events.push(event)
+      bucket.events.push(event.ts ? event : { ...event, ts: Date.now() })
       if (bucket.events.length > 500) bucket.events.shift()
       if (TERMINAL_REPAIR.has(event.event)) bucket.complete = true
     },
@@ -210,6 +213,7 @@ const streamSlice = createSlice({
           kind: ev.event,
           label: labelExecutionEvent(ev),
           raw: ev,
+          receivedAt: Date.now(),
         })
         if (bucket.events.length > 500) bucket.events.shift()
         if (TERMINAL_EXEC.has(ev.event)) bucket.complete = true
@@ -243,7 +247,7 @@ const streamSlice = createSlice({
         const bucket =
           state.planning[resourceId] ??
           (state.planning[resourceId] = { events: [] })
-        bucket.events.push(ev)
+        bucket.events.push({ ...ev, receivedAt: Date.now() })
         if (typeof ev.stage === 'string') bucket.stage = ev.stage
       }
 
@@ -257,6 +261,7 @@ const streamSlice = createSlice({
           kind: ev.event,
           label: labelValidationEvent(ev),
           raw: ev,
+          receivedAt: Date.now(),
         })
         if (bucket.events.length > 500) bucket.events.shift()
         if (TERMINAL_VALIDATION.has(ev.event)) bucket.complete = true

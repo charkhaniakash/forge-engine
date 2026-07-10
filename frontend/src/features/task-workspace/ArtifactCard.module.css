@@ -1,0 +1,25 @@
+.card {
+  margin: var(--space-1) 0;
+  border-color: var(--border-subtle);
+  background: transparent;
+}
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-base);
+}
+.icon {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.tone_success .icon {
+  color: var(--success);
+}
+.tone_warning .icon {
+  color: var(--warning);
+}
+.tone_danger .icon {
+  color: var(--danger);
+}

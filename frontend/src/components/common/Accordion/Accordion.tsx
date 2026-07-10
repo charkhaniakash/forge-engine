@@ -8,6 +8,8 @@ export interface AccordionProps {
   defaultOpen?: boolean
   right?: ReactNode
   children: ReactNode
+  /** Extra class on the root — lets consumers fit the accordion into a denser context. */
+  className?: string
 }
 
 export function Accordion({
@@ -16,10 +18,11 @@ export function Accordion({
   defaultOpen = false,
   right,
   children,
+  className,
 }: AccordionProps) {
   const [open, setOpen] = useState(defaultOpen)
   return (
-    <div className={styles.root}>
+    <div className={`${styles.root} ${className ?? ''}`}>
       <button
         className={styles.header}
         onClick={() => setOpen((o) => !o)}

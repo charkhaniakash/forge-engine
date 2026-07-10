@@ -1,5 +1,5 @@
 .sidebar {
-  width: 264px;
+  width: 256px;
   flex-shrink: 0;
   height: 100vh;
   background: var(--surface-1);
@@ -8,7 +8,7 @@
   flex-direction: column;
 }
 .top {
-  padding: var(--space-4) var(--space-4) var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-3);
 }
 .brand {
   display: flex;
@@ -37,19 +37,20 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: var(--space-2) var(--space-3) var(--space-3);
-  padding: var(--space-3);
-  background: var(--accent-subtle);
-  color: var(--accent);
-  border: 1px solid var(--accent-border);
+  margin: 0 var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
   border-radius: var(--radius-md);
   font-weight: var(--font-medium);
   font-size: var(--text-md);
   cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease), border-color var(--duration-fast) var(--ease);
 }
 .newMission:hover {
-  background: var(--accent-subtle);
-  filter: brightness(1.1);
+  background: var(--surface-2);
+  border-color: var(--border-strong);
 }
 
 .recent {
@@ -65,7 +66,7 @@
   letter-spacing: 0.05em;
   color: var(--text-tertiary);
   font-weight: var(--font-semibold);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--space-3) var(--space-3) var(--space-2);
 }
 .list {
   flex: 1;
@@ -80,11 +81,12 @@
 .item {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: 3px;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
-  margin-bottom: 2px;
+  margin-bottom: 1px;
   text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease);
 }
 .item:hover {
   background: var(--surface-2);
@@ -95,7 +97,7 @@
 }
 .itemIntent {
   color: var(--text-primary);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   font-weight: var(--font-medium);
   overflow: hidden;
   text-overflow: ellipsis;

@@ -1,16 +1,13 @@
-export { MissionView } from './MissionView'
-export { LifecycleTimeline } from './LifecycleTimeline'
-export { ActivityFeed } from './ActivityFeed'
-export { ValidationStages } from './ValidationStages'
-export { RepairAttemptCard } from './RepairAttemptCard'
-export { FileChanges } from './FileChanges'
+export { MissionThread } from './MissionThread'
 export type {
-  LifecyclePhase,
-  LifecyclePhaseKind,
-  PhaseState,
   ActivityEvent,
   ActivityKind,
-  ValidationStageVM,
-  RepairAttemptVM,
+  ConversationEntry,
   FileChangeVM,
+  LifecyclePhaseKind,
+  PhaseState,
+  RepairAttemptVM,
+  ValidationStageVM,
+  WorkEntry,
+  WorkGroup,
 } from './model'

@@ -7,23 +7,21 @@
 import type { Tone } from '@/constants/status'
 import type {
   CodeDiff,
-  ExecutionSnapshot,
+  Plan,
   PlanningSocketEvent,
-  StepExecution,
-  ValidationRun,
   ValidationStage,
-  WorkItem,
 } from '@/types'
 import type { RepairSession, RepairSocketEvent } from '@/types/repair'
 import type { PublishingSession, PublishingSocketEvent } from '@/types/publishing'
 import type { ExecutionLiveEvent, ValidationLiveEvent } from '@/store/slices/streamSlice'
 import type {
   ActivityEvent,
+  ConversationEntry,
   FileChangeVM,
-  LifecyclePhase,
   PhaseState,
   RepairAttemptVM,
   ValidationStageVM,
+  WorkEntry,
 } from './model'
 
 const OUTCOME_TONE: Record<string, Tone> = {
@@ -52,6 +50,31 @@ function humanizeTool(tool: string | undefined, args?: Record<string, unknown>):
   return tool ?? 'Tool call'
 }
 
+/** Emoji marker for an activity row, matching the "watching an engineer" language. */
+export function activityMarker(ev: ActivityEvent): string {
+  if (ev.kind === 'tool_call' || ev.kind === 'tool_result') {
+    const t = (ev.tool ?? '').toLowerCase()
+    if (t.includes('read')) return '📖'
+    if (t.includes('write') || t.includes('create') || t.includes('edit')) return '✏️'
+    if (t.includes('search') || t.includes('grep') || t.includes('symbol')) return '🔍'
+    if (t.includes('list') || t.includes('dir') || t.includes('ls')) return '📁'
+    if (t.includes('delete') || t.includes('remove')) return '🗑️'
+    if (t.includes('valid') || t.includes('build') || t.includes('test') || t.includes('run')) return '🧪'
+    return '🔧'
+  }
+  const byKind: Record<ActivityEvent['kind'], string> = {
+    status: '●',
+    reasoning: '💭',
+    tool_call: '🔧',
+    tool_result: '🔧',
+    validation: '🧪',
+    repair: '🩹',
+    diff: '📝',
+    error: '❌',
+  }
+  return byKind[ev.kind]
+}
+
 // ── Activity feed ─────────────────────────────────────────────────────────────
 
 interface ActivityInputs {
@@ -65,12 +88,16 @@ interface ActivityInputs {
 export function buildActivity({ planning, execution, validation, repair, publishing }: ActivityInputs): ActivityEvent[] {
   const out: ActivityEvent[] = []
   let seq = 0
-  const push = (e: Omit<ActivityEvent, 'seq' | 'id'>) => {
-    out.push({ ...e, seq, id: `${e.phase}-${seq}-${e.kind}` })
+  // Set before each loop iteration below — lets push() stamp atMs without every
+  // call site repeating it.
+  let currentAtMs: number | undefined
+  const push = (e: Omit<ActivityEvent, 'seq' | 'id' | 'atMs'>) => {
+    out.push({ ...e, atMs: currentAtMs, seq, id: `${e.phase}-${seq}-${e.kind}` })
     seq += 1
   }
 
   for (const ev of planning) {
+    currentAtMs = typeof ev.receivedAt === 'number' ? ev.receivedAt : undefined
     const msg = typeof ev.message === 'string' ? ev.message : ''
     const stage = typeof ev.stage === 'string' ? ev.stage : undefined
     if (!msg && !stage) continue
@@ -84,6 +111,7 @@ export function buildActivity({ planning, execution, validation, repair, publish
   }
 
   for (const le of execution) {
+    currentAtMs = le.receivedAt
     const ev = le.raw
     switch (ev.event) {
       case 'reasoning':
@@ -131,6 +159,7 @@ export function buildActivity({ planning, execution, validation, repair, publish
   }
 
   for (const le of validation) {
+    currentAtMs = le.receivedAt
     const ev = le.raw
     switch (ev.event) {
       case 'validation_start':
@@ -176,6 +205,7 @@ export function buildActivity({ planning, execution, validation, repair, publish
   }
 
   for (const ev of repair) {
+    currentAtMs = ev.ts
     switch (ev.event) {
       case 'repair_started':
         push({ phase: 'repair', kind: 'repair', title: `Repair started${ev.max_attempts ? ` · up to ${ev.max_attempts} attempts` : ''}`, tone: 'warning' })
@@ -233,6 +263,7 @@ export function buildActivity({ planning, execution, validation, repair, publish
   }
 
   for (const ev of publishing) {
+    currentAtMs = ev.ts
     switch (ev.event) {
       case 'publishing_progress':
         push({
@@ -256,6 +287,63 @@ export function buildActivity({ planning, execution, validation, repair, publish
         break
     }
   }
+
+  return out
+}
+
+/** "3s" under a minute, "1m 56s" otherwise — matches how Devin-style tools label collapsed thought blocks. */
+export function formatDuration(ms?: number): string {
+  if (ms == null || ms < 0) return ''
+  const totalSeconds = Math.round(ms / 1000)
+  if (totalSeconds < 60) return `${totalSeconds}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return `${minutes}m ${seconds}s`
+}
+
+const WORK_KINDS = new Set<ActivityEvent['kind']>(['reasoning', 'tool_call', 'tool_result'])
+
+/**
+ * Collapse consecutive `reasoning`/`tool_call`/`tool_result` events into single
+ * summary groups — "Thought for Ns" when it's pure reasoning, "Worked for Xm
+ * Ys" when tool use is involved — leaving milestone events (status/repair/
+ * error) always visible as boundaries between them. Only the trailing group
+ * is marked live, and only while the mission itself is still running — every
+ * other group defaults to collapsed.
+ */
+export function groupWork(events: ActivityEvent[], live: boolean): WorkEntry[] {
+  const out: WorkEntry[] = []
+  let current: ActivityEvent[] = []
+
+  const flush = () => {
+    if (current.length === 0) return
+    const first = current[0]
+    const last = current[current.length - 1]
+    out.push({
+      type: 'group',
+      isLive: false,
+      group: {
+        id: `group-${first.id}`,
+        events: current,
+        durationMs: first.atMs != null && last.atMs != null ? last.atMs - first.atMs : undefined,
+        hasToolActivity: current.some((e) => e.kind === 'tool_call' || e.kind === 'tool_result'),
+      },
+    })
+    current = []
+  }
+
+  for (const ev of events) {
+    if (WORK_KINDS.has(ev.kind)) {
+      current.push(ev)
+    } else {
+      flush()
+      out.push({ type: 'pinned', event: ev })
+    }
+  }
+  flush()
+
+  const lastEntry = out[out.length - 1]
+  if (live && lastEntry?.type === 'group') lastEntry.isLive = true
 
   return out
 }
@@ -368,139 +456,72 @@ export function buildFileChanges(diffs: CodeDiff[]): FileChangeVM[] {
   }))
 }
 
-// ── Lifecycle phases ──────────────────────────────────────────────────────────
+// ── Conversation thread ────────────────────────────────────────────────────────
 
-interface PhaseInputs {
-  task: WorkItem
-  hasPlan: boolean
-  execution?: ExecutionSnapshot | null
-  validation?: ValidationRun | null
+export interface ConversationInputs {
+  intent: string
+  planning: PlanningSocketEvent[]
+  execution: ExecutionLiveEvent[]
+  validation: ValidationLiveEvent[]
+  repair: RepairSocketEvent[]
+  publishing: PublishingSocketEvent[]
+  plan?: Plan | null
+  fileChanges: FileChangeVM[]
   validationStages: ValidationStageVM[]
-  repairSession?: RepairSession | null
+  validationOverall?: string
   repairAttempts: RepairAttemptVM[]
   publishingSession?: PublishingSession | null
+  /** Which phase is currently streaming, if any — only its trailing work group renders live/expanded. */
+  livePhase?: 'planning' | 'executing' | 'validation' | 'repair' | 'publishing'
 }
 
-const PUBLISHING_ACTIVE = new Set([
-  'pending', 'verifying', 'branching', 'committing',
-  'conflict_check', 'pushing', 'creating_pr', 'syncing',
-])
-
-function publishingState(session?: PublishingSession | null): PhaseState {
-  if (!session) return 'pending'
-  if (session.status === 'completed') return 'passed'
-  if (session.status === 'failed') return 'failed'
-  if (session.status === 'cancelled') return 'skipped'
-  if (PUBLISHING_ACTIVE.has(session.status)) return 'active'
-  return 'active'
-}
-
-function execState(task: WorkItem, exec?: ExecutionSnapshot | null): PhaseState {
-  const s = exec?.execution?.status
-  if (s === 'running' || s === 'pending') return 'active'
-  if (s === 'completed') return 'passed'
-  if (s === 'failed') return 'failed'
-  if (s === 'cancelled') return 'skipped'
-  if (task.status === 'executing') return 'active'
-  if (task.status === 'done') return 'passed'
-  return 'pending'
-}
-
-function validationState(run?: ValidationRun | null): PhaseState {
-  if (!run) return 'pending'
-  if (run.status === 'running' || run.status === 'pending') return 'active'
-  if (run.overall_result === 'passed') return 'passed'
-  if (run.status === 'passed') return 'passed'
-  if (run.status === 'error') return 'failed'
-  if (run.overall_result && run.overall_result !== 'passed') return 'failed'
-  return 'active'
-}
-
-export function buildPhases(inp: PhaseInputs): LifecyclePhase[] {
-  const { task, hasPlan, execution, validation, validationStages, repairSession, repairAttempts, publishingSession } = inp
-  const phases: LifecyclePhase[] = []
-
-  phases.push({ kind: 'created', label: 'Task created', state: 'passed' })
-
-  // Planning
-  let planning: PhaseState = 'pending'
-  if (task.status === 'planning' || task.status === 'draft') planning = 'active'
-  else if (task.status === 'planning_failed') planning = 'failed'
-  else if (hasPlan || ['plan_ready', 'plan_approved', 'executing', 'done', 'failed'].includes(task.status)) planning = 'passed'
-  phases.push({ kind: 'planning', label: 'Planning', state: planning })
-
-  // Executing
-  const eState = execState(task, execution)
-  const steps = execution?.steps ?? []
-  const doneSteps = steps.filter((s: StepExecution) => s.status === 'completed').length
-  phases.push({
-    kind: 'executing',
-    label: 'Executing steps',
-    state: eState,
-    hint: steps.length > 0 ? `${doneSteps}/${steps.length} steps` : undefined,
+/**
+ * Assembles the single chronological Mission thread: the task intent, then
+ * each phase's grouped work interleaved with its artifact card (plan/files/
+ * validation/repair/publish), in canonical — and therefore chronological —
+ * phase order. Backend phase boundaries never surface as separate panels;
+ * they're just where an artifact card gets inserted into one continuous feed.
+ */
+export function buildConversation(inp: ConversationInputs): ConversationEntry[] {
+  const all = buildActivity({
+    planning: inp.planning,
+    execution: inp.execution,
+    validation: inp.validation,
+    repair: inp.repair,
+    publishing: inp.publishing,
   })
 
-  // Validation
-  const vState = validationState(validation)
-  const passedStages = validationStages.filter((s) => s.state === 'passed').length
-  if (validation || vState !== 'pending') {
-    phases.push({
-      kind: 'validation',
-      label: 'Validation',
-      state: vState,
-      hint: validationStages.length > 0 ? `${passedStages}/${validationStages.length} stages` : undefined,
-    })
-  }
+  const out: ConversationEntry[] = []
+  if (inp.intent) out.push({ type: 'intent', text: inp.intent })
 
-  // Repair — one node per attempt
-  if (repairSession) {
-    if (repairAttempts.length === 0) {
-      phases.push({ kind: 'repair', label: 'Repair', state: 'active', attempt: 1, hint: 'starting' })
-    } else {
-      for (const a of repairAttempts) {
-        phases.push({
-          kind: 'repair',
-          label: `Repair · attempt ${a.attempt}`,
-          state: a.state,
-          attempt: a.attempt,
-          hint: a.outcome,
-        })
-      }
+  const pushPhaseWork = (phase: ActivityEvent['phase']) => {
+    const events = all.filter((e) => e.phase === phase)
+    if (events.length === 0) return
+    for (const entry of groupWork(events, inp.livePhase === phase)) {
+      out.push(
+        entry.type === 'group'
+          ? { type: 'work', group: entry.group, isLive: entry.isLive }
+          : { type: 'message', event: entry.event },
+      )
     }
   }
 
-  // Publishing — appears once a publish session exists (or the work item has
-  // transitioned into the publishing state).
-  if (publishingSession || task.status === 'publishing') {
-    const pState = publishingState(publishingSession)
-    phases.push({
-      kind: 'publishing',
-      label: 'Publishing',
-      state: pState,
-      hint: publishingSession?.pr_number
-        ? `PR #${publishingSession.pr_number}`
-        : (publishingSession?.current_step ?? undefined),
-    })
+  pushPhaseWork('planning')
+  if (inp.plan) out.push({ type: 'plan', plan: inp.plan })
+
+  pushPhaseWork('executing')
+  if (inp.fileChanges.length > 0) out.push({ type: 'files', files: inp.fileChanges })
+
+  pushPhaseWork('validation')
+  if (inp.validationStages.length > 0) {
+    out.push({ type: 'validation', stages: inp.validationStages, overall: inp.validationOverall })
   }
 
-  // Completed
-  let completed: PhaseState = 'pending'
-  const published = publishingSession?.status === 'completed'
-  if (published || task.status === 'done') completed = 'passed'
-  else if (task.status === 'failed' || task.status === 'cancelled') completed = 'failed'
-  phases.push({
-    kind: 'completed',
-    label: task.status === 'failed' ? 'Failed' : 'Completed',
-    state: completed,
-  })
+  pushPhaseWork('repair')
+  if (inp.repairAttempts.length > 0) out.push({ type: 'repair', attempts: inp.repairAttempts })
 
-  return phases
-}
+  pushPhaseWork('publishing')
+  if (inp.publishingSession) out.push({ type: 'publish', session: inp.publishingSession })
 
-export function defaultActivePhaseKey(phases: LifecyclePhase[]): string | undefined {
-  const key = (p: LifecyclePhase) => (p.attempt != null ? `${p.kind}-${p.attempt}` : p.kind)
-  const active = [...phases].reverse().find((p) => p.state === 'active')
-  if (active) return key(active)
-  const lastDone = [...phases].reverse().find((p) => p.state !== 'pending')
-  return lastDone ? key(lastDone) : 'created'
+  return out
 }

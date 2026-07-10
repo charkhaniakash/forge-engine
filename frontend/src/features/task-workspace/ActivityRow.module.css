@@ -1,22 +1,12 @@
-.feed {
-  height: 100%;
-  overflow-y: auto;
-  background: var(--surface-inset);
-  padding: var(--space-3);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-}
-.empty {
-  color: var(--text-tertiary);
-  padding: var(--space-2);
-}
 .row {
   display: flex;
   align-items: baseline;
   gap: var(--space-2);
   padding: 3px var(--space-2);
   border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
 }
 .row:hover {
   background: var(--surface-2);
@@ -91,21 +81,4 @@
   display: inline-block;
   animation: forge-spin 0.7s linear infinite;
   align-self: center;
-}
-.working {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--text-tertiary);
-  padding: var(--space-2);
-  font-style: italic;
-}
-.cursor {
-  color: var(--accent);
-  animation: forge-blink 1s step-end infinite;
-}
-@keyframes forge-blink {
-  50% {
-    opacity: 0;
-  }
 }

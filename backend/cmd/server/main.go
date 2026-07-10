@@ -545,15 +545,15 @@ func main() {
 
 	if publishingHandlers != nil {
 		// Phase 10 — Git Operations & Pull Request Automation
-		app.Post("/v1/repos/:repoID/tasks/:taskID/publish",
-			middleware.RequireAuth(sugar), publishingHandlers.StartPublish)
-		app.Get("/v1/repos/:repoID/tasks/:taskID/publish",
-			middleware.RequireAuth(sugar), publishingHandlers.GetPublishSession)
-		// WebSocket — live publishing progress
+		// WebSocket route FIRST (more specific path) to avoid collision with task routes.
 		app.Get("/v1/publishing/sessions/:sessionID/stream",
 			publishingHandlers.StreamUpgrade,
 			websocket.New(publishingHandlers.StreamWS),
 		)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/publish",
+			middleware.RequireAuth(sugar), publishingHandlers.StartPublish)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/publish",
+			middleware.RequireAuth(sugar), publishingHandlers.GetPublishSession)
 	}
 
 	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────

@@ -4,6 +4,8 @@ import { Icon, ProgressBar, Spinner, StatusBadge } from '@/components/common'
 import {
   useGetIndexStatusQuery,
   useListReposQuery,
+  useLazyGetInstallUrlQuery,
+  useSyncReposMutation,
   useTriggerIndexMutation,
 } from '@/services/api/repositoryApi'
 import { useCreateTaskMutation, useListMissionsQuery } from '@/services/api/taskApi'
@@ -36,6 +38,8 @@ export function Console() {
   const { data: missions = [] } = useListMissionsQuery()
   const [createTask, { isLoading: creatingTask }] = useCreateTaskMutation()
   const [createSession, { isLoading: creatingSession }] = useCreateSessionMutation()
+  const [getInstallUrl, { isLoading: installingApp }] = useLazyGetInstallUrlQuery()
+  const [syncRepos, { isLoading: syncing }] = useSyncReposMutation()
 
   const busy = creatingTask || creatingSession
   const recent = useMemo(() => missions.slice(0, 6), [missions])
@@ -138,7 +142,7 @@ export function Console() {
               <Icon name="repo" size={15} />
               <select value={repoId} onChange={(e) => setRepoId(e.target.value)} className={styles.repoSelect}>
                 <option value="">Attach repository…</option>
-                {repos.map((r) => (
+                {repos?.map((r) => (
                   <option key={r.id} value={r.id}>{r.repo_full_name}</option>
                 ))}
               </select>
@@ -217,10 +221,43 @@ export function Console() {
 
       <div className={styles.recent}>
         <div className={styles.recentHead}>Recent missions</div>
-        {recent.length === 0 && (
+        {recent?.length === 0 && (
           <div className={styles.muted}>
-            {repos.length === 0 ? (
-              <>No repositories connected. <a href="/repositories">Attach one</a> to begin.</>
+            {repos?.length === 0 ? (
+              <div className={styles.noRepos}>
+                <Icon name="repo" size={16} />
+                <span>No repositories connected.</span>
+                <button
+                  type="button"
+                  className={styles.indexBtn}
+                  disabled={installingApp}
+                  onClick={async () => {
+                    try {
+                      const result = await getInstallUrl().unwrap()
+                      window.location.href = result.install_url
+                    } catch {
+                      toast.error('Failed to get install URL')
+                    }
+                  }}
+                >
+                  {installingApp ? 'Loading…' : 'Install GitHub App'}
+                </button>
+                <button
+                  type="button"
+                  className={styles.indexBtn}
+                  disabled={syncing}
+                  onClick={async () => {
+                    try {
+                      await syncRepos().unwrap()
+                      toast.success('Repos synced')
+                    } catch {
+                      toast.error('Sync failed')
+                    }
+                  }}
+                >
+                  {syncing ? 'Syncing…' : 'Sync repos'}
+                </button>
+              </div>
             ) : (
               'No missions yet — describe one above to get started.'
             )}

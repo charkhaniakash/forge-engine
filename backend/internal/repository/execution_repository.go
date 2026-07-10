@@ -617,14 +617,17 @@ func scanEventRow(rows *sql.Rows) (*models.ExecutionEvent, error) {
 
 func scanDiff(row *sql.Row) (*models.CodeDiff, error) {
 	var d models.CodeDiff
-	var oldPath, diffUnified sql.NullString
+	var oldPath, diffUnified, stepExecID sql.NullString
 
 	err := row.Scan(
-		&d.ID, &d.TaskExecutionID, &d.StepExecutionID, &d.FilePath, &d.Operation,
+		&d.ID, &d.TaskExecutionID, &stepExecID, &d.FilePath, &d.Operation,
 		&oldPath, &diffUnified, &d.LinesAdded, &d.LinesRemoved, &d.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if stepExecID.Valid {
+		d.StepExecutionID = stepExecID.String
 	}
 	if oldPath.Valid {
 		d.OldPath = &oldPath.String
@@ -637,14 +640,17 @@ func scanDiff(row *sql.Row) (*models.CodeDiff, error) {
 
 func scanDiffRow(rows *sql.Rows) (*models.CodeDiff, error) {
 	var d models.CodeDiff
-	var oldPath, diffUnified sql.NullString
+	var oldPath, diffUnified, stepExecID sql.NullString
 
 	err := rows.Scan(
-		&d.ID, &d.TaskExecutionID, &d.StepExecutionID, &d.FilePath, &d.Operation,
+		&d.ID, &d.TaskExecutionID, &stepExecID, &d.FilePath, &d.Operation,
 		&oldPath, &diffUnified, &d.LinesAdded, &d.LinesRemoved, &d.CreatedAt,
 	)
 	if err != nil {
 		return nil, err
+	}
+	if stepExecID.Valid {
+		d.StepExecutionID = stepExecID.String
 	}
 	if oldPath.Valid {
 		d.OldPath = &oldPath.String

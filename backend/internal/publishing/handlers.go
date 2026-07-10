@@ -69,6 +69,13 @@ func (h *Handlers) StartPublish(c *fiber.Ctx) error {
 	traceID := c.Locals("trace_id").(string)
 	ctx := c.Context()
 
+	// Validate UUID format to catch route mismatches early
+	if !isValidUUID(taskID) || !isValidUUID(repoID) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid task_id or repo_id format",
+		})
+	}
+
 	// Verify task is in a publishable state
 	item, err := h.workItemRepo.GetByID(ctx, taskID, orgID)
 	if err != nil {
@@ -148,9 +155,15 @@ func (h *Handlers) StartPublish(c *fiber.Ctx) error {
 	// The partial unique index (idx_publishing_sessions_active_work_item) prevents
 	// duplicate active sessions at the DB level as a final safety net.
 	go func() {
+		// Final safety check — reject if work_item_id is corrupted
+		if !isValidUUID(publishReq.WorkItemID) {
+			h.logger.Errorw("publishing_aborted_invalid_work_item_id",
+				"work_item_id", publishReq.WorkItemID, "trace_id", traceID)
+			return
+		}
 		if err := h.orch.Run(context.Background(), publishReq); err != nil {
 			h.logger.Errorw("publishing_failed",
-				"task_id", taskID, "error", err, "trace_id", traceID)
+				"task_id", publishReq.WorkItemID, "error", err, "trace_id", traceID)
 		}
 	}()
 
@@ -167,6 +180,13 @@ func (h *Handlers) GetPublishSession(c *fiber.Ctx) error {
 	orgID := c.Locals("org_id").(string)
 	taskID := c.Params("taskID")
 	ctx := c.Context()
+
+	// Validate UUID format
+	if !isValidUUID(taskID) {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+			"error": "invalid task_id format",
+		})
+	}
 
 	if _, err := h.workItemRepo.GetByID(ctx, taskID, orgID); err != nil {
 		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "task not found"})
@@ -313,4 +333,24 @@ func (h *Handlers) removeSubscriber(sessionID, connID string) {
 	if len(subs) == 0 {
 		delete(h.wsHub, sessionID)
 	}
+}
+
+// isValidUUID checks whether a string is a valid UUID v4 format.
+// Used to reject corrupted route params before they reach the database.
+func isValidUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i, c := range s {
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if c != '-' {
+				return false
+			}
+		} else {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
+			}
+		}
+	}
+	return true
 }

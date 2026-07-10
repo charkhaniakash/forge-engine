@@ -298,7 +298,6 @@ export function TaskWorkspace() {
   const approved = ['approved', 'auto_approved'].includes(task.approval_status)
   const canApprove = status === 'plan_ready' && !approved
   const workspaceReady = workspaceStatus === 'ready'
-  const needsWorkspace = approved && status === 'plan_approved' && (!workspace || !workspaceReady)
   const canExecute = approved && status === 'plan_approved' && workspaceReady && !execution
   const isExecuting = execStatus === 'running' || execStatus === 'pending'
   const execDone = execStatus === 'completed'
@@ -339,17 +338,6 @@ export function TaskWorkspace() {
           }
         }}>
         Approve &amp; run
-      </Button>,
-    )
-  } else if (needsWorkspace) {
-    actions.push(
-      <Button key="provision" variant="primary" loading={provisioning} leadingIcon={<Icon name="play" size={15} />}
-        onClick={async () => {
-          await run(provisionWorkspace({ repoId, taskId }).unwrap(), 'Workspace provisioning', 'Failed to provision workspace')
-          refetchWorkspace()
-          refetchTask()
-        }}>
-        Provision workspace
       </Button>,
     )
   } else if (canExecute) {

@@ -191,6 +191,12 @@
   font-size: var(--text-xs);
   opacity: 0.75;
 }
+.noRepos {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
 
 .recent {
   width: 100%;

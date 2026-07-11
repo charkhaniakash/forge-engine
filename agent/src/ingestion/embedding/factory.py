@@ -34,6 +34,9 @@ _REGISTRY: dict[str, tuple] = {
     "gemini": (
         lambda: _make_gemini(),
     ),
+    "ollama": (
+        lambda: _make_ollama(),
+    ),
 }
 
 
@@ -49,6 +52,13 @@ def _make_gemini() -> EmbeddingProvider:
     from src.ingestion.embedding.gemini_provider import GeminiEmbeddingProvider
     return GeminiEmbeddingProvider(
         api_key=settings.gemini_api_key,
+        model=settings.embedding_model,
+    )
+
+
+def _make_ollama() -> EmbeddingProvider:
+    from src.ingestion.embedding.ollama_provider import OllamaEmbeddingProvider
+    return OllamaEmbeddingProvider(
         model=settings.embedding_model,
     )
 

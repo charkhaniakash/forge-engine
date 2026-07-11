@@ -114,6 +114,11 @@ Rules:
 - NEVER include a step for something that is already present in the code context.
 """
 
+# Alternate key names small/local models use instead of the schema's names.
+# Checked in order; the first match wins.
+_STEP_KEY_ALIASES = ("implementation_steps", "plan_steps", "tasks", "actions", "step_list")
+_TITLE_KEY_ALIASES = ("name", "step", "action", "summary", "step_title")
+
 _RETRY_SUFFIX = """
 
 The previous attempt produced an invalid plan. Validation errors:
@@ -141,7 +146,7 @@ class ImplementationPlanner:
         yield "Generating implementation plan..."
 
         plan_body, validation = await self._generate_with_retry(
-            req, user_message, max_retries=1
+            req, user_message, max_retries=2
         )
 
         if plan_body is None:
@@ -297,7 +302,46 @@ def _parse_plan(
     try:
         data = json.loads(raw_json.strip())
     except json.JSONDecodeError as exc:
+        logger.warning(
+            "plan_raw_output_not_json",
+            work_item_id=req.work_item_id,
+            raw_output=raw_json[:2000],
+        )
         return None, [f"LLM output is not valid JSON: {exc}"]
+
+    # Log the raw parsed structure so we can see exactly what a small/local
+    # model (gemma3:4b) produced when a plan ends up empty or malformed.
+    # NOTE: temporarily at WARNING level for diagnosis — drop to debug once
+    # the small-model output shape is understood.
+    logger.warning(
+        "plan_raw_output_parsed",
+        work_item_id=req.work_item_id,
+        top_level_keys=list(data.keys()) if isinstance(data, dict) else None,
+        raw_output=raw_json[:2000],
+    )
+
+    if not isinstance(data, dict):
+        return None, ["LLM output is not a JSON object"]
+
+    # Local models (like gemma3:4b) sometimes wrap the whole plan in a single
+    # root key like {"implementation_plan": {...}} or {"plan": {...}} despite
+    # the system prompt. Unwrap up to a couple of levels until we find the body.
+    for _ in range(2):
+        if len(data) == 1:
+            root_key = next(iter(data))
+            inner = data[root_key]
+            if isinstance(inner, dict) and (
+                "steps" in inner
+                or "intent_summary" in inner
+                or any(k in inner for k in _STEP_KEY_ALIASES)
+            ):
+                data = inner
+                continue
+        break
+
+    # ── Sanitise for small / local models (gemma3:4b) ─────────────────────
+    # These models frequently omit required fields or produce malformed
+    # sub-objects. We fix what we can before Pydantic validation.
 
     # Inject metadata the LLM doesn't produce.
     data["plan_id"] = str(uuid.uuid4())
@@ -308,17 +352,80 @@ def _parse_plan(
     data.setdefault("plan_type", "implementation")
     data.setdefault("planner_id", "implementation_planner_v1")
 
+    # Small models often emit the steps array under a different key
+    # (implementation_steps, plan_steps, tasks, actions, ...). Adopt the first
+    # non-empty alias we find so we don't discard an otherwise-valid plan.
+    if not data.get("steps"):
+        for alias in _STEP_KEY_ALIASES:
+            if isinstance(data.get(alias), list) and data[alias]:
+                data["steps"] = data[alias]
+                break
+
+    # Default top-level fields the model sometimes omits entirely.
+    data.setdefault("intent_summary", req.intent)
+    data.setdefault("steps", [])
+    data.setdefault("risks", [])
+    data.setdefault("assumptions", [])
+    data.setdefault("affected_files", [])
+
+    # Normalise each step's title: small models label it name/step/action/etc.
+    # Do this BEFORE the title filter below, otherwise valid steps get dropped.
+    for step in data["steps"]:
+        if isinstance(step, dict) and not step.get("title"):
+            for alias in _TITLE_KEY_ALIASES:
+                if step.get(alias):
+                    step["title"] = step[alias]
+                    break
+
+    # Filter out malformed assumptions (missing required 'description').
+    data["assumptions"] = [
+        a for a in data["assumptions"]
+        if isinstance(a, dict) and a.get("description")
+    ]
+    # Ensure every assumption has user_verified.
+    for a in data["assumptions"]:
+        a.setdefault("user_verified", False)
+
+    # Filter out malformed risks (missing required 'description' or 'severity').
+    data["risks"] = [
+        r for r in data["risks"]
+        if isinstance(r, dict) and r.get("description") and r.get("severity")
+    ]
+
+    # Filter out malformed affected_files.
+    data["affected_files"] = [
+        f for f in data["affected_files"]
+        if isinstance(f, dict) and f.get("path") and f.get("change_type")
+    ]
+    for f in data["affected_files"]:
+        f.setdefault("rationale", "")
+
     # Ensure every step has a UUID id and a stable_id if missing.
-    for step in data.get("steps", []):
+    # Also filter out non-dict entries and steps missing a title.
+    steps_before = len(data["steps"]) if isinstance(data["steps"], list) else 0
+    data["steps"] = [s for s in data["steps"] if isinstance(s, dict) and s.get("title")]
+    if steps_before and not data["steps"]:
+        logger.warning(
+            "plan_all_steps_filtered_out",
+            work_item_id=req.work_item_id,
+            steps_before=steps_before,
+            raw_output=raw_json[:2000],
+        )
+    for i, step in enumerate(data["steps"]):
         if not step.get("id"):
             step["id"] = str(uuid.uuid4())
         if not step.get("stable_id"):
             title_slug = step.get("title", "step").lower()
             title_slug = "".join(c if c.isalnum() else "-" for c in title_slug)[:40]
-            step["stable_id"] = f"{title_slug}-{step.get('order', 0)}"
+            step["stable_id"] = f"{title_slug}-{step.get('order', i + 1)}"
+        step.setdefault("order", i + 1)
+        step.setdefault("description", step.get("title", ""))
+        step.setdefault("type", "edit")
         step.setdefault("depends_on", [])
         step.setdefault("user_edited", False)
         step.setdefault("metadata", {})
+        step.setdefault("affected_files", [])
+        step.setdefault("estimated_risk", "low")
 
     try:
         plan = PlanBody(**data)

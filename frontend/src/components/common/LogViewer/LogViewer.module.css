@@ -1,0 +1,43 @@
+.root {
+  background: var(--surface-inset);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+.line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.empty {
+  color: var(--text-tertiary);
+}
+.default {
+  color: var(--text-primary);
+}
+.info {
+  color: var(--info);
+}
+.success {
+  color: var(--success);
+}
+.warning {
+  color: var(--warning);
+}
+.error {
+  color: var(--danger);
+}
+.muted {
+  color: var(--text-tertiary);
+}
+.cursor {
+  color: var(--accent);
+  animation: forge-blink 1s step-end infinite;
+}
+@keyframes forge-blink {
+  50% {
+    opacity: 0;
+  }
+}

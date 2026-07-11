@@ -86,36 +86,59 @@ func (c *Client) GetInstallationToken(appJWT string, installationID int64) (*Ins
 
 // ListInstallationRepos lists repositories accessible by an installation
 func (c *Client) ListInstallationRepos(installationToken string, installationID int64) ([]*Repository, error) {
-    url := fmt.Sprintf("%s/installation/repositories", c.baseURL)
+	var allRepos []*Repository
+	page := 1
+	perPage := 100 // Maximum allowed by GitHub
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	for {
+		url := fmt.Sprintf("%s/installation/repositories?page=%d&per_page=%d", c.baseURL, page, perPage)
+
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		req.Header.Set("Authorization", "Bearer "+installationToken)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list repos: %w", err)
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to list repos: status %d, body: %s", resp.StatusCode, string(body))
+		}
+
+		var response struct {
+			Repositories []*Repository `json:"repositories"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			resp.Body.Close()
+			return nil, fmt.Errorf("failed to decode repos response: %w", err)
+		}
+		resp.Body.Close()
+
+		allRepos = append(allRepos, response.Repositories...)
+
+		// Check if there are more pages via the Link header
+		linkHeader := resp.Header.Get("Link")
+		if linkHeader == "" || !containsLink(linkHeader, `rel="next"`) {
+			break
+		}
+
+		page++
 	}
 
-	req.Header.Set("Authorization", "Bearer "+installationToken)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	return allRepos, nil
+}
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list repos: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("failed to list repos: status %d, body: %s", resp.StatusCode, string(body))
-	}
-
-	var response struct {
-		Repositories []*Repository `json:"repositories"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, fmt.Errorf("failed to decode repos response: %w", err)
-	}
-
-	return response.Repositories, nil
+// containsLink checks if the Link header contains a specific rel type
+func containsLink(linkHeader, rel string) bool {
+	return len(linkHeader) > 0 && (linkHeader == rel || len(linkHeader) > len(rel) && linkHeader[len(linkHeader)-len(rel):] == rel)
 }
 
 // Repository represents a GitHub repository

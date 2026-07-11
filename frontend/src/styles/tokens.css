@@ -1,0 +1,178 @@
+/**
+ * Forge Engine — design tokens.
+ *
+ * Dark-first. The `:root` block is the dark theme; `[data-theme="light"]`
+ * overrides the surface/text/border ramp for light mode. Everything in the UI
+ * references these variables — never hard-code a hex value in a component.
+ */
+
+:root,
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  /* ── Surfaces (low → high elevation) ───────────────────────────────── */
+  --surface-base: #0b0d10; /* app background */
+  --surface-1: #111418; /* cards, panels */
+  --surface-2: #171b21; /* raised / hover */
+  --surface-3: #1e242c; /* popovers, menus */
+  --surface-inset: #0d1117; /* code / log backgrounds */
+  --surface-overlay: rgba(0, 0, 0, 0.6); /* modal scrim */
+
+  /* ── Borders ───────────────────────────────────────────────────────── */
+  --border-subtle: #1c2128;
+  --border-default: #262c36;
+  --border-strong: #333b46;
+
+  /* ── Text ──────────────────────────────────────────────────────────── */
+  --text-primary: #e6edf3;
+  --text-secondary: #9aa4b2;
+  --text-tertiary: #6b7480;
+  --text-inverse: #0b0d10;
+  --text-on-accent: #ffffff;
+
+  /* ── Brand / accent ────────────────────────────────────────────────── */
+  --accent: #6e7bff;
+  --accent-hover: #808cff;
+  --accent-active: #5b68ec;
+  --accent-subtle: rgba(110, 123, 255, 0.14);
+  --accent-border: rgba(110, 123, 255, 0.45);
+
+  /* ── Status ramp (fg + subtle bg) ──────────────────────────────────── */
+  --success: #3fb950;
+  --success-subtle: rgba(63, 185, 80, 0.15);
+  --warning: #d29922;
+  --warning-subtle: rgba(210, 153, 34, 0.15);
+  --danger: #f85149;
+  --danger-subtle: rgba(248, 81, 73, 0.15);
+  --info: #58a6ff;
+  --info-subtle: rgba(88, 166, 255, 0.15);
+  --neutral: #7d8590;
+  --neutral-subtle: rgba(125, 133, 144, 0.15);
+
+  /* ── Diff colours ──────────────────────────────────────────────────── */
+  --diff-add-bg: rgba(63, 185, 80, 0.15);
+  --diff-add-fg: #3fb950;
+  --diff-del-bg: rgba(248, 81, 73, 0.15);
+  --diff-del-fg: #f85149;
+  --diff-hunk-fg: #58a6ff;
+
+  /* ── Shadows ───────────────────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
+
+  --focus-ring: 0 0 0 2px var(--surface-base), 0 0 0 4px var(--accent);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --surface-base: #ffffff;
+  --surface-1: #f6f8fa;
+  --surface-2: #eef1f4;
+  --surface-3: #ffffff;
+  --surface-inset: #f6f8fa;
+  --surface-overlay: rgba(27, 31, 36, 0.4);
+
+  --border-subtle: #eaecef;
+  --border-default: #d0d7de;
+  --border-strong: #afb8c1;
+
+  --text-primary: #1f2328;
+  --text-secondary: #57606a;
+  --text-tertiary: #818b98;
+  --text-inverse: #ffffff;
+  --text-on-accent: #ffffff;
+
+  --accent: #5b68ec;
+  --accent-hover: #4f5cdb;
+  --accent-active: #4550c8;
+  --accent-subtle: rgba(91, 104, 236, 0.1);
+  --accent-border: rgba(91, 104, 236, 0.4);
+
+  --success: #1a7f37;
+  --success-subtle: rgba(26, 127, 55, 0.1);
+  --warning: #9a6700;
+  --warning-subtle: rgba(154, 103, 0, 0.1);
+  --danger: #cf222e;
+  --danger-subtle: rgba(207, 34, 46, 0.1);
+  --info: #0969da;
+  --info-subtle: rgba(9, 105, 218, 0.1);
+  --neutral: #57606a;
+  --neutral-subtle: rgba(87, 96, 106, 0.1);
+
+  --diff-add-bg: rgba(26, 127, 55, 0.12);
+  --diff-add-fg: #1a7f37;
+  --diff-del-bg: rgba(207, 34, 46, 0.12);
+  --diff-del-fg: #cf222e;
+  --diff-hunk-fg: #0969da;
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.1);
+  --shadow-md: 0 4px 12px rgba(31, 35, 40, 0.12);
+  --shadow-lg: 0 12px 32px rgba(31, 35, 40, 0.16);
+
+  --focus-ring: 0 0 0 2px var(--surface-base), 0 0 0 4px var(--accent);
+}
+
+:root {
+  /* ── Typography ────────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, 'JetBrains Mono',
+    Menlo, Consolas, monospace;
+
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 26px;
+  --text-3xl: 32px;
+
+  --font-normal: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+
+  /* ── Spacing scale (4px base) ──────────────────────────────────────── */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ── Radii ─────────────────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-full: 9999px;
+
+  /* ── Layout dimensions ─────────────────────────────────────────────── */
+  --topnav-height: 48px;
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 56px;
+  --bottom-panel-height: 280px;
+
+  /* ── Motion ────────────────────────────────────────────────────────── */
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── Z-index scale ─────────────────────────────────────────────────── */
+  --z-sticky: 100;
+  --z-drawer: 200;
+  --z-modal: 300;
+  --z-toast: 400;
+  --z-tooltip: 500;
+}

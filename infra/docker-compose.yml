@@ -60,7 +60,7 @@ services:
       # Phase 6 — execution sandbox
       SANDBOX_IMAGE: forge-sandbox:latest
       SANDBOX_CPU_LIMIT: "1.0"
-      SANDBOX_MEMORY_LIMIT_MB: "512"
+      SANDBOX_MEMORY_LIMIT_MB: "2048"
       SANDBOX_PID_LIMIT: "128"
       SANDBOX_TIMEOUT_SECONDS: "1800"
       SANDBOX_REAPER_INTERVAL_SECONDS: "300"
@@ -102,15 +102,20 @@ services:
       DATABASE_URL: postgresql://forge:forge@postgres:5432/forge
 
       # Phase 3 — embeddings
-      EMBEDDING__PROVIDER: gemini
-      EMBEDDING__MODEL: gemini-embedding-001
-      EMBEDDING__DIMENSIONS: 3072
+      # EMBEDDING__PROVIDER: gemini
+      # EMBEDDING__MODEL: gemini-embedding-001
+      # EMBEDDING__DIMENSIONS: 3072
       EMBEDDING__BATCH_SIZE: 32
       CHUNK_TOKEN_LIMIT: 512
+      EMBEDDING__PROVIDER: openai
+      EMBEDDING__MODEL: text-embedding-3-small
+      EMBEDDING__DIMENSIONS: 1536
 
       # Phase 4 — chat
-      CHAT__PROVIDER: gemini
-      CHAT__MODEL: gemini-2.5-flash
+      # CHAT__PROVIDER: gemini
+      # CHAT__MODEL: gemini-2.5-flash
+      CHAT__PROVIDER: openai
+      CHAT__MODEL: gpt-4o-mini
 
       # Phase 4 — retrieval
       RETRIEVAL__CANDIDATE_K: 50
@@ -165,6 +170,49 @@ services:
     command: echo "forge-sandbox image built"
     networks:
       - forge-network
+
+  # Phase 8 — Language-specific sandbox images for validation.
+  sandbox-go:
+    build:
+      context: ../infra/sandbox
+      dockerfile: Dockerfile.go
+      tags:
+        - forge-sandbox-go:latest
+    image: forge-sandbox-go:latest
+    container_name: forge-sandbox-go-builder
+    command: echo "forge-sandbox-go image built"
+    networks:
+      - forge-network
+    depends_on:
+      - sandbox-builder
+
+  sandbox-node:
+    build:
+      context: ../infra/sandbox
+      dockerfile: Dockerfile.node
+      tags:
+        - forge-sandbox-node:latest
+    image: forge-sandbox-node:latest
+    container_name: forge-sandbox-node-builder
+    command: echo "forge-sandbox-node image built"
+    networks:
+      - forge-network
+    depends_on:
+      - sandbox-builder
+
+  sandbox-python:
+    build:
+      context: ../infra/sandbox
+      dockerfile: Dockerfile.python
+      tags:
+        - forge-sandbox-python:latest
+    image: forge-sandbox-python:latest
+    container_name: forge-sandbox-python-builder
+    command: echo "forge-sandbox-python image built"
+    networks:
+      - forge-network
+    depends_on:
+      - sandbox-builder
 
 volumes:
   postgres_data:

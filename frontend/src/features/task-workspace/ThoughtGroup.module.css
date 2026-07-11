@@ -1,0 +1,11 @@
+.accordion {
+  margin-bottom: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  border-color: var(--border-subtle);
+}
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}

@@ -1,0 +1,84 @@
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.row:hover {
+  background: var(--surface-2);
+}
+.marker {
+  flex-shrink: 0;
+  width: 18px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.title {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.detail {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  word-break: break-all;
+}
+
+/* Tone accents on the title text */
+.tone_info .title {
+  color: var(--info);
+}
+.tone_success .title {
+  color: var(--success);
+}
+.tone_warning .title {
+  color: var(--warning);
+}
+.tone_danger .title {
+  color: var(--danger);
+}
+.tone_accent .title {
+  color: var(--accent);
+}
+.tone_neutral .title {
+  color: var(--text-secondary);
+}
+
+/* Reasoning reads softer / italic to feel like thinking */
+.row[data-kind='reasoning'] .title {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.outcome {
+  flex-shrink: 0;
+  font-weight: var(--font-bold);
+}
+.ok {
+  color: var(--success);
+}
+.fail {
+  color: var(--danger);
+}
+.spinner {
+  flex-shrink: 0;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: var(--radius-full);
+  display: inline-block;
+  animation: forge-spin 0.7s linear infinite;
+  align-self: center;
+}

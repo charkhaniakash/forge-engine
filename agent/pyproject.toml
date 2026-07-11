@@ -36,9 +36,13 @@ dependencies = [
     "tiktoken==0.7.0",
 
     # Phase 3 — Embeddings + LLM
-    "openai==1.35.7",
+    "openai>=1.52.0,<2.0",
     "anthropic==0.28.0",
     "google-genai==1.16.0",
+
+    # Phase 7 — Execution graph
+    "langgraph>=0.2,<0.3",
+    "langchain-core>=0.2,<0.3",
 
     # Phase 3 — Vector store (direct psycopg2 writes to pgvector)
     "psycopg2-binary==2.9.9",

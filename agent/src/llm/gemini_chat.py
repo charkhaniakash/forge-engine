@@ -6,6 +6,7 @@ in the Gemini generation config.
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any, AsyncIterator
 
 import structlog
@@ -23,6 +24,8 @@ class GeminiChatProvider:
     def __init__(self) -> None:
         self._client = genai.Client(api_key=settings.gemini_api_key)
         self._model = settings.chat.model
+        self._max_retries = 3
+        self._base_delay = 1.0  # seconds
 
     @property
     def model_name(self) -> str:
@@ -45,29 +48,56 @@ class GeminiChatProvider:
         if response_format and response_format.get("type") == "json_object":
             gen_config["response_mime_type"] = "application/json"
 
-        try:
-            async for chunk in await self._client.aio.models.generate_content_stream(
-                model=self._model,
-                contents=gemini_contents,
-                config=genai_types.GenerateContentConfig(**gen_config) if gen_config else None,
-            ):
-                if chunk.usage_metadata:
-                    total_tokens = chunk.usage_metadata.candidates_token_count or 0
-                text = chunk.text
-                if text:
-                    yield {
-                        "v": 1, "event": "token", "seq": seq,
-                        "request_id": request_id, "text": text,
-                    }
-                    seq += 1
+        # Retry logic for connection errors
+        last_error = None
+        for attempt in range(self._max_retries):
+            try:
+                async for chunk in await self._client.aio.models.generate_content_stream(
+                    model=self._model,
+                    contents=gemini_contents,
+                    config=genai_types.GenerateContentConfig(**gen_config) if gen_config else None,
+                ):
+                    if chunk.usage_metadata:
+                        total_tokens = chunk.usage_metadata.candidates_token_count or 0
+                    text = chunk.text
+                    if text:
+                        yield {
+                            "v": 1, "event": "token", "seq": seq,
+                            "request_id": request_id, "text": text,
+                        }
+                        seq += 1
 
-        except Exception as exc:
-            logger.error("gemini_chat_error", error=str(exc), request_id=request_id)
-            yield {
-                "v": 1, "event": "error", "seq": seq,
-                "request_id": request_id, "message": str(exc),
-            }
-            return
+                # Success - break out of retry loop
+                break
+
+            except Exception as exc:
+                last_error = exc
+                error_msg = str(exc).lower()
+                is_connection_error = any(
+                    keyword in error_msg
+                    for keyword in ["peer closed", "connection", "incomplete chunked", "timeout", "unavailable"]
+                )
+
+                if is_connection_error and attempt < self._max_retries - 1:
+                    delay = self._base_delay * (2 ** attempt)  # exponential backoff
+                    logger.warning(
+                        "gemini_chat_connection_error_retrying",
+                        error=str(exc),
+                        attempt=attempt + 1,
+                        max_retries=self._max_retries,
+                        delay_seconds=delay,
+                        request_id=request_id,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                else:
+                    # Non-connection error or max retries exceeded
+                    logger.error("gemini_chat_error", error=str(exc), request_id=request_id)
+                    yield {
+                        "v": 1, "event": "error", "seq": seq,
+                        "request_id": request_id, "message": str(exc),
+                    }
+                    return
 
         done: dict = {
             "v": 1, "event": "done", "seq": seq,

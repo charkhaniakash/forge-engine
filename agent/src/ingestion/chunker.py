@@ -54,6 +54,10 @@ def _split_chunk(chunk: ParsedChunk, limit: int) -> list[ParsedChunk]:
     """
     Split a single oversized chunk into multiple smaller ones by walking
     lines until the token budget is reached, then starting a new sub-chunk.
+
+    If a single line exceeds the limit (e.g. minified JS), it is truncated
+    to fit within the budget. This prevents the embedding API from rejecting
+    the input with a 400 error.
     """
     lines = chunk.content.splitlines()
     sub_chunks: list[ParsedChunk] = []
@@ -62,6 +66,44 @@ def _split_chunk(chunk: ParsedChunk, limit: int) -> list[ParsedChunk]:
     current_start_line = chunk.start_line
 
     for i, line in enumerate(lines):
+        # Handle single lines that exceed the limit (e.g. minified files).
+        line_tokens = count_tokens(line)
+        if line_tokens > limit:
+            # Flush any buffered lines first.
+            if current_lines:
+                content = "\n".join(current_lines)
+                sub_chunks.append(ParsedChunk(
+                    file_path=chunk.file_path,
+                    language=chunk.language,
+                    chunk_type="block",
+                    name=chunk.name if len(sub_chunks) == 0 else None,
+                    start_line=current_start_line,
+                    end_line=current_start_line + len(current_lines) - 1,
+                    content=content,
+                    parser_name=chunk.parser_name,
+                    parser_version=chunk.parser_version,
+                    token_count=count_tokens(content),
+                ))
+                current_lines = []
+                current_start_line = chunk.start_line + i
+
+            # Truncate the oversized line to fit within the token limit.
+            truncated = _truncate_to_token_limit(line, limit)
+            sub_chunks.append(ParsedChunk(
+                file_path=chunk.file_path,
+                language=chunk.language,
+                chunk_type="block",
+                name=chunk.name if len(sub_chunks) == 0 else None,
+                start_line=chunk.start_line + i,
+                end_line=chunk.start_line + i,
+                content=truncated,
+                parser_name=chunk.parser_name,
+                parser_version=chunk.parser_version,
+                token_count=count_tokens(truncated),
+            ))
+            current_start_line = chunk.start_line + i + 1
+            continue
+
         candidate = current_lines + [line]
         if count_tokens("\n".join(candidate)) > limit and current_lines:
             # Flush the current buffer as a sub-chunk.
@@ -100,3 +142,17 @@ def _split_chunk(chunk: ParsedChunk, limit: int) -> list[ParsedChunk]:
         ))
 
     return sub_chunks
+
+
+def _truncate_to_token_limit(text: str, limit: int) -> str:
+    """
+    Truncate text to fit within the token limit by encoding, slicing tokens,
+    and decoding back. Leaves a small margin (16 tokens) for safety.
+    """
+    tokens = _ENCODING.encode(text, disallowed_special=())
+    if len(tokens) <= limit:
+        return text
+    # Keep a small margin under the limit.
+    safe_limit = limit - 16
+    truncated_tokens = tokens[:safe_limit]
+    return _ENCODING.decode(truncated_tokens)

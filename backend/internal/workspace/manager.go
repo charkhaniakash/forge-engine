@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -282,6 +283,385 @@ func (m *WorkspaceManager) Exec(
 	return outCh, nil
 }
 
+// ── Structured types for workspace file APIs ──────────────────────────────────
+
+// SearchResult is one match returned by SearchSymbol.
+// Callers receive structured data — no string parsing required.
+// The underlying search implementation (grep, ripgrep, LSP, AST) is an
+// internal detail that can be swapped without changing this type.
+type SearchResult struct {
+	FilePath string `json:"file_path"` // relative to /workspace
+	Line     int    `json:"line"`
+	Column   int    `json:"column"`    // 0 if not provided by implementation
+	Preview  string `json:"preview"`   // the matching line content
+}
+
+// DirEntry is one entry returned by ListDir.
+// Includes enough metadata for the browser IDE without a follow-up Stat call.
+type DirEntry struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`     // "file" | "dir" | "symlink"
+	Size    int64  `json:"size"`     // bytes; 0 for dirs
+	ModTime string `json:"mod_time"` // RFC3339
+}
+
+// StatResult is returned by Stat.
+type StatResult struct {
+	Path    string `json:"path"`
+	Exists  bool   `json:"exists"`
+	Type    string `json:"type"`     // "file" | "dir" | "symlink" | ""
+	Size    int64  `json:"size"`
+	ModTime string `json:"mod_time"`
+}
+
+// ── Search ────────────────────────────────────────────────────────────────────
+
+// SearchSymbol searches for a pattern across the workspace and returns
+// structured results. The semantic contract is "find this symbol / pattern";
+// the current implementation uses grep. Future phases can swap to ripgrep,
+// tree-sitter, or a language server without changing callers.
+func (m *WorkspaceManager) SearchSymbol(
+	ctx context.Context,
+	workspaceID, dir, pattern string,
+) ([]SearchResult, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return nil, fmt.Errorf("workspace not ready: %w", err)
+	}
+	absDir := workspaceMountPath
+	if dir != "" && dir != "." {
+		absDir = workspaceMountPath + "/" + strings.TrimPrefix(dir, "/")
+	}
+
+	// grep -n: include line numbers. -r: recursive. -H: always print filename.
+	// Exit code 1 = no matches (not an error); 2+ = real error.
+	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command: []string{
+			"grep", "-r", "-n", "-H",
+			"--include=*.go", "--include=*.py", "--include=*.ts",
+			"--include=*.js", "--include=*.tsx", "--include=*.jsx",
+			"--", pattern, absDir,
+		},
+		TimeoutSeconds: 30,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	if result.ExitCode > 1 {
+		return nil, fmt.Errorf("search failed (exit %d): %s", result.ExitCode, result.Stderr)
+	}
+
+	var results []SearchResult
+	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
+		if line == "" {
+			continue
+		}
+		// grep -n output format: "path/to/file.go:42:preview content"
+		line = strings.TrimPrefix(line, workspaceMountPath+"/")
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		lineNum := 0
+		fmt.Sscanf(parts[1], "%d", &lineNum)
+		results = append(results, SearchResult{
+			FilePath: parts[0],
+			Line:     lineNum,
+			Column:   0,
+			Preview:  strings.TrimSpace(parts[2]),
+		})
+	}
+	return results, nil
+}
+
+// ── File operations (Phase 7) ─────────────────────────────────────────────────
+
+// ReadFile reads a file from the workspace at the given relative path.
+func (m *WorkspaceManager) ReadFile(ctx context.Context, workspaceID, path string) ([]byte, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return nil, fmt.Errorf("workspace not ready: %w", err)
+	}
+	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	return m.driver.ReadFile(ctx, *ws.ContainerID, absPath)
+}
+
+// WriteFile overwrites a file at the given path with new content.
+// The parent directory must already exist — use CreateFile to auto-create parents.
+// Phase 9 will add ApplyPatch / ReplaceRange for surgical edits without full rewrites.
+func (m *WorkspaceManager) WriteFile(ctx context.Context, workspaceID, path string, data []byte) error {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return fmt.Errorf("workspace not ready: %w", err)
+	}
+	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	return m.driver.WriteFile(ctx, *ws.ContainerID, absPath, data)
+}
+
+// CreateFile creates a new file, auto-creating any missing parent directories.
+func (m *WorkspaceManager) CreateFile(ctx context.Context, workspaceID, path string, data []byte) error {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return fmt.Errorf("workspace not ready: %w", err)
+	}
+	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	parentDir := filepath.Dir(absPath)
+	mkdirResult, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command:        []string{"mkdir", "-p", parentDir},
+		TimeoutSeconds: 10,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil || mkdirResult.ExitCode != 0 {
+		return fmt.Errorf("mkdir -p %s: %v", parentDir, err)
+	}
+	return m.driver.WriteFile(ctx, *ws.ContainerID, absPath, data)
+}
+
+// DeleteFile removes a file from the workspace.
+func (m *WorkspaceManager) DeleteFile(ctx context.Context, workspaceID, path string) error {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return fmt.Errorf("workspace not ready: %w", err)
+	}
+	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command:        []string{"rm", "-f", "--", absPath},
+		TimeoutSeconds: 10,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("rm %s failed (exit %d): %s", path, result.ExitCode, result.Stderr)
+	}
+	return nil
+}
+
+// RenameFile moves/renames a file, auto-creating the destination parent directory.
+func (m *WorkspaceManager) RenameFile(ctx context.Context, workspaceID, oldPath, newPath string) error {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return fmt.Errorf("workspace not ready: %w", err)
+	}
+	absOld := workspaceMountPath + "/" + strings.TrimPrefix(oldPath, "/")
+	absNew := workspaceMountPath + "/" + strings.TrimPrefix(newPath, "/")
+
+	// Ensure destination parent exists.
+	destParent := filepath.Dir(absNew)
+	mkdirResult, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command:        []string{"mkdir", "-p", destParent},
+		TimeoutSeconds: 10,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil || mkdirResult.ExitCode != 0 {
+		return fmt.Errorf("mkdir -p %s: %v", destParent, err)
+	}
+
+	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command:        []string{"mv", "--", absOld, absNew},
+		TimeoutSeconds: 10,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("mv %s → %s failed (exit %d): %s", oldPath, newPath, result.ExitCode, result.Stderr)
+	}
+	return nil
+}
+
+// ListDir returns structured metadata for entries in a directory.
+// Returns DirEntry with name, type (file/dir/symlink), size, and mod_time.
+// This avoids a follow-up Stat call per entry in the browser IDE.
+func (m *WorkspaceManager) ListDir(ctx context.Context, workspaceID, path string) ([]DirEntry, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return nil, fmt.Errorf("workspace not ready: %w", err)
+	}
+	if path == "" {
+		path = "."
+	}
+	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+
+	// stat -c "%F|%s|%Y|%n" each entry: type|size|epoch|name
+	// Using find to get consistent output across different ls versions.
+	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command:        []string{"find", absPath, "-maxdepth", "1", "-mindepth", "1", "-printf", "%y|%s|%T@|%f\n"},
+		TimeoutSeconds: 10,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	if result.ExitCode != 0 {
+		return nil, fmt.Errorf("list %s failed (exit %d): %s", path, result.ExitCode, result.Stderr)
+	}
+
+	var entries []DirEntry
+	for _, line := range strings.Split(strings.TrimSpace(result.Stdout), "\n") {
+		if line == "" {
+			continue
+		}
+		// format: type|size|epoch|name
+		// find %y: f=file, d=dir, l=symlink, etc.
+		parts := strings.SplitN(line, "|", 4)
+		if len(parts) != 4 {
+			continue
+		}
+		typeCh := parts[0]
+		var size int64
+		fmt.Sscanf(parts[1], "%d", &size)
+		var epoch float64
+		fmt.Sscanf(parts[2], "%f", &epoch)
+		name := parts[3]
+
+		entType := "file"
+		switch typeCh {
+		case "d":
+			entType = "dir"
+		case "l":
+			entType = "symlink"
+		}
+
+		entries = append(entries, DirEntry{
+			Name:    name,
+			Type:    entType,
+			Size:    size,
+			ModTime: epochToRFC3339(int64(epoch)),
+		})
+	}
+	return entries, nil
+}
+
+// Exists reports whether a path exists inside the workspace.
+// Use this instead of catching ReadFile errors to detect missing files.
+func (m *WorkspaceManager) Exists(ctx context.Context, workspaceID, path string) (bool, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return false, fmt.Errorf("workspace not ready: %w", err)
+	}
+	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command:        []string{"test", "-e", absPath},
+		TimeoutSeconds: 5,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil {
+		return false, err
+	}
+	return result.ExitCode == 0, nil
+}
+
+// Stat returns metadata for a path inside the workspace.
+// Returns StatResult.Exists=false if the path does not exist (not an error).
+func (m *WorkspaceManager) Stat(ctx context.Context, workspaceID, path string) (*StatResult, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return nil, fmt.Errorf("workspace not ready: %w", err)
+	}
+	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+
+	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		// stat -c: %F=type %s=size %Y=epoch  — portable across Linux
+		Command:        []string{"stat", "-c", "%F|%s|%Y", "--", absPath},
+		TimeoutSeconds: 5,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil {
+		return nil, err
+	}
+	if result.ExitCode != 0 {
+		// File does not exist — not an error, just report Exists=false.
+		return &StatResult{
+			Path:   path,
+			Exists: false,
+		}, nil
+	}
+
+	parts := strings.SplitN(strings.TrimSpace(result.Stdout), "|", 3)
+	if len(parts) != 3 {
+		return &StatResult{Path: path, Exists: false}, nil
+	}
+
+	typeName := parts[0] // "regular file", "directory", "symbolic link"
+	var size int64
+	fmt.Sscanf(parts[1], "%d", &size)
+	var epoch int64
+	fmt.Sscanf(parts[2], "%d", &epoch)
+
+	entType := "file"
+	if strings.Contains(typeName, "directory") {
+		entType = "dir"
+	} else if strings.Contains(typeName, "symbolic") {
+		entType = "symlink"
+	}
+
+	return &StatResult{
+		Path:    path,
+		Exists:  true,
+		Type:    entType,
+		Size:    size,
+		ModTime: epochToRFC3339(epoch),
+	}, nil
+}
+
+// ── Validation container helpers (Phase 8) ────────────────────────────────────
+
+// ProvisionValidationContainer creates an ephemeral language-specific container
+// for Phase 8 validation. The container mounts the same named volume as the
+// Phase 7 workspace so it sees the post-execution code state.
+//
+// The container is NOT tracked in the workspaces table — it is ephemeral and
+// managed entirely by the ValidationOrchestrator. The caller must call
+// DestroyValidationContainer when the validation run completes.
+func (m *WorkspaceManager) ProvisionValidationContainer(
+	ctx context.Context,
+	workspaceID string,
+	sandboxImage string,
+) (string, error) {
+	// The Phase 7 workspace volume name follows the convention set in DockerSandboxDriver.Provision.
+	volumeName := fmt.Sprintf("forge-workspace-%s", workspaceID)
+
+	cfg := WorkspaceConfig{
+		// Use a unique ID derived from the workspace ID + timestamp so container
+		// names never collide if multiple validation runs are in flight.
+		WorkspaceID:    fmt.Sprintf("%s-val-%d", workspaceID[:8], time.Now().UnixNano()/1e6),
+		Image:          sandboxImage,
+		CPULimit:       m.cfg.DefaultCPULimit,
+		MemoryLimitMB:  m.cfg.DefaultMemoryLimitMB,
+		PIDLimit:       m.cfg.DefaultPIDLimit,
+		TimeoutSeconds: m.cfg.DefaultTimeoutSeconds,
+		EnvVars: map[string]string{
+			"GIT_TERMINAL_PROMPT": "0",
+		},
+	}
+
+	// Override the volume binding so the validation container uses the existing
+	// workspace volume (not a fresh empty one).
+	info, err := m.driver.ProvisionWithVolume(ctx, cfg, volumeName)
+	if err != nil {
+		return "", fmt.Errorf("provision validation container (image=%s, volume=%s): %w", sandboxImage, volumeName, err)
+	}
+	return info.ContainerID, nil
+}
+
+// ExecInValidationContainer runs a command inside an ephemeral validation container
+// by its Docker container ID. This bypasses the workspaces table entirely.
+func (m *WorkspaceManager) ExecInValidationContainer(
+	ctx context.Context,
+	containerID string,
+	req ExecRequest,
+) (<-chan ExecutionEvent, error) {
+	return m.driver.Execute(ctx, containerID, req)
+}
+
+// DestroyValidationContainer removes an ephemeral validation container by ID.
+func (m *WorkspaceManager) DestroyValidationContainer(ctx context.Context, containerID string) error {
+	err := m.driver.Destroy(ctx, containerID)
+	// Exit code 137 is expected: Docker stop sends SIGKILL after the grace period,
+	// which terminates the container with 128+9=137. This is normal cleanup, not an error.
+	m.logger.Infow("validation_container_destroyed",
+		"container_id", containerID[:min(12, len(containerID))],
+		"note", "exit_137_is_expected_sigkill_from_docker_stop",
+	)
+	return err
+}
+
 // Destroy tears down the workspace: stops/removes the container and updates DB.
 func (m *WorkspaceManager) Destroy(ctx context.Context, workspaceID string) error {
 	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
@@ -425,4 +805,12 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// epochToRFC3339 converts a Unix epoch (seconds) to an RFC3339 timestamp string.
+func epochToRFC3339(epoch int64) string {
+	if epoch == 0 {
+		return ""
+	}
+	return time.Unix(epoch, 0).UTC().Format(time.RFC3339)
 }

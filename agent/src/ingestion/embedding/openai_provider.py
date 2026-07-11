@@ -11,9 +11,14 @@ embed(), so individual calls here are already batch-sized.
 """
 from __future__ import annotations
 
+import tiktoken
 import openai
 
 from src.ingestion.embedding.base import EmbeddingProvider
+
+# OpenAI's embedding models have a hard 8191 token input limit.
+_MAX_INPUT_TOKENS = 8191
+_ENCODING = tiktoken.get_encoding("cl100k_base")
 
 
 class OpenAIEmbeddingProvider(EmbeddingProvider):
@@ -34,9 +39,20 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
+        # Safety-net: truncate any input that exceeds the model's hard token limit.
+        # The chunker should prevent this, but minified files or edge cases may slip through.
+        safe_texts = [self._truncate(t) for t in texts]
         response = self._client.embeddings.create(
             model=self._model,
-            input=texts,
+            input=safe_texts,
         )
         # OpenAI guarantees the response order matches the input order.
         return [item.embedding for item in response.data]
+
+    @staticmethod
+    def _truncate(text: str) -> str:
+        """Truncate text to fit within OpenAI's token limit if necessary."""
+        tokens = _ENCODING.encode(text, disallowed_special=())
+        if len(tokens) <= _MAX_INPUT_TOKENS:
+            return text
+        return _ENCODING.decode(tokens[:_MAX_INPUT_TOKENS])

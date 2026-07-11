@@ -17,12 +17,16 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/db"
+	"github.com/charkhaniakash/forge-engine/backend/internal/execution"
 	"github.com/charkhaniakash/forge-engine/backend/internal/github"
 	"github.com/charkhaniakash/forge-engine/backend/internal/handlers"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
+	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
+	"github.com/charkhaniakash/forge-engine/backend/internal/repair"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
+	"github.com/charkhaniakash/forge-engine/backend/internal/validation"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
 
@@ -75,6 +79,8 @@ func main() {
 	qaRepo := repository.NewQARepository(dbConn)
 	workItemRepo := repository.NewWorkItemRepository(dbConn)
 	wsRepo := repository.NewWorkspaceRepository(dbConn)
+	execRepo := repository.NewExecutionRepository(dbConn)
+	valRepo := validation.NewValidationRepository(dbConn)
 
 	// ── Auth handlers ─────────────────────────────────────────────────────────
 	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
@@ -90,6 +96,10 @@ func main() {
 	var qaHandlers *handlers.QAHandlers
 	var taskHandlers *handlers.TaskHandlers
 	var workspaceHandlers *handlers.WorkspaceHandlers
+	var executionHandlers *handlers.ExecutionHandlers
+	var validationHandlers *handlers.ValidationHandlers
+	var repairHandlers *repair.Handlers
+	var publishingHandlers *publishing.Handlers
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -221,7 +231,152 @@ func main() {
 					wsManager, wsRepo, workItemRepo,
 					githubRepoRepo, githubInstallationRepo, ingestionJobRepo, sugar)
 
-				sugar.Info("workspace execution sandbox initialised")
+				// ── Execution engine (Phase 7) ────────────────────────────────
+				agentExecClient := execution.NewAgentExecClient(agentURL, jwtSecret)
+				execOrchestrator := execution.NewExecutionOrchestrator(
+					execRepo, wsRepo, wsManager,
+					agentExecClient,
+					nil, // publisher wired by NewExecutionHandlers
+					jwtSecret, sugar,
+				)
+
+				// ── Validation (Phase 8) ──────────────────────────────────────
+				// Built before executionHandlers so we can wire the trigger below.
+				agentParseClient := validation.NewAgentParseClient(agentURL, jwtSecret)
+				detector := validation.NewStackDetector(wsManager)
+				valOrchestrator := validation.NewValidationOrchestrator(
+					valRepo, wsManager, agentParseClient, detector,
+					nil, // publisher wired by NewValidationHandlers
+					sugar,
+				)
+				validationHandlers = handlers.NewValidationHandlers(
+					valRepo, workItemRepo, execRepo, valOrchestrator, sugar,
+				)
+
+				// ── Repair (Phase 9) ──────────────────────────────────────────
+				// Built after validation so the repair orchestrator can re-run validation.
+				agentRepairClient := repair.NewAgentRepairClient(agentURL, jwtSecret)
+				repairPolicy := repair.NewRepairPolicy()
+				repairRepo := repair.NewRepairRepository(dbConn)
+				repairOrch := repair.NewOrchestrator(
+					repairRepo, valRepo, execRepo, workItemRepo, wsManager,
+					valOrchestrator, agentRepairClient, repairPolicy,
+					jwtSecret, sugar,
+				)
+				repairHandlers = repair.NewHandlers(repairRepo, repairOrch, sugar)
+
+				// ── Publishing (Phase 10) ─────────────────────────────────────
+				publishingRepo := publishing.NewRepository(dbConn)
+				agentSummaryClient := publishing.NewAgentSummaryClient()
+				githubPRClient := publishing.NewGitHubPRClient(func(repoFullName string) (string, error) {
+					// Resolve installation token via the existing token cache.
+					// Uses background context since this is called from async goroutines.
+					bgCtx := context.Background()
+					repo, err := githubRepoRepo.GetByFullName(bgCtx, repoFullName)
+					if err != nil {
+						return "", fmt.Errorf("repo not found for %s: %w", repoFullName, err)
+					}
+					install, err := githubInstallationRepo.GetByID(bgCtx, repo.InstallationID)
+					if err != nil {
+						return "", fmt.Errorf("installation not found: %w", err)
+					}
+					token, err := tokenCache.GetInstallationToken(bgCtx, install.GitHubInstallationID)
+					if err != nil {
+						return "", fmt.Errorf("get installation token: %w", err)
+					}
+					return token, nil
+				})
+				publishingOrch := publishing.NewOrchestrator(
+					publishingRepo, workItemRepo, execRepo, wsManager,
+					githubPRClient, agentSummaryClient, jwtSecret, sugar,
+				)
+				publishingHandlers = publishing.NewHandlers(
+					publishingRepo, publishingOrch, workItemRepo, execRepo,
+					wsRepo, githubRepoRepo, sugar,
+				)
+
+				// Wire automatic validation + repair trigger into the execution orchestrator.
+				// When execution finishes, it fires this closure in a goroutine.
+				// The closure orchestrates Phase 8 → Phase 9 based on validation results.
+				// 
+				// Architecture:
+				//   Phase 8 (ValidationOrchestrator) produces validation results.
+				//   This trigger consumes those results and decides whether Phase 9 begins.
+				//   Phase 8 never decides whether Phase 9 runs - only THIS layer does.
+				execOrchestrator.SetValidationTrigger(func(ctx context.Context, taskExecutionID, workspaceID, traceID string) {
+					log := sugar.With(
+						"task_execution_id", taskExecutionID,
+						"workspace_id", workspaceID,
+						"trace_id", traceID,
+					)
+
+					// Work item transitions require work_items.id, not task_executions.id.
+					exec, execErr := execRepo.GetExecution(ctx, taskExecutionID)
+					if execErr != nil {
+						log.Errorw("validation_trigger_exec_load_failed", "error", execErr)
+						return
+					}
+					workItemID := exec.WorkItemID
+					log = log.With("work_item_id", workItemID)
+
+					// Phase 8: Validation
+					log.Info("phase_8_auto_validation_starting")
+					validationRun, err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change")
+					if err != nil {
+						log.Errorw("phase_8_validation_failed", "error", err)
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, fmt.Sprintf("validation error: %v", err))
+						return
+					}
+
+					if validationRun.OverallResult == nil {
+						log.Errorw("validation_overall_result_is_nil",
+							"validation_run_id", validationRun.ID,
+						)
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, "validation completed without overall_result")
+						return
+					}
+
+					overallResult := *validationRun.OverallResult
+					log.Infow("phase_8_validation_complete", "overall_result", overallResult)
+
+					// Phase 9 Decision Point
+					// This is where the task orchestration layer decides whether repair begins.
+					switch overallResult {
+					case "passed":
+						log.Info("validation_passed_marking_done")
+						_ = workItemRepo.TransitionToDone(ctx, workItemID)
+
+					case "failed_repairable":
+						// Phase 9: RepairOrchestrator evaluates RepairPolicy and transitions
+						// to repairing only when repair is permitted.
+						log.Info("validation_failed_repairable_triggering_repair")
+						if err := repairOrch.Run(ctx, taskExecutionID, workspaceID, validationRun.ID, traceID); err != nil {
+							log.Errorw("phase_9_repair_failed", "error", err)
+						} else {
+							log.Info("phase_9_repair_complete")
+						}
+
+					case "failed_environment":
+						log.Warn("validation_failed_environment_marking_done")
+						_ = workItemRepo.TransitionToDone(ctx, workItemID)
+
+					case "failed_requires_human":
+						log.Warn("validation_failed_requires_human_marking_failed")
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, "validation failed: requires human intervention")
+
+					default:
+						log.Warnw("unexpected_overall_result", "result", overallResult)
+						_ = workItemRepo.TransitionToFailed(ctx, workItemID, fmt.Sprintf("unexpected validation result: %s", overallResult))
+					}
+				})
+
+				executionHandlers = handlers.NewExecutionHandlers(
+					execRepo, workItemRepo, wsRepo,
+					githubRepoRepo, execOrchestrator, wsManager,
+					jwtSecret, sugar,
+				)
+
+				sugar.Info("workspace execution sandbox, execution engine, and validation pipeline initialised")
 			}
 
 			sugar.Info("GitHub integration and ingestion worker initialised")
@@ -301,6 +456,7 @@ func main() {
 
 	if taskHandlers != nil {
 		// Phase 5 — Task creation & planning
+		app.Get("/v1/missions", middleware.RequireAuth(sugar), taskHandlers.ListMissions)
 		app.Post("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.CreateTask)
 		app.Get("/v1/repos/:repoID/tasks", middleware.RequireAuth(sugar), taskHandlers.ListTasks)
 		app.Get("/v1/repos/:repoID/tasks/:taskID", middleware.RequireAuth(sugar), taskHandlers.GetTask)
@@ -327,11 +483,77 @@ func main() {
 		app.Get("/v1/repos/:repoID/tasks/:taskID/workspace/logs",
 			middleware.RequireAuth(sugar), workspaceHandlers.GetWorkspaceLogs)
 
-		// Phase 6 — Internal execution endpoint (called by Phase 7 agent routing)
-		// Protected by internal JWT — not accessible from the internet.
+		// Phase 6 — Internal command execution (called by Phase 7 agent routing)
 		app.Post("/v1/internal/workspaces/:workspaceID/exec",
 			middleware.RequireInternalAuth(jwtSecret, sugar),
 			workspaceHandlers.InternalExec)
+	}
+
+	if executionHandlers != nil {
+		// Phase 7 — Task execution lifecycle
+		app.Post("/v1/repos/:repoID/tasks/:taskID/execute",
+			middleware.RequireAuth(sugar), executionHandlers.StartExecution)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution",
+			middleware.RequireAuth(sugar), executionHandlers.GetExecution)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution/events",
+			middleware.RequireAuth(sugar), executionHandlers.GetExecutionEvents)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution/diffs",
+			middleware.RequireAuth(sugar), executionHandlers.GetExecutionDiffs)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/execution/cancel",
+			middleware.RequireAuth(sugar), executionHandlers.CancelExecution)
+		// WebSocket — live execution events
+		app.Get("/v1/repos/:repoID/tasks/:taskID/execution/stream",
+			executionHandlers.StreamUpgrade,
+			websocket.New(executionHandlers.StreamWS),
+		)
+		// Phase 7 — Internal tool dispatch (called by agent via internal JWT)
+		app.Post("/v1/internal/workspaces/:workspaceID/tool",
+			middleware.RequireInternalAuth(jwtSecret, sugar),
+			executionHandlers.ToolDispatch)
+	}
+
+	if validationHandlers != nil {
+		// Phase 8 — Validation pipeline
+		app.Post("/v1/repos/:repoID/tasks/:taskID/validate",
+			middleware.RequireAuth(sugar), validationHandlers.StartValidation)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/validation",
+			middleware.RequireAuth(sugar), validationHandlers.GetValidation)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/validation/diagnostics",
+			middleware.RequireAuth(sugar), validationHandlers.GetDiagnostics)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/validation/stream",
+			validationHandlers.StreamUpgrade,
+			websocket.New(validationHandlers.StreamWS),
+		)
+	}
+
+	if repairHandlers != nil {
+		// Phase 9 — Autonomous Self-Repair
+		app.Get("/v1/repair/sessions/:id",
+			middleware.RequireAuth(sugar), repairHandlers.GetSession)
+		app.Get("/v1/repair/sessions/by-task/:taskExecutionID",
+			middleware.RequireAuth(sugar), repairHandlers.GetSessionByTaskExecution)
+		app.Get("/v1/repair/sessions/:id/attempts",
+			middleware.RequireAuth(sugar), repairHandlers.ListAttempts)
+		app.Get("/v1/repair/sessions/:id/checkpoints",
+			middleware.RequireAuth(sugar), repairHandlers.ListCheckpoints)
+		// WebSocket — live repair events
+		app.Get("/v1/repair/sessions/:id/stream",
+			repairHandlers.StreamUpgrade,
+			websocket.New(repairHandlers.StreamWS),
+		)
+	}
+
+	if publishingHandlers != nil {
+		// Phase 10 — Git Operations & Pull Request Automation
+		// WebSocket route FIRST (more specific path) to avoid collision with task routes.
+		app.Get("/v1/publishing/sessions/:sessionID/stream",
+			publishingHandlers.StreamUpgrade,
+			websocket.New(publishingHandlers.StreamWS),
+		)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/publish",
+			middleware.RequireAuth(sugar), publishingHandlers.StartPublish)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/publish",
+			middleware.RequireAuth(sugar), publishingHandlers.GetPublishSession)
 	}
 
 	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────

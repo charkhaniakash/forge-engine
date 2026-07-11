@@ -1,11 +1,13 @@
 package workspace
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -34,6 +36,19 @@ const (
 //   - Non-root execution: User = "forge" (uid 1000)
 //   - Resource limits: CPU, memory, PIDs from WorkspaceConfig
 //   - Read-only root filesystem + writable /workspace and /tmp via tmpfs
+//
+// File I/O implementation note (Phase 7 → Phase 9 upgrade path):
+//   ReadFile and WriteFile currently use docker cp (CopyFromContainer /
+//   CopyToContainer). This is correct for Phase 7 where each step performs
+//   O(10) file operations. For Phase 9 autonomous repair loops that may
+//   perform O(100+) operations, upgrade to a bind mount:
+//
+//   Provision: add HostConfig.Binds = ["/tmp/forge-ws/{id}:/workspace"]
+//   ReadFile:  os.ReadFile("/tmp/forge-ws/{id}/" + path)
+//   WriteFile: os.WriteFile("/tmp/forge-ws/{id}/" + path, data, 0644)
+//
+//   This replaces ~2-5ms/op socket overhead with single-syscall latency.
+//   The SandboxDriver interface and all callers above this layer are unchanged.
 type DockerSandboxDriver struct {
 	client *client.Client
 	logger *zap.SugaredLogger
@@ -304,6 +319,12 @@ func (d *DockerSandboxDriver) Execute(ctx context.Context, containerID string, r
 
 // Destroy stops and removes the container. Idempotent — safe to call on
 // already-removed containers.
+//
+// Exit code 137 note: Docker stop sends SIGTERM then SIGKILL after the grace
+// period. Containers that receive SIGKILL exit with code 137 (128+9). This is
+// expected behaviour for validation containers stopped via DestroyValidationContainer
+// and should be logged at Info, not Warn. For regular workspace containers the
+// same code may indicate an OOM kill, which warrants investigation.
 func (d *DockerSandboxDriver) Destroy(ctx context.Context, containerID string) error {
 	// Extract workspace ID from container name to clean up the volume.
 	containerInfo, err := d.client.ContainerInspect(ctx, containerID)
@@ -322,6 +343,9 @@ func (d *DockerSandboxDriver) Destroy(ctx context.Context, containerID string) e
 		},
 	); err != nil {
 		// Log but don't fail — we still want to attempt Remove.
+		// Note: for validation containers this is often a no-op since the
+		// container may already have exited; the Warn is only relevant for
+		// unexpected stop failures on long-running workspace containers.
 		d.logger.Warnw("docker_stop_failed",
 			"container_id", containerID[:min(12, len(containerID))],
 			"error", err)
@@ -372,27 +396,179 @@ func (d *DockerSandboxDriver) Status(ctx context.Context, containerID string) (C
 	return status, nil
 }
 
-// ReadFile reads a file from inside the container.
-// Phase 6: not implemented. Phase 7 will implement via docker cp.
-func (d *DockerSandboxDriver) ReadFile(_ context.Context, _ string, _ string) ([]byte, error) {
-	return nil, ErrNotImplemented
+// ReadFile reads a file from inside the container using docker cp.
+// Returns the raw file bytes.
+func (d *DockerSandboxDriver) ReadFile(ctx context.Context, containerID string, path string) ([]byte, error) {
+	reader, _, err := d.client.CopyFromContainer(ctx, containerID, path)
+	if err != nil {
+		return nil, fmt.Errorf("docker cp read %s: %w", path, err)
+	}
+	defer reader.Close()
+
+	tr := tar.NewReader(reader)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar read: %w", err)
+		}
+		if hdr.Typeflag == tar.TypeReg {
+			return io.ReadAll(tr)
+		}
+	}
+	return nil, fmt.Errorf("file not found in tar: %s", path)
 }
 
-// WriteFile writes data to a path inside the container.
-// Phase 6: not implemented. Phase 7 will implement via docker cp.
-func (d *DockerSandboxDriver) WriteFile(_ context.Context, _ string, _ string, _ []byte) error {
-	return ErrNotImplemented
+// WriteFile writes data to a path inside the container via docker cp.
+func (d *DockerSandboxDriver) WriteFile(ctx context.Context, containerID string, path string, data []byte) error {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	hdr := &tar.Header{
+		Name:     filepath.Base(path),
+		Mode:     0o644,
+		Size:     int64(len(data)),
+		Typeflag: tar.TypeReg,
+	}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return fmt.Errorf("tar header: %w", err)
+	}
+	if _, err := tw.Write(data); err != nil {
+		return fmt.Errorf("tar write: %w", err)
+	}
+	if err := tw.Close(); err != nil {
+		return fmt.Errorf("tar close: %w", err)
+	}
+	destDir := filepath.Dir(path)
+	return d.client.CopyToContainer(ctx, containerID, destDir, &buf,
+		types.CopyToContainerOptions{AllowOverwriteDirWithFile: false})
 }
 
-// CopyFile copies a file inside the container.
-// Phase 6: not implemented. Phase 7 will implement via docker exec cp.
-func (d *DockerSandboxDriver) CopyFile(_ context.Context, _ string, _, _ string) error {
-	return ErrNotImplemented
+// CopyFile copies a file from src to dst inside the container via docker exec.
+func (d *DockerSandboxDriver) CopyFile(ctx context.Context, containerID string, src, dst string) error {
+	ch, err := d.Execute(ctx, containerID, ExecRequest{
+		Command:        []string{"cp", "--", src, dst},
+		TimeoutSeconds: 30,
+		User:           "root", // cp between paths may need root
+	})
+	if err != nil {
+		return fmt.Errorf("copy %s → %s: %w", src, dst, err)
+	}
+	exitCode := 0
+	for event := range ch {
+		if event.Type == "exit" && event.ExitCode != nil {
+			exitCode = *event.ExitCode
+		}
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("cp exited with code %d", exitCode)
+	}
+	return nil
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ProvisionWithVolume creates a container that mounts an existing named volume
+// at /workspace instead of creating a fresh volume. Used by the validation
+// pipeline to share the Phase 7 code with a language-specific sandbox image.
+//
+// Filesystem layout for the validation container:
+//   /workspace        → existing workspace volume (read-write, contains the code)
+//   /tmp              → tmpfs 256m (build tools write temp files here)
+//   /home/forge       → tmpfs 512m (npm cache, pip cache, go module cache, etc.)
+//   everything else   → read-only (rootfs from the sandbox image)
+//
+// Why /home/forge needs tmpfs:
+//   - forge-sandbox-node sets NPM_CONFIG_CACHE=/home/forge/.npm
+//   - forge-sandbox-python pip installs to /home/forge/.local when run as forge
+//   - forge-sandbox-go sets GOPATH=/home/forge/go
+//   All three toolchains write to /home/forge during their first run.
+//   Without a writable /home/forge the tools crash with permission errors,
+//   which manifest as exit code 254 (npm/pip startup failure) or exit code 1
+//   with a misleading "executable not found" error from the generic parser.
+func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg WorkspaceConfig, volumeName string) (*DriverInfo, error) {
+	containerName := fmt.Sprintf("forge-val-%s", cfg.WorkspaceID)
 
-// parseCPU converts a CPU limit string (e.g. "1.0") to Docker's NanoCPU unit.
+	env := make([]string, 0, len(cfg.EnvVars))
+	for k, v := range cfg.EnvVars {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+
+	nanoCPU := parseCPU(cfg.CPULimit)
+	memoryBytes := int64(cfg.MemoryLimitMB) * 1024 * 1024
+	pidsLimit := int64(cfg.PIDLimit)
+
+	hostConfig := &container.HostConfig{
+		NetworkMode: "bridge",
+		Resources: container.Resources{
+			NanoCPUs:  nanoCPU,
+			Memory:    memoryBytes,
+			PidsLimit: &pidsLimit,
+		},
+		ReadonlyRootfs: true,
+		// Mount the EXISTING workspace volume (not a new one).
+		Binds: []string{
+			fmt.Sprintf("%s:%s", volumeName, workspaceMountPath),
+		},
+		// Writable tmpfs mounts required by the language toolchains:
+		//   /tmp            — general temp files (all tools)
+		//   /home/forge     — npm cache (node_npm_v1), pip cache (python_pip_v1),
+		//                     go module cache (go_default_v1), ruff cache, etc.
+		//                     MUST be writable or the toolchain cannot start.
+		Tmpfs: map[string]string{
+			"/tmp":        "size=256m,mode=1777",
+			"/home/forge": "size=512m,mode=0755,uid=1000,gid=1000",
+		},
+		AutoRemove:  false,
+		SecurityOpt: []string{"no-new-privileges"},
+	}
+
+	containerConfig := &container.Config{
+		Image:        cfg.Image,
+		User:         "forge",
+		Env:          env,
+		OpenStdin:    true,
+		AttachStdin:  false,
+		AttachStdout: false,
+		AttachStderr: false,
+		Tty:          false,
+		WorkingDir:   workspaceMountPath,
+		Labels: map[string]string{
+			"forge.validation": "true",
+			"forge.managed":    "true",
+		},
+	}
+
+	d.logger.Infow("validation_container_creating",
+		"container_name", containerName,
+		"image", cfg.Image,
+		"volume", volumeName,
+	)
+
+	created, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, containerName)
+	if err != nil {
+		return nil, fmt.Errorf("docker create validation container failed (image=%s): %w", cfg.Image, err)
+	}
+
+	if err := d.client.ContainerStart(ctx, created.ID, types.ContainerStartOptions{}); err != nil {
+		_ = d.client.ContainerRemove(context.Background(), created.ID,
+			types.ContainerRemoveOptions{Force: true})
+		return nil, fmt.Errorf("docker start validation container failed (image=%s): %w", cfg.Image, err)
+	}
+
+	d.logger.Infow("validation_container_started",
+		"container_id", created.ID[:12],
+		"container_name", containerName,
+		"image", cfg.Image,
+		"volume", volumeName,
+	)
+
+	return &DriverInfo{
+		ContainerID:   created.ID,
+		ContainerName: containerName,
+	}, nil
+}
+
+
 func parseCPU(limit string) int64 {
 	var f float64
 	if _, err := fmt.Sscanf(limit, "%f", &f); err != nil || f <= 0 {

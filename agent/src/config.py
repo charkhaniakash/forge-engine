@@ -52,7 +52,7 @@ class ChatConfig(BaseModel):
     # openai:    gpt-4o-mini (default), gpt-4o
     # gemini:    gemini-2.5-flash, gemini-1.5-pro
     # anthropic: claude-3-haiku-20240307, claude-3-sonnet-20240229
-    # ollama:    gemma3:12b, gemma3:27b, gemma3:4b, codellama:13b, qwen2.5-coder:14b
+    # ollama:    gemma3:12b, gemma3:27b, qwen2.5-coder:7b, codellama:13b, qwen2.5-coder:14b
     model: str = "gpt-4o-mini"
 
 

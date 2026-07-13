@@ -8,7 +8,7 @@ so this provider reuses the openai SDK with a custom base_url.
 Recommended local models for code tasks:
   gemma3:12b          — best balance of quality and speed on an M-series Mac
   gemma3:27b          — higher quality, needs ~20 GB RAM
-  gemma3:4b           — fastest, lower RAM (~5 GB), acceptable for simple tasks
+  qwen2.5-coder:7b           — fastest, lower RAM (~5 GB), acceptable for simple tasks
   codellama:13b       — Meta's code-focused model
   qwen2.5-coder:14b   — strong at code, OpenAI-compatible via Ollama
 

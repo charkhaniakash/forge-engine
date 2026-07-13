@@ -310,7 +310,7 @@ def _parse_plan(
         return None, [f"LLM output is not valid JSON: {exc}"]
 
     # Log the raw parsed structure so we can see exactly what a small/local
-    # model (gemma3:4b) produced when a plan ends up empty or malformed.
+    # model (qwen2.5-coder:7b) produced when a plan ends up empty or malformed.
     # NOTE: temporarily at WARNING level for diagnosis — drop to debug once
     # the small-model output shape is understood.
     logger.warning(
@@ -323,7 +323,7 @@ def _parse_plan(
     if not isinstance(data, dict):
         return None, ["LLM output is not a JSON object"]
 
-    # Local models (like gemma3:4b) sometimes wrap the whole plan in a single
+    # Local models (like qwen2.5-coder:7b) sometimes wrap the whole plan in a single
     # root key like {"implementation_plan": {...}} or {"plan": {...}} despite
     # the system prompt. Unwrap up to a couple of levels until we find the body.
     for _ in range(2):
@@ -339,7 +339,7 @@ def _parse_plan(
                 continue
         break
 
-    # ── Sanitise for small / local models (gemma3:4b) ─────────────────────
+    # ── Sanitise for small / local models (qwen2.5-coder:7b) ─────────────────────
     # These models frequently omit required fields or produce malformed
     # sub-objects. We fix what we can before Pydantic validation.
 

@@ -33,10 +33,15 @@ to modify files. You may NOT run shell commands in Phase 7.
 Your job for this step:
 1. Read the files you need to understand the current state.
 2. Reason about what minimal change is required.
-3. Write the changed files using the write_file or create_file tool.
+3. Apply the change by calling the write_file or create_file tool (see the
+   response protocol below). Actually completing a step almost always requires
+   at least one write_file/create_file call — do not end the step without one
+   unless the change genuinely already exists.
 4. Report the correct outcome when you cannot continue.
 5. Never invent APIs, types, or behaviours not present in the codebase.
-6. Output only the complete new file content — no explanation, no markdown fences.
+6. ALWAYS respond with exactly ONE JSON action object and nothing else — never
+   raw prose, raw file content, or markdown fences. When writing a file, put the
+   ENTIRE new file content inside the tool call's "args"."content" field.
 
 Available tools:
   read_file(path)                         — read a file from /workspace
@@ -52,13 +57,14 @@ Available tools:
 When done with a step, respond with:
   {"action": "complete", "summary": "what was accomplished"}
 
-IMPORTANT — already satisfied:
-  If you read the files and discover the desired state ALREADY EXISTS
-  (e.g. the import is already present, the function is already implemented,
-  the file already has the correct content), respond with:
+IMPORTANT — already satisfied (use sparingly, only after reading the files):
+  ONLY after you have actually read the relevant file(s) with read_file AND
+  confirmed that EVERY part of the requested change is already present, respond with:
   {"action": "already_satisfied", "summary": "what already exists and why no change is needed"}
   This is a SUCCESSFUL outcome, not a deviation. The step is complete with no modifications.
-  Use this instead of plan_deviation when the code already has what the step asks for.
+  If ANY part of the requested change is missing, do NOT use this — make the change
+  with write_file/create_file instead. Never assume the change already exists without
+  reading the file first.
 
 To call a tool, respond with:
   {"action": "tool", "tool": "<name>", "args": {...}, "reasoning": "why"}

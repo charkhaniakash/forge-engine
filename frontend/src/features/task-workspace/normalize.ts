@@ -195,9 +195,20 @@ export function buildActivity({ planning, execution, validation, repair, publish
           tone: (ev.errors ?? 0) > 0 ? 'danger' : 'warning',
         })
         break
-      case 'validation_complete':
-        push({ phase: 'validation', kind: 'status', title: `Validation ${ev.overall ?? 'complete'}`, detail: `${ev.total_errors ?? 0} error(s)`, tone: ev.overall === 'passed' ? 'success' : 'warning' })
+      case 'validation_complete': {
+        const errs = ev.total_errors ?? 0
+        const warns = ev.total_warnings ?? 0
+        const clean = ev.overall === 'passed'
+        push({
+          phase: 'validation',
+          kind: 'status',
+          // Advisory framing — validation never blocks; issues are informational.
+          title: clean ? 'Validation passed' : 'Validation completed with issues',
+          detail: clean ? undefined : `${errs} error(s), ${warns} warning(s) · non-blocking`,
+          tone: clean ? 'success' : 'warning',
+        })
         break
+      }
       case 'error':
         push({ phase: 'validation', kind: 'error', title: 'Validation error', tone: 'danger' })
         break

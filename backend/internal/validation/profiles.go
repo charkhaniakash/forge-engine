@@ -85,7 +85,7 @@ var profiles = map[string]*ValidationProfile{
 			{
 				Name:           "install",
 				SequenceNumber: 1,
-				Commands:       [][]string{{"npm", "ci", "--prefer-offline"}},
+				Commands:       [][]string{{"npm", "install", "--prefer-offline"}},
 				TimeoutSeconds: 180,
 			},
 			{

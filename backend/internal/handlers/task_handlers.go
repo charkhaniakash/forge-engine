@@ -324,6 +324,16 @@ func (h *TaskHandlers) Replan(c *fiber.Ctx) error {
 		})
 	}
 
+	// Wipe the previous run's artifacts so this is a completely fresh cycle
+	// (execution, diffs, validation, repair, publishing/PR all cleared). The
+	// prior plan body was already captured above for planner context.
+	if err := h.workItemRepo.ClearRunArtifactsForReplan(ctx, taskID); err != nil {
+		// Non-fatal: re-planning can still proceed; stale artifacts would only
+		// affect display and the publish idempotency check.
+		h.logger.Warnw("replan_clear_artifacts_failed",
+			"task_id", taskID, "error", err, "trace_id", traceID)
+	}
+
 	h.logger.Infow("task_replan_triggered",
 		"task_id", taskID, "trace_id", traceID)
 

@@ -320,53 +320,50 @@ func main() {
 					log = log.With("work_item_id", workItemID)
 
 					// Phase 8: Validation
+					//
+					// NON-BLOCKING POLICY (Devin-style): validation is ADVISORY.
+					// Lint / test / build results never block the pipeline — the work
+					// item always ends in a publishable ("done") state, and the detailed
+					// verdict + logs live on the validation run for the UI to surface.
+					// Repairable issues still get one automatic repair pass, but if repair
+					// doesn't fully resolve them (or validation couldn't even run) we
+					// proceed anyway. ForceToDone recovers the item even if an
+					// intermediate step marked it "failed".
 					log.Info("phase_8_auto_validation_starting")
 					validationRun, err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change")
 					if err != nil {
-						log.Errorw("phase_8_validation_failed", "error", err)
-						_ = workItemRepo.TransitionToFailed(ctx, workItemID, fmt.Sprintf("validation error: %v", err))
+						// Validation infrastructure error — couldn't run at all.
+						// Per the non-blocking policy, proceed rather than fail.
+						log.Warnw("phase_8_validation_could_not_run_proceeding", "error", err)
+						_ = workItemRepo.ForceToDone(ctx, workItemID)
 						return
 					}
 
-					if validationRun.OverallResult == nil {
-						log.Errorw("validation_overall_result_is_nil",
-							"validation_run_id", validationRun.ID,
-						)
-						_ = workItemRepo.TransitionToFailed(ctx, workItemID, "validation completed without overall_result")
-						return
+					overallResult := "unknown"
+					if validationRun.OverallResult != nil {
+						overallResult = *validationRun.OverallResult
 					}
-
-					overallResult := *validationRun.OverallResult
 					log.Infow("phase_8_validation_complete", "overall_result", overallResult)
 
-					// Phase 9 Decision Point
-					// This is where the task orchestration layer decides whether repair begins.
-					switch overallResult {
-					case "passed":
-						log.Info("validation_passed_marking_done")
-						_ = workItemRepo.TransitionToDone(ctx, workItemID)
-
-					case "failed_repairable":
-						// Phase 9: RepairOrchestrator evaluates RepairPolicy and transitions
-						// to repairing only when repair is permitted.
-						log.Info("validation_failed_repairable_triggering_repair")
-						if err := repairOrch.Run(ctx, taskExecutionID, workspaceID, validationRun.ID, traceID); err != nil {
-							log.Errorw("phase_9_repair_failed", "error", err)
+					// Auto-repair repairable issues (best-effort). The RepairOrchestrator
+					// evaluates RepairPolicy and may mark the item failed internally on
+					// escalation / budget exhaustion — that's fine, ForceToDone below
+					// recovers it. We proceed regardless of the repair outcome.
+					if overallResult == "failed_repairable" {
+						log.Info("validation_failed_repairable_attempting_repair")
+						if repErr := repairOrch.Run(ctx, taskExecutionID, workspaceID, validationRun.ID, traceID); repErr != nil {
+							log.Warnw("repair_pass_incomplete_proceeding_anyway", "error", repErr)
 						} else {
 							log.Info("phase_9_repair_complete")
 						}
+					}
 
-					case "failed_environment":
-						log.Warn("validation_failed_environment_marking_done")
-						_ = workItemRepo.TransitionToDone(ctx, workItemID)
-
-					case "failed_requires_human":
-						log.Warn("validation_failed_requires_human_marking_failed")
-						_ = workItemRepo.TransitionToFailed(ctx, workItemID, "validation failed: requires human intervention")
-
-					default:
-						log.Warnw("unexpected_overall_result", "result", overallResult)
-						_ = workItemRepo.TransitionToFailed(ctx, workItemID, fmt.Sprintf("unexpected validation result: %s", overallResult))
+					// Always finish in a publishable state — validation is advisory and
+					// must never block. The UI shows the advisory verdict + logs from the
+					// validation run itself.
+					log.Infow("validation_advisory_marking_done", "advisory_result", overallResult)
+					if doneErr := workItemRepo.ForceToDone(ctx, workItemID); doneErr != nil {
+						log.Errorw("force_to_done_failed", "error", doneErr)
 					}
 				})
 

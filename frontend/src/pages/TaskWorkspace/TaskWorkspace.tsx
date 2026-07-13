@@ -1,6 +1,6 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Button, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
+import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
 import { useRepairStream } from '@/features/task-workspace/useRepairStream'
 import {
@@ -9,7 +9,8 @@ import {
   buildRepairAttempts,
   buildValidationStages,
 } from '@/features/task-workspace/normalize'
-import { useAppSelector } from '@/app/hooks'
+import { useAppDispatch, useAppSelector } from '@/app/hooks'
+import { taskStreamsReset, clearPublishingEvents, clearRepairEvents } from '@/store/slices/streamSlice'
 import { useSocketChannel } from '@/hooks/useSocketChannel'
 import { useToast } from '@/hooks/useToast'
 import {
@@ -247,12 +248,48 @@ export function TaskWorkspace() {
   const [provisionWorkspace, { isLoading: provisioning }] = useProvisionWorkspaceMutation()
   const [startPublish, { isLoading: publishStarting }] = useStartPublishMutation()
 
-  async function run<T>(p: Promise<T>, ok: string, err: string) {
+  // Explicit "Proceed" gate before publishing: the mission-done step offers
+  // Re-plan or Proceed; only after Proceed do we reveal Publish to GitHub, so a
+  // PR is created only on that deliberate final click — never automatically.
+  const [proceeded, setProceeded] = useState(false)
+  // Re-plan is destructive (wipes the current run), so it goes through a confirm.
+  const [replanConfirmOpen, setReplanConfirmOpen] = useState(false)
+
+  const dispatch = useAppDispatch()
+
+  // Re-plan = start a completely fresh cycle. The backend wipes the previous
+  // run's artifacts (execution/diffs/validation/repair/publishing); here we
+  // clear the client-side event streams and refetch so the thread doesn't show
+  // any of the old run while the new plan is generated.
+  async function handleReplan() {
+    setProceeded(false)
+    const ok = await run(
+      replan({ repoId, taskId }).unwrap(),
+      'Re-planning — starting fresh',
+      'Failed to re-plan',
+    )
+    setReplanConfirmOpen(false)
+    if (ok === false) return
+    if (taskId) dispatch(taskStreamsReset(taskId))
+    if (publishSession?.id) dispatch(clearPublishingEvents(publishSession.id))
+    if (repairSession?.id) dispatch(clearRepairEvents(repairSession.id))
+    refetchTask()
+    refetchExec()
+    refetchDiffs()
+    refetchVal()
+    refetchRepair()
+    refetchPublish()
+    refetchWorkspace()
+  }
+
+  async function run<T>(p: Promise<T>, ok: string, err: string): Promise<boolean> {
     try {
       await p
       toast.success(ok)
+      return true
     } catch {
       toast.error(err)
+      return false
     }
   }
 
@@ -302,7 +339,7 @@ export function TaskWorkspace() {
   const planActions = canApprove ? (
     <>
       <Button key="replan" variant="ghost" loading={replanning}
-        onClick={() => run(replan({ repoId, taskId }).unwrap(), 'Re-planning', 'Failed to re-plan')}>
+        onClick={() => setReplanConfirmOpen(true)}>
         Edit / Re-plan
       </Button>
       <Button key="reject" variant="danger"
@@ -360,24 +397,51 @@ export function TaskWorkspace() {
       </Button>
     )
   } else if (missionDone && !isExecuting && !repairing) {
-    if (!prUrl && !publishActive && (!publishSession || publishSession.status === 'failed' || publishSession.status === 'cancelled')) {
+    const hasChanges = fileChanges.length > 0
+    const publishSlotOpen =
+      !prUrl && !publishActive &&
+      (!publishSession || publishSession.status === 'failed' || publishSession.status === 'cancelled')
+    if (!hasChanges) {
+      // Nothing was modified — there is nothing to publish. Surface it up front
+      // instead of letting the user hit a "no code diff" failure at publish time.
       actionRow = (
-        <Button key="publish" variant="primary" loading={publishStarting} leadingIcon={<Icon name="git" size={15} />}
-          onClick={async () => {
-            await run(startPublish({ repoId, taskId }).unwrap(),
-              'Publishing to GitHub…',
-              'Failed to start publishing')
-            refetchPublish()
-            refetchTask()
-          }}>
-          {publishSession?.status === 'failed' ? 'Retry publish' : 'Publish to GitHub'}
+        <Button key="nochanges" variant="secondary" disabled leadingIcon={<Icon name="alert" size={15} />}>
+          No changes to publish
         </Button>
+      )
+    } else if (publishSlotOpen) {
+      // Decision gate: Re-plan or Proceed. Publish (which creates the PR) is only
+      // revealed after the user explicitly proceeds — nothing publishes on its own.
+      actionRow = (
+        <>
+          <Button key="replan" variant="ghost" loading={replanning} leadingIcon={<Icon name="refresh" size={15} />}
+            onClick={() => setReplanConfirmOpen(true)}>
+            Re-plan
+          </Button>
+          {proceeded ? (
+            <Button key="publish" variant="primary" loading={publishStarting} leadingIcon={<Icon name="git" size={15} />}
+              onClick={async () => {
+                await run(startPublish({ repoId, taskId }).unwrap(),
+                  'Publishing to GitHub…',
+                  'Failed to start publishing')
+                refetchPublish()
+                refetchTask()
+              }}>
+              {publishSession?.status === 'failed' ? 'Retry publish' : 'Publish to GitHub'}
+            </Button>
+          ) : (
+            <Button key="proceed" variant="primary" leadingIcon={<Icon name="check" size={15} />}
+              onClick={() => setProceeded(true)}>
+              Proceed
+            </Button>
+          )}
+        </>
       )
     }
   } else if (missionFailed) {
     actionRow = (
       <Button key="retry" variant="primary" loading={replanning} leadingIcon={<Icon name="refresh" size={15} />}
-        onClick={() => run(replan({ repoId, taskId }).unwrap(), 'Re-planning', 'Failed to re-plan')}>
+        onClick={() => setReplanConfirmOpen(true)}>
         Re-plan &amp; retry
       </Button>
     )
@@ -419,13 +483,32 @@ export function TaskWorkspace() {
   )
 
   return (
-    <MissionThread
-      header={header}
-      entries={conversation}
-      live={live}
-      planActions={planActions}
-      actionRow={actionRow}
-    />
+    <>
+      <MissionThread
+        header={header}
+        entries={conversation}
+        live={live}
+        planActions={planActions}
+        actionRow={actionRow}
+      />
+      <ConfirmDialog
+        open={replanConfirmOpen}
+        danger
+        title="Re-plan from scratch?"
+        confirmLabel="Yes, re-plan"
+        cancelLabel="Keep current"
+        loading={replanning}
+        message={
+          <>
+            This starts a completely fresh cycle. The current run’s work — the plan,
+            code changes, validation results, and any pull request created for it —
+            will be discarded and <strong>cannot be recovered</strong>.
+          </>
+        }
+        onConfirm={handleReplan}
+        onCancel={() => setReplanConfirmOpen(false)}
+      />
+    </>
   )
 }
 

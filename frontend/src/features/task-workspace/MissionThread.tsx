@@ -58,15 +58,34 @@ function FilesEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'file
 }
 
 function ValidationEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'validation' }> }) {
+  const running = entry.overall == null
   const passed = entry.overall === 'passed'
-  const failed = entry.overall != null && entry.overall !== 'passed'
+  // Non-blocking policy: any non-passed result is advisory, not a failure.
+  // Lint/test/build issues are surfaced as logs but never block publishing.
+  const hasIssues = !running && !passed
+
+  const passedStages = entry.stages.filter((s) => s.state === 'passed').length
+  const problemStages = entry.stages.filter(
+    (s) => s.state === 'failed' || (s.exitCode != null && s.exitCode !== 0),
+  ).length
+
+  const title = running
+    ? 'Validation running'
+    : passed
+      ? 'Validation passed'
+      : `Validation — ${problemStages} ${problemStages === 1 ? 'stage' : 'stages'} reported issues`
+
+  const subtitle = hasIssues
+    ? `${passedStages}/${entry.stages.length} stages clean · advisory — won't block publishing`
+    : `${passedStages}/${entry.stages.length} stages`
+
   return (
     <ArtifactCard
-      icon="check"
-      title={passed ? 'Validation passed' : failed ? 'Validation failed' : 'Validation running'}
-      subtitle={`${entry.stages.filter((s) => s.state === 'passed').length}/${entry.stages.length} stages`}
-      tone={passed ? 'success' : failed ? 'danger' : 'neutral'}
-      defaultOpen={failed}
+      icon={passed ? 'check' : hasIssues ? 'alert' : 'clock'}
+      title={title}
+      subtitle={subtitle}
+      tone={passed ? 'success' : hasIssues ? 'warning' : 'neutral'}
+      defaultOpen={hasIssues}
     >
       <ValidationStages stages={entry.stages} title="" />
     </ArtifactCard>

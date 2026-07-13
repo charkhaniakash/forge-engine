@@ -199,7 +199,11 @@ func (o *Orchestrator) stepCreateBranch(ctx context.Context, session *Publishing
 		return fmt.Errorf("load work item: %w", err)
 	}
 
-	branchName := generateBranchName(item.Intent, req.WorkItemID)
+	// Key the branch on the task execution, not the work item, so that a
+	// re-plan (which starts a new execution) always produces a distinct branch
+	// and therefore a fresh PR — never colliding with a branch/PR left on
+	// GitHub by a previous run of the same work item.
+	branchName := generateBranchName(item.Intent, req.TaskExecutionID)
 	log.Infow("branch_name_generated", "branch", branchName)
 
 	// Check if branch already exists for this work item (idempotent)
@@ -256,13 +260,35 @@ func (o *Orchestrator) stepCreateBranch(ctx context.Context, session *Publishing
 
 // ── Step 3: Create Commits ──────────────────────────────────────────────────
 
+// hasStagedChanges reports whether the workspace currently has anything staged
+// for commit (git diff --cached is non-empty).
+func (o *Orchestrator) hasStagedChanges(ctx context.Context, workspaceID string) bool {
+	events, err := o.workspaceManager.Exec(ctx, workspaceID, workspace.ExecRequest{
+		Command:        []string{"git", "diff", "--cached", "--stat"},
+		WorkingDir:     "",
+		TimeoutSeconds: 10,
+	})
+	if err != nil {
+		return false
+	}
+	var out string
+	for ev := range events {
+		if ev.Type == "stdout" {
+			out += string(ev.Data)
+		}
+	}
+	return strings.TrimSpace(out) != ""
+}
+
 func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *PublishingSession, req PublishRequest, log *zap.SugaredLogger) error {
 	// Load execution data for commit message generation
 	item, _ := o.workItemRepo.GetByIDInternal(ctx, req.WorkItemID)
 	diffs, _ := o.execRepo.ListDiffs(ctx, req.TaskExecutionID)
 
-	// Build diff summaries for the agent
-	var diffSummaries []DiffSummary
+	// Build diff summaries for the agent. Initialise as an empty (non-nil) slice
+	// so it marshals to [] rather than null — the agent's /summarize endpoint
+	// rejects a null "diffs" field (422 list_type).
+	diffSummaries := []DiffSummary{}
 	for _, d := range diffs {
 		op := "modify"
 		if d.LinesAdded > 0 && d.LinesRemoved == 0 {
@@ -297,10 +323,10 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		}
 	}
 
-	// Stage only files tracked in Code_Diffs (never git add -A which would include build artifacts)
+	// Prefer staging the specific files recorded in code_diffs (avoids staging
+	// build artifacts). Paths may be absolute inside the workspace container.
 	var filesToStage []string
 	for _, d := range diffs {
-		// Strip leading slash if present (paths from code_diffs may have absolute paths)
 		path := d.FilePath
 		if strings.HasPrefix(path, "/") {
 			path = strings.TrimPrefix(path, "/workspace/")
@@ -310,41 +336,32 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		}
 		filesToStage = append(filesToStage, path)
 	}
-	if len(filesToStage) == 0 {
-		return fmt.Errorf("nothing to commit: no diffs recorded for this execution")
-	}
 
-	log.Infow("staging_files", "count", len(filesToStage), "files", filesToStage)
-
-	// First try staging specific files from diffs
-	stageCmd := append([]string{"git", "add", "--"}, filesToStage...)
-	events, err := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
-		Command:        stageCmd,
-		WorkingDir:     "",
-		TimeoutSeconds: 30,
-	})
-	if err != nil {
-		return fmt.Errorf("git add: %w", err)
-	}
-	for range events {
-	}
-
-	// Check if anything was staged. If not, fall back to git add -A
-	// (handles cases where code_diffs paths don't exactly match workspace paths)
-	statusEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
-		Command:        []string{"git", "diff", "--cached", "--stat"},
-		WorkingDir:     "",
-		TimeoutSeconds: 10,
-	})
-	var stagedOutput string
-	for ev := range statusEvents {
-		if ev.Type == "stdout" {
-			stagedOutput += string(ev.Data)
+	if len(filesToStage) > 0 {
+		log.Infow("staging_files", "count", len(filesToStage), "files", filesToStage)
+		stageCmd := append([]string{"git", "add", "--"}, filesToStage...)
+		events, err := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+			Command:        stageCmd,
+			WorkingDir:     "",
+			TimeoutSeconds: 30,
+		})
+		if err != nil {
+			return fmt.Errorf("git add: %w", err)
 		}
+		for range events {
+		}
+	} else {
+		// Execution recorded no diffs. That does NOT always mean the workspace is
+		// unchanged — execution changes aren't always mirrored into code_diffs.
+		// Fall back to the actual working tree below rather than hard-failing.
+		log.Warnw("no_recorded_diffs_falling_back_to_working_tree")
 	}
-	if strings.TrimSpace(stagedOutput) == "" {
-		// Nothing staged from specific paths — use git add -A as fallback
-		log.Warnw("specific_staging_empty_using_add_all")
+
+	// If nothing is staged yet (empty code_diffs, or recorded paths that don't
+	// match the workspace), fall back to staging the whole working tree. Respects
+	// .gitignore, so build artifacts are excluded.
+	if !o.hasStagedChanges(ctx, req.WorkspaceID) {
+		log.Warnw("nothing_staged_using_add_all")
 		fallbackEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
 			Command:        []string{"git", "add", "-A"},
 			WorkingDir:     "",
@@ -352,7 +369,16 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		})
 		for range fallbackEvents {
 		}
+		// If the working tree is genuinely clean, there is nothing to publish.
+		// Surface a clear, actionable message instead of a cryptic git error.
+		if !o.hasStagedChanges(ctx, req.WorkspaceID) {
+			return fmt.Errorf("no code changes to publish: this task did not modify any files in the workspace")
+		}
 	}
+
+	// err is already declared above (from the GenerateSummary call); only events
+	// needs declaring here since its earlier binding was scoped to the staging if.
+	var events <-chan workspace.ExecutionEvent
 
 	// Build commit message
 	commitMsg := summary.CommitSubject
@@ -766,14 +792,17 @@ func (o *Orchestrator) stepSyncGitHub(ctx context.Context, session *PublishingSe
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 // generateBranchName creates a collision-resistant branch name from the intent.
-func generateBranchName(intent, workItemID string) string {
+// generateBranchName builds a branch name from the intent slug plus a short
+// unique id. The uniqueID should be the task execution id so each run (including
+// re-plans) gets its own branch, while retries within a single run stay stable.
+func generateBranchName(intent, uniqueID string) string {
 	// Slugify the intent
 	slug := slugify(intent)
 	if len(slug) > 40 {
 		slug = slug[:40]
 	}
-	// Short ID for uniqueness
-	shortID := workItemID
+	// Short ID for uniqueness (task execution id → unique per run)
+	shortID := uniqueID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}

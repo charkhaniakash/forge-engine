@@ -198,6 +198,16 @@ const streamSlice = createSlice({
     clearPublishingEvents(state, action: PayloadAction<string>) {
       delete state.publishing[action.payload]
     },
+    // Clear every task-keyed stream (planning/execution/validation) for a task.
+    // Used on re-plan so a fresh cycle doesn't render the previous run's events.
+    // Publishing/repair are keyed by session id and clear themselves once the
+    // deleted session refetches to null.
+    taskStreamsReset(state, action: PayloadAction<string>) {
+      const taskId = action.payload
+      delete state.planning[taskId]
+      delete state.execution[taskId]
+      delete state.validation[taskId]
+    },
   },
   extraReducers: (builder) => {
     builder.addCase(socketEventReceived, (state, action) => {
@@ -277,5 +287,6 @@ export const {
   clearRepairEvents,
   appendPublishingEvent,
   clearPublishingEvents,
+  taskStreamsReset,
 } = streamSlice.actions
 export default streamSlice.reducer

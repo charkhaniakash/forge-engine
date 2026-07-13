@@ -115,6 +115,24 @@ func (r *WorkItemRepository) TransitionToFailed(ctx context.Context, id, errMsg 
 	return err
 }
 
+// ForceToDone transitions a work item to done from any in-flight OR failed
+// state (executing, repairing, failed). Used exclusively by the non-blocking
+// validation policy: lint/test/build results are advisory, so an item must
+// never be left stuck in "failed" — even if an intermediate step (e.g. the
+// repair orchestrator) marked it failed, we recover it to a publishable state.
+// The detailed verdict lives on the validation run / repair session for the UI.
+func (r *WorkItemRepository) ForceToDone(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items
+		SET status = $2, error = NULL, updated_at = NOW()
+		WHERE id = $1 AND status IN ($3, $4, $5)
+	`, id, models.WorkItemStatusDone,
+		models.WorkItemStatusExecuting,
+		models.WorkItemStatusRepairing,
+		models.WorkItemStatusFailed)
+	return err
+}
+
 // GetByIDInternal returns a work item by UUID without org scoping.
 // Only used by internal goroutines (e.g. the planning background goroutine).
 // Never expose this to HTTP handlers.
@@ -246,7 +264,10 @@ func (r *WorkItemRepository) Approve(ctx context.Context, id, orgID string) (*mo
 }
 
 // ResetForReplan transitions status back to planning and clears the error.
-// Called when the user triggers a re-plan.
+// Called when the user triggers a re-plan. Allowed from the plan-review states
+// (plan_ready / planning_failed) and from terminal/decision states the UI can
+// re-plan from: done (re-plan after execution completed), failed, and cancelled.
+// In-flight states (executing / repairing / publishing) are intentionally excluded.
 func (r *WorkItemRepository) ResetForReplan(ctx context.Context, id, orgID string) error {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE work_items
@@ -256,17 +277,58 @@ func (r *WorkItemRepository) ResetForReplan(ctx context.Context, id, orgID strin
 		    updated_at      = NOW()
 		WHERE id = $1
 		  AND org_id = $2
-		  AND status IN ($4, $5)
+		  AND status IN ($4, $5, $6, $7, $8)
 	`, id, orgID,
 		models.WorkItemStatusPlanning,
 		models.WorkItemStatusPlanReady,
-		models.WorkItemStatusPlanningFailed)
+		models.WorkItemStatusPlanningFailed,
+		models.WorkItemStatusDone,
+		models.WorkItemStatusFailed,
+		models.WorkItemStatusCancelled)
 	if err != nil {
 		return err
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		return fmt.Errorf("work item %s cannot be re-planned from its current status", id)
+	}
+	return nil
+}
+
+// ClearRunArtifactsForReplan deletes all downstream artifacts from a previous
+// run of a work item so that a re-plan starts a genuinely fresh cycle
+// (planning → execution → validation → publish) with no stale data.
+//
+// Two deletes cover everything via ON DELETE CASCADE:
+//   - publishing_sessions → git_branches, git_commits, pull_requests,
+//     github_sync_history, publishing_audit_log. (No FK from work_items, so it
+//     must be deleted explicitly; this also clears the "already published"
+//     idempotency block so a new PR can be created.)
+//   - task_executions → code_diffs, execution_events, execution_checkpoints,
+//     validation_runs (→ stages, diagnostics), repair_sessions.
+//
+// Workspaces are intentionally left alone: Provision always creates a fresh
+// workspace + clone, GetByWorkItemID returns the newest, and the orphan reaper
+// tears down the previous container on its wall-clock timeout. The active plan
+// row is also left in place — the Replan handler passes it to the planner as
+// prior-plan context before a new plan supersedes it.
+func (r *WorkItemRepository) ClearRunArtifactsForReplan(ctx context.Context, workItemID string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM publishing_sessions WHERE work_item_id = $1`, workItemID); err != nil {
+		return fmt.Errorf("clear publishing sessions: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM task_executions WHERE work_item_id = $1`, workItemID); err != nil {
+		return fmt.Errorf("clear task executions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit clear: %w", err)
 	}
 	return nil
 }

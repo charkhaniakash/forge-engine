@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "forge-agent"
 version = "0.1.0"
 description = "Autonomous agent for code generation and modification"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 
 dependencies = [
     # Web framework
@@ -14,8 +14,8 @@ dependencies = [
     "uvicorn[standard]==0.27.0",
 
     # Config + env
-    "pydantic==2.5.0",
-    "pydantic-settings==2.1.0",
+    "pydantic>=2.7.4,<3.0",
+    "pydantic-settings>=2.1.0,<3.0",
     "python-dotenv==1.0.0",
 
     # HTTP

@@ -101,17 +101,27 @@ services:
       # Phase 3 — database (for direct pgvector writes)
       DATABASE_URL: postgresql://forge:forge@postgres:5432/forge
 
-      # Phase 3 — embeddings
-      EMBEDDING__PROVIDER: gemini
-      EMBEDDING__MODEL: gemini-embedding-001
-      EMBEDDING__DIMENSIONS: 3072
+      # Phase 3 — embeddings (local via Ollama — no API key needed)
+      EMBEDDING__PROVIDER: ollama
+      EMBEDDING__MODEL: nomic-embed-text
+      EMBEDDING__DIMENSIONS: 768
       EMBEDDING__BATCH_SIZE: 32
       CHUNK_TOKEN_LIMIT: 512
+      OLLAMA_BASE_URL: http://host.docker.internal:11434
+      # Cloud alternatives (need API keys):
+      # EMBEDDING__PROVIDER: gemini
+      # EMBEDDING__MODEL: gemini-embedding-001
+      # EMBEDDING__DIMENSIONS: 3072
       # EMBEDDING__PROVIDER: openai
       # EMBEDDING__MODEL: text-embedding-3-small
       # EMBEDDING__DIMENSIONS: 1536
 
-      # Phase 4 — chat
+      # Phase 4 — chat (local Gemma via Ollama — no API key needed)
+      # qwen2.5-coder:7b is pulled and running on the host Mac GPU.
+      # host.docker.internal resolves to the Mac host from inside Docker.
+      # CHAT__PROVIDER: ollama
+      # CHAT__MODEL: qwen2.5-coder:7b
+      # OLLAMA_BASE_URL: http://host.docker.internal:11434
       # CHAT__PROVIDER: gemini
       # CHAT__MODEL: gemini-3.1-pro-preview
       # CHAT__PROVIDER: openai

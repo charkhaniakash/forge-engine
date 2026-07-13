@@ -22,12 +22,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class EmbeddingConfig(BaseModel):
     """Configuration for the Phase 3 embedding provider."""
     # Provider name. Only the key for the selected provider needs to be set.
-    # Supported: "gemini" | "openai"
+    # Supported: "ollama" | "gemini" | "openai"
     provider: str = "gemini"
 
     # Model identifier sent to the provider API and stored in
     # code_chunks.embedding_model. Must match the provider's model names.
-    # gemini-embedding-001 = 3072 dims  |  text-embedding-3-small = 1536 dims
+    # ollama: nomic-embed-text = 768 dims
+    # gemini: gemini-embedding-001 = 3072 dims
+    # openai: text-embedding-3-small = 1536 dims
     model: str = "gemini-embedding-001"
 
     # Output dimension. Must match the vector(N) column in code_chunks.
@@ -45,13 +47,14 @@ class ChatConfig(BaseModel):
     different jobs (batch offline vs. real-time inference) and may use
     different providers, models, and rate-limit budgets.
     """
-    # Provider name. Supported: "openai" | "gemini" | "anthropic" | "groq"
+    # Provider name. Supported: "openai" | "gemini" | "anthropic" | "ollama" | "groq"
     provider: str = "openai"
 
     # Chat model identifier sent to the provider.
     # openai:    gpt-4o-mini (default), gpt-4o
     # gemini:    gemini-2.5-flash, gemini-1.5-pro
     # anthropic: claude-3-haiku-20240307, claude-3-sonnet-20240229
+    # ollama:    gemma3:12b, gemma3:27b, qwen2.5-coder:7b, codellama:13b, qwen2.5-coder:14b
     # groq:      llama-3.3-70b-versatile, llama-3.1-8b-instant, openai/gpt-oss-120b
     model: str = "gpt-4o-mini"
 
@@ -97,6 +100,11 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
+
+    # ── Ollama (local models — Gemma, CodeLlama, Qwen, etc.) ─────────────────
+    # Base URL of the running Ollama instance. The /v1 suffix is appended
+    # automatically by OllamaChatProvider if not already present.
+    ollama_base_url: str = "http://localhost:11434"
     # Groq (hosted OpenAI-compatible API). Get a key at https://console.groq.com/keys
     groq_api_key: str = ""
 

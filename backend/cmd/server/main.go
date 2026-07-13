@@ -390,7 +390,16 @@ func main() {
 	_ = limiter
 
 	// ── Fiber app ─────────────────────────────────────────────────────────────
-	app := fiber.New(fiber.Config{AppName: "Forge Engine Backend"})
+	// Immutable makes c.Params/c.Query/c.Body return copies instead of strings
+	// backed by the recycled fasthttp request buffer. Required because handlers
+	// like StartPublish capture route params in goroutines that outlive the
+	// request — without this the buffer is reused by the next request and the
+	// captured value gets corrupted (e.g. a work_item_id turning into
+	// "51892ed/stream42a2-...").
+	app := fiber.New(fiber.Config{
+		AppName:   "Forge Engine Backend",
+		Immutable: true,
+	})
 
 	app.Use(cors.New(cors.Config{
 		AllowOrigins: os.Getenv("CORS_ORIGINS"),

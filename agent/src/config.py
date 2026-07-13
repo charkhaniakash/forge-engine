@@ -45,13 +45,14 @@ class ChatConfig(BaseModel):
     different jobs (batch offline vs. real-time inference) and may use
     different providers, models, and rate-limit budgets.
     """
-    # Provider name. Supported: "openai" | "gemini" | "anthropic"
+    # Provider name. Supported: "openai" | "gemini" | "anthropic" | "groq"
     provider: str = "openai"
 
     # Chat model identifier sent to the provider.
     # openai:    gpt-4o-mini (default), gpt-4o
     # gemini:    gemini-2.5-flash, gemini-1.5-pro
     # anthropic: claude-3-haiku-20240307, claude-3-sonnet-20240229
+    # groq:      llama-3.3-70b-versatile, llama-3.1-8b-instant, openai/gpt-oss-120b
     model: str = "gpt-4o-mini"
 
 
@@ -96,6 +97,8 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
+    # Groq (hosted OpenAI-compatible API). Get a key at https://console.groq.com/keys
+    groq_api_key: str = ""
 
     # ── Chunker (Phase 3) ─────────────────────────────────────────────────────
     chunk_token_limit: int = 512

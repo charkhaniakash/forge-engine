@@ -26,7 +26,11 @@ def get_chat_provider() -> ChatProvider:
         from src.llm.anthropic_chat import AnthropicChatProvider
         return AnthropicChatProvider()
 
+    if provider == "groq":
+        from src.llm.groq_chat import GroqChatProvider
+        return GroqChatProvider()
+
     raise ValueError(
         f"Unknown CHAT__PROVIDER '{provider}'. "
-        "Supported values: openai, gemini, anthropic"
+        "Supported values: openai, gemini, anthropic, groq"
     )

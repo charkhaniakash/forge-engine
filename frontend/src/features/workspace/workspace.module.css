@@ -1,0 +1,195 @@
+/* Shared styles for the Phase 10B browser-IDE panels. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface-base);
+  color: var(--text-primary);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+}
+
+.panelBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.empty {
+  padding: var(--space-4);
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+}
+
+/* ── File explorer ─────────────────────────────────────────────────────────── */
+
+.treeRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0 var(--space-2);
+  height: 100%;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  user-select: none;
+}
+.treeRow:hover {
+  background: var(--surface-2);
+}
+.treeRowActive {
+  background: var(--accent-subtle);
+  color: var(--text-primary);
+}
+.chevron {
+  flex: 0 0 auto;
+  display: inline-flex;
+  transition: transform var(--duration-fast) var(--ease);
+  color: var(--text-tertiary);
+}
+.chevronOpen {
+  transform: rotate(90deg);
+}
+.treeName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.spacer {
+  flex: 0 0 auto;
+}
+
+/* ── Git summary ───────────────────────────────────────────────────────────── */
+
+.gitSummary {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-xs);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-tertiary);
+}
+.gitCount {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.gitFileRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.gitFileRow:hover {
+  background: var(--surface-2);
+}
+.gitMark {
+  width: 1.1em;
+  text-align: center;
+  font-weight: var(--font-bold);
+}
+.markMod { color: var(--warning); }
+.markStaged { color: var(--success); }
+.markUntracked { color: var(--text-tertiary); }
+
+/* ── Diff / mono blocks ─────────────────────────────────────────────────────── */
+
+.diff {
+  margin: 0;
+  padding: var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+  white-space: pre;
+  overflow: auto;
+}
+.diffAdd { color: var(--diff-add-fg); background: var(--diff-add-bg); display: block; }
+.diffDel { color: var(--diff-del-fg); background: var(--diff-del-bg); display: block; }
+.diffHunk { color: var(--diff-hunk-fg); display: block; }
+
+/* ── Timeline ──────────────────────────────────────────────────────────────── */
+
+.timelineItem {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+}
+.timelineDot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  margin-top: 6px;
+}
+.dotRunning { background: var(--info); }
+.dotSuccess { background: var(--success); }
+.dotFailed { background: var(--danger); }
+.dotNeutral { background: var(--neutral); }
+.timelineMain { flex: 1 1 auto; min-width: 0; }
+.timelineTitle { color: var(--text-primary); font-weight: var(--font-medium); text-transform: capitalize; }
+.timelineMeta { color: var(--text-tertiary); font-size: var(--text-xs); margin-top: 2px; }
+
+/* ── AI activity feed ──────────────────────────────────────────────────────── */
+
+.aiFeed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-2);
+}
+.aiRow {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+}
+.aiRow:hover { background: var(--surface-2); }
+.aiIcon { flex: 0 0 auto; }
+.aiLabel { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.aiTime { flex: 0 0 auto; color: var(--text-tertiary); font-size: var(--text-xs); }
+
+/* ── Diagnostics ───────────────────────────────────────────────────────────── */
+
+.diagRow {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+.diagRow:hover { background: var(--surface-2); }
+.diagLoc { color: var(--text-tertiary); font-family: var(--font-mono); font-size: var(--text-xs); }
+.sevError { color: var(--danger); }
+.sevWarning { color: var(--warning); }
+.sevInfo { color: var(--info); }
+
+/* ── Terminal ──────────────────────────────────────────────────────────────── */
+
+.terminalWrap {
+  height: 100%;
+  width: 100%;
+  background: #1e1e1e;
+  padding: var(--space-2);
+  box-sizing: border-box;
+}

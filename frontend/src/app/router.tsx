@@ -18,6 +18,7 @@ const Mission = lazy(() => import('@/pages/TaskWorkspace/TaskWorkspace'))
 const AskThread = lazy(() => import('@/pages/Ask/AskThread'))
 const Repositories = lazy(() => import('@/pages/Repositories/Repositories'))
 const Settings = lazy(() => import('@/pages/Settings/Settings'))
+const Workspace = lazy(() => import('@/pages/Workspace/Workspace'))
 
 export const router = createBrowserRouter([
   {
@@ -39,6 +40,7 @@ export const router = createBrowserRouter([
       { path: ROUTES.ask, element: <AskThread /> },
       { path: ROUTES.repositories, element: <Repositories /> },
       { path: ROUTES.settings, element: <Settings /> },
+      { path: ROUTES.workspaceEditor, element: <Workspace /> },
       { path: '*', element: <Navigate to={ROUTES.root} replace /> },
     ],
   },

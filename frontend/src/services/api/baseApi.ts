@@ -55,6 +55,8 @@ export const baseApi = createApi({
     'Diff',
     'Workspace',
     'WorkspaceLog',
+    'WsFiles',
+    'WsGit',
     'Org',
     'OrgMember',
   ],

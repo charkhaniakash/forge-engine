@@ -40,7 +40,7 @@ import {
 } from '@/services/api/publishingApi'
 import { usePublishingStream } from '@/features/task-workspace/usePublishingStream'
 import { WORK_ITEM_STATUS } from '@/constants/status'
-import { ROUTES } from '@/constants/routes'
+import { ROUTES, routeTo } from '@/constants/routes'
 import styles from './TaskWorkspace.module.css'
 
 const EXEC_LIVE = new Set(['pending', 'running'])
@@ -466,6 +466,16 @@ export function TaskWorkspace() {
       </button>
       <h1 className={styles.intentTitle}>{task.intent}</h1>
       <div className={styles.headerRight}>
+        {workspace && (workspace.status === 'ready' || workspace.status === 'executing') && (
+          <Button
+            size="sm"
+            variant="secondary"
+            leadingIcon={<Icon name="code" size={14} />}
+            onClick={() => navigate(routeTo.workspaceEditor(workspace.id, taskId))}
+          >
+            Open IDE
+          </Button>
+        )}
         <StatusBadge map={WORK_ITEM_STATUS} status={task.status} size="sm" />
         {live && (
           <span className={styles.liveDot}>

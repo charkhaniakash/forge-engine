@@ -102,9 +102,9 @@ ACTIVE marker below.
 
 ## 6. ACTIVE PHASE MARKER
 
-> ### 🔵 ACTIVE PHASE: **Phase 10 — Git Operations, Review Preparation & Pull Request Automation**
+> ### 🔵 ACTIVE PHASE: **Phase 10B — Cloud Development Workspace (Browser IDE)**
 >
-> Only work within this phase's scope (see Phase 10 below) until the human moves
+> Only work within this phase's scope (see Phase 10B below) until the human moves
 > this marker forward.
 
 ---

@@ -6,6 +6,9 @@ import uiReducer from '@/store/slices/uiSlice'
 import notificationReducer from '@/store/slices/notificationSlice'
 import websocketReducer from '@/store/slices/websocketSlice'
 import streamReducer from '@/store/slices/streamSlice'
+import workspaceEditorReducer from '@/store/slices/workspaceEditorSlice'
+import workspaceTerminalReducer from '@/store/slices/workspaceTerminalSlice'
+import workspaceActivityReducer from '@/store/slices/workspaceActivitySlice'
 
 // Importing the domain API files here ensures their `injectEndpoints` side
 // effects run so the hooks are registered against baseApi.
@@ -18,6 +21,7 @@ import '@/services/api/executionApi'
 import '@/services/api/workspaceApi'
 import '@/services/api/repairApi'
 import '@/services/api/publishingApi'
+import '@/services/api/workspaceEditorApi'
 
 export const store = configureStore({
   reducer: {
@@ -27,6 +31,9 @@ export const store = configureStore({
     notifications: notificationReducer,
     websocket: websocketReducer,
     stream: streamReducer,
+    workspaceEditor: workspaceEditorReducer,
+    workspaceTerminal: workspaceTerminalReducer,
+    workspaceActivity: workspaceActivityReducer,
   },
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware().concat(baseApi.middleware, websocketMiddleware),

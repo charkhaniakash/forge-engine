@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     procps \
+    inotify-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Create the forge user (uid/gid 1000). All sandboxed commands run as this user.

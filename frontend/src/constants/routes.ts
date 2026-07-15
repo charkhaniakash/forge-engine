@@ -32,6 +32,7 @@ export const ROUTES = {
   repairs: '/repairs',
   git: '/git',
   workspace: '/workspace',
+  workspaceEditor: '/workspace/:workspaceId',
   audit: '/audit',
   usage: '/usage',
 } as const
@@ -46,4 +47,6 @@ export const routeTo = {
   taskExecution: (id: string) => `/tasks/${id}/execution`,
   taskWorkspace: (id: string) => `/tasks/${id}/workspace`,
   taskValidation: (id: string) => `/tasks/${id}/validation`,
+  workspaceEditor: (workspaceId: string, taskId?: string) =>
+    `/workspace/${workspaceId}${taskId ? `?task=${taskId}` : ''}`,
 }

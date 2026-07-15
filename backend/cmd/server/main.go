@@ -22,6 +22,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/handlers"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
+	"github.com/charkhaniakash/forge-engine/backend/internal/browserworkspace"
 	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repair"
@@ -100,6 +101,8 @@ func main() {
 	var validationHandlers *handlers.ValidationHandlers
 	var repairHandlers *repair.Handlers
 	var publishingHandlers *publishing.Handlers
+	var bwHandlers *browserworkspace.Handlers
+	var bwGateway *browserworkspace.Gateway
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
@@ -295,6 +298,22 @@ func main() {
 					wsRepo, githubRepoRepo, sugar,
 				)
 
+				// ── Phase 10B: Browser Workspace Services ─────────────────────
+				bwGateway = browserworkspace.NewGateway(wsRepo, workItemRepo, sugar)
+				bwFsService := browserworkspace.NewFilesystemService(wsManager, bwGateway, sugar)
+				bwTermService := browserworkspace.NewTerminalService(wsManager, bwGateway, sugar)
+				bwGateway.SetTerminalService(bwTermService)
+				bwGateway.SetFilesystemService(bwFsService)
+				bwHandlers = browserworkspace.NewHandlers(bwGateway, bwFsService, bwTermService, wsRepo, workItemRepo, wsManager, sugar)
+				_ = bwFsService  // used by handlers
+				_ = bwTermService // used by handlers
+
+				// Wire the event bridge: forward execution/validation/repair events
+				// into the unified browser workspace gateway so browser clients see
+				// AI activity in real-time.
+				eventBridge := browserworkspace.NewEventBridge(bwGateway, sugar)
+				_ = eventBridge // used below when wiring execution publisher
+
 				// Wire automatic validation + repair trigger into the execution orchestrator.
 				// When execution finishes, it fires this closure in a goroutine.
 				// The closure orchestrates Phase 8 → Phase 9 based on validation results.
@@ -304,6 +323,12 @@ func main() {
 				//   This trigger consumes those results and decides whether Phase 9 begins.
 				//   Phase 8 never decides whether Phase 9 runs - only THIS layer does.
 				execOrchestrator.SetValidationTrigger(func(ctx context.Context, taskExecutionID, workspaceID, traceID string) {
+					// Phase 10B: Register execution→workspace mapping for the event bridge
+					if eventBridge != nil {
+						eventBridge.RegisterExecution(taskExecutionID, workspaceID)
+						defer eventBridge.UnregisterExecution(taskExecutionID)
+					}
+
 					log := sugar.With(
 						"task_execution_id", taskExecutionID,
 						"workspace_id", workspaceID,
@@ -372,6 +397,18 @@ func main() {
 					githubRepoRepo, execOrchestrator, wsManager,
 					jwtSecret, sugar,
 				)
+
+				// Phase 10B: Wrap the execution publisher to also forward events
+				// to the browser workspace gateway for real-time AI activity feed.
+				if bwGateway != nil {
+					originalPub := execOrchestrator.GetPublisher()
+					wrappedPub := eventBridge.WrapExecutionPublisher(originalPub)
+					execOrchestrator.SetPublisher(wrappedPub)
+					// Register execution→workspace mapping when execution starts
+					execOrchestrator.SetOnStartHook(func(execID, workspaceID string) {
+						eventBridge.RegisterExecution(execID, workspaceID)
+					})
+				}
 
 				sugar.Info("workspace execution sandbox, execution engine, and validation pipeline initialised")
 			}
@@ -561,6 +598,26 @@ func main() {
 		app.Get("/v1/repos/:repoID/tasks/:taskID/publish",
 			middleware.RequireAuth(sugar), publishingHandlers.GetPublishSession)
 	}
+
+
+	// Phase 10B — Browser Workspace
+	if bwHandlers != nil {
+		// REST
+		app.Get("/v1/workspace/:workspaceID/files", middleware.RequireAuth(sugar), bwHandlers.GetFileTree)
+		app.Get("/v1/workspace/:workspaceID/files/*", middleware.RequireAuth(sugar), bwHandlers.GetFileContent)
+		app.Put("/v1/workspace/:workspaceID/files/*", middleware.RequireAuth(sugar), bwHandlers.WriteFileContent)
+		app.Post("/v1/workspace/:workspaceID/terminal", middleware.RequireAuth(sugar), bwHandlers.CreateTerminal)
+		app.Delete("/v1/workspace/:workspaceID/terminal/:terminalID", middleware.RequireAuth(sugar), bwHandlers.CloseTerminal)
+		app.Get("/v1/workspace/:workspaceID/git/status", middleware.RequireAuth(sugar), bwHandlers.GetGitStatus)
+		app.Get("/v1/workspace/:workspaceID/git/diff", middleware.RequireAuth(sugar), bwHandlers.GetGitDiff)
+		app.Get("/v1/workspace/:workspaceID/health", middleware.RequireAuth(sugar), bwHandlers.GetHealth)
+		app.Post("/v1/workspace/:workspaceID/collaborate/pause", middleware.RequireAuth(sugar), bwHandlers.PauseExecution)
+		app.Post("/v1/workspace/:workspaceID/collaborate/resume", middleware.RequireAuth(sugar), bwHandlers.ResumeExecution)
+		app.Post("/v1/workspace/:workspaceID/collaborate/stop", middleware.RequireAuth(sugar), bwHandlers.StopExecution)
+		// WebSocket
+		app.Get("/v1/workspace/:workspaceID/stream", bwGateway.StreamUpgrade, websocket.New(bwGateway.StreamWS))
+	}
+
 
 	// ── Internal Backend→Agent endpoint (Phase 0) ────────────────────────────
 	app.Post("/v1/backend/agent-request", func(c *fiber.Ctx) error {

@@ -43,14 +43,15 @@ type EventPublisher func(taskExecutionID string, event ExecStreamEvent)
 //   - Go checks the control queue between every step.
 //   - The agent is stateless; it never sees the full plan.
 type ExecutionOrchestrator struct {
-	execRepo        *repository.ExecutionRepository
-	wsRepo          *repository.WorkspaceRepository
-	wsManager       *workspace.WorkspaceManager
-	agentClient     *AgentExecClient
-	publisher       EventPublisher
+	execRepo          *repository.ExecutionRepository
+	wsRepo            *repository.WorkspaceRepository
+	wsManager         *workspace.WorkspaceManager
+	agentClient       *AgentExecClient
+	publisher         EventPublisher
 	validationTrigger ValidationTrigger
-	jwtSecret       string
-	logger          *zap.SugaredLogger
+	onStartHook       func(execID, workspaceID string)
+	jwtSecret         string
+	logger            *zap.SugaredLogger
 }
 
 // NewExecutionOrchestrator constructs an ExecutionOrchestrator.
@@ -80,6 +81,17 @@ func (o *ExecutionOrchestrator) SetPublisher(pub EventPublisher) {
 	o.publisher = pub
 }
 
+// GetPublisher returns the current publisher (used by event bridges to wrap it).
+func (o *ExecutionOrchestrator) GetPublisher() EventPublisher {
+	return o.publisher
+}
+
+// SetOnStartHook registers a callback invoked when execution begins.
+// Used by Phase 10B EventBridge to register the execution→workspace mapping.
+func (o *ExecutionOrchestrator) SetOnStartHook(hook func(execID, workspaceID string)) {
+	o.onStartHook = hook
+}
+
 // SetValidationTrigger wires the automatic post-execution validation trigger.
 // Called by NewExecutionHandlers after both orchestrators are constructed.
 func (o *ExecutionOrchestrator) SetValidationTrigger(trigger ValidationTrigger) {
@@ -95,6 +107,11 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 	if err != nil {
 		log.Errorw("exec_load_failed", "error", err)
 		return
+	}
+
+	// Fire start hook (used by Phase 10B EventBridge to register workspace mapping)
+	if o.onStartHook != nil {
+		o.onStartHook(execID, exec.WorkspaceID)
 	}
 
 	_ = o.execRepo.MarkRunning(ctx, execID)

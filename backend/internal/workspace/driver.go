@@ -105,6 +105,11 @@ type SandboxDriver interface {
 	// Used by the ValidationOrchestrator to share the Phase 7 code volume
 	// with an ephemeral language-specific validation container.
 	ProvisionWithVolume(ctx context.Context, cfg WorkspaceConfig, volumeName string) (*DriverInfo, error)
+
+	// ExecInteractive creates a PTY-attached interactive shell inside the container.
+	// Returns an InteractiveExec with bidirectional stdin/stdout for persistent
+	// terminal sessions. Used by Phase 10B Browser Workspace terminal.
+	ExecInteractive(ctx context.Context, containerID string, cols, rows uint16) (*InteractiveExec, error)
 }
 
 // ErrNotImplemented is returned by Phase 6 stubs for Phase 7+ methods.

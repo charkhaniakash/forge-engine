@@ -662,6 +662,17 @@ func (m *WorkspaceManager) DestroyValidationContainer(ctx context.Context, conta
 	return err
 }
 
+// ExecInteractive creates a persistent interactive shell in the workspace container.
+// Returns an InteractiveExec with stdin/stdout for bidirectional I/O.
+// Used by the browser workspace terminal for persistent PTY sessions.
+func (m *WorkspaceManager) ExecInteractive(ctx context.Context, workspaceID string, cols, rows uint16) (*InteractiveExec, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return nil, fmt.Errorf("workspace not ready: %w", err)
+	}
+	return m.driver.ExecInteractive(ctx, *ws.ContainerID, cols, rows)
+}
+
 // Destroy tears down the workspace: stops/removes the container and updates DB.
 func (m *WorkspaceManager) Destroy(ctx context.Context, workspaceID string) error {
 	ws, err := m.wsRepo.GetByID(ctx, workspaceID)

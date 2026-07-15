@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -10,6 +11,20 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 )
+
+// seqInsertMaxAttempts bounds retries when concurrent execs on the same
+// workspace race for the next execution_logs.seq value.
+const seqInsertMaxAttempts = 8
+
+// isSeqConflict reports whether err is a Postgres unique-violation (23505),
+// which for execution_logs means two concurrent inserts picked the same seq.
+func isSeqConflict(err error) bool {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) {
+		return pqErr.Code == "23505"
+	}
+	return false
+}
 
 // WorkspaceRepository handles all persistence for workspaces and execution_logs.
 // Go owns every status transition — no external caller may mutate status directly.
@@ -167,40 +182,40 @@ func (r *WorkspaceRepository) MarkDestroyed(ctx context.Context, id string) erro
 
 // nextSeq atomically returns and increments the per-workspace sequence counter.
 // Uses a DB-level advisory lock on the workspace ID to avoid races.
-func (r *WorkspaceRepository) nextSeq(ctx context.Context, workspaceID string) (int, error) {
-	var seq int
-	err := r.db.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(seq), 0) + 1
-		FROM execution_logs
-		WHERE workspace_id = $1
-	`, workspaceID).Scan(&seq)
-	return seq, err
-}
-
 // LogLifecycle inserts a lifecycle event into execution_logs.
+//
+// seq is computed atomically inside the INSERT and retried on a unique-
+// violation, so concurrent execs on the same workspace (e.g. a browser
+// terminal + a repair pass) can't collide on execution_logs(workspace_id, seq).
 func (r *WorkspaceRepository) LogLifecycle(
 	ctx context.Context,
 	workspaceID, lifecycleEvent, message string,
 ) (*models.ExecutionLog, error) {
-	id := uuid.New().String()
 	now := time.Now()
-
-	seq, err := r.nextSeq(ctx, workspaceID)
-	if err != nil {
-		return nil, fmt.Errorf("nextSeq: %w", err)
+	var lastErr error
+	for attempt := 0; attempt < seqInsertMaxAttempts; attempt++ {
+		row := r.db.QueryRowContext(ctx, `
+			INSERT INTO execution_logs
+				(id, workspace_id, seq, event_type, lifecycle_event, message, created_at)
+			VALUES ($1, $2,
+				(SELECT COALESCE(MAX(seq), 0) + 1 FROM execution_logs WHERE workspace_id = $2),
+				'lifecycle', $3, $4, $5)
+			RETURNING id, workspace_id, seq, event_type, lifecycle_event,
+			          command, working_dir, exit_code, timed_out, timeout_seconds,
+			          duration_ms, stdout, stderr, message,
+			          started_at, completed_at, created_at
+		`, uuid.New().String(), workspaceID, lifecycleEvent, message, now)
+		log, err := scanLog(row)
+		if err == nil {
+			return log, nil
+		}
+		if isSeqConflict(err) {
+			lastErr = err
+			continue
+		}
+		return nil, err
 	}
-
-	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO execution_logs
-			(id, workspace_id, seq, event_type, lifecycle_event, message, created_at)
-		VALUES ($1, $2, $3, 'lifecycle', $4, $5, $6)
-		RETURNING id, workspace_id, seq, event_type, lifecycle_event,
-		          command, working_dir, exit_code, timed_out, timeout_seconds,
-		          duration_ms, stdout, stderr, message,
-		          started_at, completed_at, created_at
-	`, id, workspaceID, seq, lifecycleEvent, message, now)
-
-	return scanLog(row)
+	return nil, fmt.Errorf("execution_logs seq contention (lifecycle): %w", lastErr)
 }
 
 // LogCommandStart inserts a command event before execution begins.
@@ -212,26 +227,32 @@ func (r *WorkspaceRepository) LogCommandStart(
 	workingDir *string,
 	timeoutSeconds int,
 ) (*models.ExecutionLog, error) {
-	id := uuid.New().String()
 	now := time.Now()
-
-	seq, err := r.nextSeq(ctx, workspaceID)
-	if err != nil {
-		return nil, fmt.Errorf("nextSeq: %w", err)
+	var lastErr error
+	for attempt := 0; attempt < seqInsertMaxAttempts; attempt++ {
+		row := r.db.QueryRowContext(ctx, `
+			INSERT INTO execution_logs
+				(id, workspace_id, seq, event_type, command, working_dir,
+				 timeout_seconds, started_at, created_at)
+			VALUES ($1, $2,
+				(SELECT COALESCE(MAX(seq), 0) + 1 FROM execution_logs WHERE workspace_id = $2),
+				'command', $3, $4, $5, $6, $6)
+			RETURNING id, workspace_id, seq, event_type, lifecycle_event,
+			          command, working_dir, exit_code, timed_out, timeout_seconds,
+			          duration_ms, stdout, stderr, message,
+			          started_at, completed_at, created_at
+		`, uuid.New().String(), workspaceID, pq.Array(command), workingDir, timeoutSeconds, now)
+		log, err := scanLog(row)
+		if err == nil {
+			return log, nil
+		}
+		if isSeqConflict(err) {
+			lastErr = err
+			continue
+		}
+		return nil, err
 	}
-
-	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO execution_logs
-			(id, workspace_id, seq, event_type, command, working_dir,
-			 timeout_seconds, started_at, created_at)
-		VALUES ($1, $2, $3, 'command', $4, $5, $6, $7, $7)
-		RETURNING id, workspace_id, seq, event_type, lifecycle_event,
-		          command, working_dir, exit_code, timed_out, timeout_seconds,
-		          duration_ms, stdout, stderr, message,
-		          started_at, completed_at, created_at
-	`, id, workspaceID, seq, pq.Array(command), workingDir, timeoutSeconds, now)
-
-	return scanLog(row)
+	return nil, fmt.Errorf("execution_logs seq contention (command): %w", lastErr)
 }
 
 // LogCommandComplete updates a command log with its results.

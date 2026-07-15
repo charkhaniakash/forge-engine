@@ -317,6 +317,82 @@ func (d *DockerSandboxDriver) Execute(ctx context.Context, containerID string, r
 	return ch, nil
 }
 
+// ── Interactive PTY Exec (Phase 10B) ─────────────────────────────────────────
+
+// InteractiveExec represents a running interactive shell with bidirectional I/O.
+type InteractiveExec struct {
+	ExecID      string
+	Stdin       io.Writer
+	Stdout      io.Reader
+	conn        types.HijackedResponse
+	containerID string
+	client      *client.Client
+}
+
+// Resize sends a window size change to the PTY.
+func (ie *InteractiveExec) Resize(cols, rows uint) error {
+	return ie.client.ContainerExecResize(context.Background(), ie.ExecID, container.ResizeOptions{
+		Width:  cols,
+		Height: rows,
+	})
+}
+
+// Close terminates the interactive exec.
+func (ie *InteractiveExec) Close() {
+	ie.conn.Close()
+}
+
+// ExecInteractive creates a PTY-attached interactive exec inside a container.
+// Returns an InteractiveExec with stdin writer and stdout reader for bidirectional
+// communication. Used by the browser workspace terminal for persistent shell sessions.
+//
+// Unlike Execute(), this method:
+//   - Allocates a TTY (Tty: true)
+//   - Attaches stdin (AttachStdin: true)
+//   - Returns a bidirectional connection (not a read-only channel)
+//   - Does NOT enforce a timeout (the session runs until explicitly closed)
+func (d *DockerSandboxDriver) ExecInteractive(ctx context.Context, containerID string, cols, rows uint16) (*InteractiveExec, error) {
+	workDir := workspaceMountPath
+
+	execConfig := types.ExecConfig{
+		User:         "forge",
+		AttachStdin:  true,
+		AttachStdout: true,
+		AttachStderr: true,
+		Tty:          true,
+		Cmd:          []string{"/bin/bash"},
+		WorkingDir:   workDir,
+		Env:          []string{"TERM=xterm-256color"},
+	}
+
+	execResp, err := d.client.ContainerExecCreate(ctx, containerID, execConfig)
+	if err != nil {
+		return nil, fmt.Errorf("interactive exec create: %w", err)
+	}
+
+	resp, err := d.client.ContainerExecAttach(ctx, execResp.ID, types.ExecStartCheck{
+		Tty: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("interactive exec attach: %w", err)
+	}
+
+	// Set initial terminal size
+	_ = d.client.ContainerExecResize(ctx, execResp.ID, container.ResizeOptions{
+		Width:  uint(cols),
+		Height: uint(rows),
+	})
+
+	return &InteractiveExec{
+		ExecID:      execResp.ID,
+		Stdin:       resp.Conn,
+		Stdout:      resp.Reader,
+		conn:        resp,
+		containerID: containerID,
+		client:      d.client,
+	}, nil
+}
+
 // Destroy stops and removes the container. Idempotent — safe to call on
 // already-removed containers.
 //

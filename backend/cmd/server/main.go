@@ -249,12 +249,10 @@ func main() {
 				detector := validation.NewStackDetector(wsManager)
 				valOrchestrator := validation.NewValidationOrchestrator(
 					valRepo, wsManager, agentParseClient, detector,
-					nil, // publisher wired by NewValidationHandlers
+					nil, // publisher wired below
 					sugar,
 				)
-				validationHandlers = handlers.NewValidationHandlers(
-					valRepo, workItemRepo, execRepo, valOrchestrator, sugar,
-				)
+				// Don't create validation handlers yet - we need to wire the event bridge first
 
 				// ── Repair (Phase 9) ──────────────────────────────────────────
 				// Built after validation so the repair orchestrator can re-run validation.
@@ -304,7 +302,7 @@ func main() {
 				bwTermService := browserworkspace.NewTerminalService(wsManager, bwGateway, sugar)
 				bwGateway.SetTerminalService(bwTermService)
 				bwGateway.SetFilesystemService(bwFsService)
-				bwHandlers = browserworkspace.NewHandlers(bwGateway, bwFsService, bwTermService, wsRepo, workItemRepo, wsManager, sugar)
+				bwHandlers = browserworkspace.NewHandlers(bwGateway, bwFsService, bwTermService, wsRepo, workItemRepo, execRepo, wsManager, sugar)
 				_ = bwFsService  // used by handlers
 				_ = bwTermService // used by handlers
 
@@ -323,11 +321,11 @@ func main() {
 				//   This trigger consumes those results and decides whether Phase 9 begins.
 				//   Phase 8 never decides whether Phase 9 runs - only THIS layer does.
 				execOrchestrator.SetValidationTrigger(func(ctx context.Context, taskExecutionID, workspaceID, traceID string) {
-					// Phase 10B: Register execution→workspace mapping for the event bridge
-					if eventBridge != nil {
-						eventBridge.RegisterExecution(taskExecutionID, workspaceID)
-						defer eventBridge.UnregisterExecution(taskExecutionID)
-					}
+						// Phase 10B: Unregister execution→workspace mapping after
+						// execution completes (registered by OnStartHook at exec start).
+						if eventBridge != nil {
+							defer eventBridge.UnregisterExecution(taskExecutionID)
+						}
 
 					log := sugar.With(
 						"task_execution_id", taskExecutionID,
@@ -398,15 +396,46 @@ func main() {
 					jwtSecret, sugar,
 				)
 
-				// Phase 10B: Wrap the execution publisher to also forward events
-				// to the browser workspace gateway for real-time AI activity feed.
+				// Phase 10B: Wire all orchestrator publishers to forward events
+				// into the unified browser workspace gateway for real-time AI activity,
+				// timeline, and diagnostics feeds.
+
+				// ── Execution ──
 				if bwGateway != nil {
 					originalPub := execOrchestrator.GetPublisher()
 					wrappedPub := eventBridge.WrapExecutionPublisher(originalPub)
 					execOrchestrator.SetPublisher(wrappedPub)
-					// Register execution→workspace mapping when execution starts
 					execOrchestrator.SetOnStartHook(func(execID, workspaceID string) {
 						eventBridge.RegisterExecution(execID, workspaceID)
+						// Planning completed before execution started; emit the
+						// planning phase marker so the timeline shows the full lifecycle.
+						eventBridge.EmitPlanningMarker(workspaceID)
+					})
+
+					// ── Validation ──
+					// Wire the event bridge BEFORE creating handlers so handlers don't override
+					origValPub := valOrchestrator.GetPublisher()
+					valOrchestrator.SetPublisher(eventBridge.WrapValidationPublisher(origValPub))
+					valOrchestrator.SetOnStartHook(func(runID, wsID string) {
+						eventBridge.RegisterValidation(runID, wsID)
+					})
+					// Now create validation handlers with the already-wrapped publisher
+					validationHandlers = handlers.NewValidationHandlers(
+						valRepo, workItemRepo, execRepo, valOrchestrator, sugar,
+					)
+
+					// ── Repair ──
+					origRepairPub := repairOrch.GetPublisher()
+					repairOrch.SetPublisher(eventBridge.WrapRepairPublisher(origRepairPub))
+					repairOrch.SetOnStartHook(func(sessionID, wsID string) {
+						eventBridge.RegisterRepair(sessionID, wsID)
+					})
+
+					// ── Publishing ──
+					origPubPub := publishingOrch.GetPublisher()
+					publishingOrch.SetPublisher(eventBridge.WrapPublishingPublisher(origPubPub))
+					publishingOrch.SetOnStartHook(func(sessionID, wsID string) {
+						eventBridge.RegisterPublishing(sessionID, wsID)
 					})
 				}
 

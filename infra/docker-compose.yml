@@ -157,6 +157,9 @@ services:
     build:
       context: ../frontend
       dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_URL: http://localhost:8080
+        VITE_AGENT_URL: http://localhost:8000
     container_name: forge-frontend
     ports:
       - "5173:5173"

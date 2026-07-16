@@ -24,6 +24,7 @@ type Orchestrator struct {
 	githubClient     *GitHubPRClient
 	agentClient      *AgentSummaryClient
 	publisher        func(sessionID, eventType string, payload map[string]interface{})
+	onStartHook      func(sessionID, workspaceID string)
 	jwtSecret        string
 	logger           *zap.SugaredLogger
 }
@@ -54,6 +55,18 @@ func NewOrchestrator(
 // SetPublisher wires the WebSocket publisher after construction.
 func (o *Orchestrator) SetPublisher(pub func(sessionID, eventType string, payload map[string]interface{})) {
 	o.publisher = pub
+}
+
+// GetPublisher returns the current publisher (used by the EventBridge to wrap it).
+func (o *Orchestrator) GetPublisher() func(sessionID, eventType string, payload map[string]interface{}) {
+	return o.publisher
+}
+
+// SetOnStartHook registers a callback invoked when a publishing session is
+// created, binding sessionID→workspaceID so the EventBridge can resolve the
+// target gateway.
+func (o *Orchestrator) SetOnStartHook(hook func(sessionID, workspaceID string)) {
+	o.onStartHook = hook
 }
 
 // publish emits a progress event to WebSocket subscribers.

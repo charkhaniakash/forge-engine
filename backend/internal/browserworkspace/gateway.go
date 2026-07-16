@@ -44,7 +44,7 @@ const (
 
 // DefaultSubscriptions are channels every client subscribes to on connect.
 var DefaultSubscriptions = []string{
-	ChSystem, ChFilesystem, ChAIActivity, ChCollaboration, ChTimeline,
+	ChSystem, ChFilesystem, ChTerminal, ChDiagnostics, ChAIActivity, ChCollaboration, ChTimeline,
 }
 
 // ── Envelope ─────────────────────────────────────────────────────────────────
@@ -84,6 +84,10 @@ type BrowserSession struct {
 	Status        string // connected | disconnected
 	CreatedAt     time.Time
 	LastSeenAt    time.Time
+	// synced is set once the session has received its initial catch-up replay
+	// (via the first subscribe, or via reconnect). Prevents double-replay when a
+	// reconnecting client sends both a reconnect and a subscribe message.
+	synced bool
 }
 
 // ── Gateway ──────────────────────────────────────────────────────────────────
@@ -137,20 +141,25 @@ func (g *Gateway) SetFilesystemService(fs *FilesystemService) {
 
 // StreamUpgrade handles WebSocket upgrade for the workspace stream.
 func (g *Gateway) StreamUpgrade(c *fiber.Ctx) error {
+	g.logger.Infow("workspace_stream_upgrade_attempted", "workspace_id", c.Params("workspaceID"))
 	if websocket.IsWebSocketUpgrade(c) {
 		tokenStr := c.Query("token")
 		if tokenStr == "" {
+			g.logger.Warnw("workspace_stream_upgrade_missing_token", "workspace_id", c.Params("workspaceID"))
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "missing token"})
 		}
 		claims, err := auth.VerifyUserToken(tokenStr)
 		if err != nil {
+			g.logger.Warnw("workspace_stream_upgrade_invalid_token", "workspace_id", c.Params("workspaceID"), "error", err)
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid token"})
 		}
 		c.Locals("workspace_id", c.Params("workspaceID"))
 		c.Locals("org_id", claims["org_id"])
 		c.Locals("user_id", claims["sub"])
+		g.logger.Infow("workspace_stream_upgrade_approved", "workspace_id", c.Params("workspaceID"), "user_id", claims["sub"])
 		return c.Next()
 	}
+	g.logger.Warnw("workspace_stream_upgrade_not_websocket", "workspace_id", c.Params("workspaceID"))
 	return fiber.ErrUpgradeRequired
 }
 
@@ -220,6 +229,8 @@ func (g *Gateway) Publish(workspaceID, channel, event string, payload interface{
 		Payload: payload,
 	}
 
+	g.logger.Infow("gateway_publish", "workspace_id", workspaceID, "channel", channel, "event", event, "seq", env.Seq)
+
 	// Buffer for replay
 	g.replayMu.Lock()
 	buf := g.replayBuf[workspaceID]
@@ -236,6 +247,8 @@ func (g *Gateway) Publish(workspaceID, channel, event string, payload interface{
 	sessionIDs := g.workspaces[workspaceID]
 	g.mu.RUnlock()
 
+	g.logger.Infow("gateway_broadcast", "workspace_id", workspaceID, "channel", channel, "session_count", len(sessionIDs))
+
 	for _, sid := range sessionIDs {
 		g.mu.RLock()
 		sess, ok := g.sessions[sid]
@@ -244,7 +257,10 @@ func (g *Gateway) Publish(workspaceID, channel, event string, payload interface{
 			continue
 		}
 		if sess.Subscriptions[channel] {
+			g.logger.Infow("gateway_sending_to_session", "session_id", sid, "channel", channel, "subscribed", sess.Subscriptions[channel])
 			g.sendToSession(sess, env)
+		} else {
+			g.logger.Infow("gateway_session_not_subscribed", "session_id", sid, "channel", channel)
 		}
 	}
 }
@@ -258,12 +274,16 @@ func (g *Gateway) nextSeq() int64 {
 func (g *Gateway) sendToSession(session *BrowserSession, env Envelope) {
 	raw, err := json.Marshal(env)
 	if err != nil {
+		g.logger.Warnw("gateway_marshal_failed", "error", err)
 		return
 	}
+	g.logger.Infow("gateway_sending_to_channel", "session_id", session.ID, "channel", env.Channel, "event", env.Event, "data_length", len(raw))
 	select {
 	case session.SendCh <- raw:
+		g.logger.Infow("gateway_sent_to_channel", "session_id", session.ID)
 	default:
 		// Backpressure — drop for slow client
+		g.logger.Warnw("gateway_backpressure_drop", "session_id", session.ID)
 	}
 }
 
@@ -356,6 +376,15 @@ func (g *Gateway) readPump(conn *websocket.Conn, session *BrowserSession) {
 				Ts:      time.Now().UnixMilli(),
 				Payload: map[string]interface{}{"channels": clientMsg.Channels},
 			})
+			// First-join catch-up: replay buffered events for the requested
+			// channels so a browser opening the IDE mid-execution immediately
+			// sees the current state (e.g. collaboration "running" → pause/stop
+			// controls, existing timeline). Reconnecting clients sync via the
+			// reconnect path instead, so this runs at most once per session.
+			if !session.synced {
+				session.synced = true
+				g.replayForChannels(session, clientMsg.Channels)
+			}
 
 		case "unsubscribe":
 			for _, ch := range clientMsg.Channels {
@@ -381,7 +410,33 @@ func (g *Gateway) readPump(conn *websocket.Conn, session *BrowserSession) {
 	}
 }
 
+// replayForChannels sends every buffered event for the given channels to the
+// session, in order. Used for a fresh client's one-time catch-up so it sees the
+// current state without needing a prior session/last_seq.
+func (g *Gateway) replayForChannels(session *BrowserSession, channels []string) {
+	if len(channels) == 0 {
+		return
+	}
+	want := make(map[string]bool, len(channels))
+	for _, ch := range channels {
+		want[ch] = true
+	}
+	g.replayMu.RLock()
+	buf := append([]Envelope(nil), g.replayBuf[session.WorkspaceID]...)
+	g.replayMu.RUnlock()
+
+	for _, env := range buf {
+		if want[env.Channel] {
+			g.sendToSession(session, env)
+		}
+	}
+}
+
 func (g *Gateway) handleReconnect(session *BrowserSession, lastSeqs map[string]int64) {
+	// Reconnect performs the session's catch-up; guard the subscribe path from
+	// replaying again.
+	session.synced = true
+
 	g.replayMu.RLock()
 	buf := g.replayBuf[session.WorkspaceID]
 	g.replayMu.RUnlock()
@@ -421,6 +476,7 @@ func (g *Gateway) handleChannelMessage(session *BrowserSession, msg ClientMessag
 // Placeholder handlers — will be wired to services
 func (g *Gateway) onTerminalInput(session *BrowserSession, msg ClientMessage) {
 	// Forward to terminal service — needs to be wired after construction
+	g.logger.Infow("terminal_input_received", "event", msg.Ev, "workspace_id", session.WorkspaceID)
 	if g.termService != nil {
 		switch msg.Ev {
 		case "input":
@@ -430,6 +486,8 @@ func (g *Gateway) onTerminalInput(session *BrowserSession, msg ClientMessage) {
 		default:
 			g.termService.HandleInput(session, msg.Payload)
 		}
+	} else {
+		g.logger.Warnw("terminal_service_not_configured")
 	}
 }
 func (g *Gateway) onCollaborationCommand(session *BrowserSession, msg ClientMessage) {}

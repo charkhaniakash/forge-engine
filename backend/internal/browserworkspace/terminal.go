@@ -164,14 +164,28 @@ func (ts *TerminalService) CloseSession(terminalID string) error {
 func (ts *TerminalService) HandleInput(session *BrowserSession, payload json.RawMessage) {
 	var input TerminalInputPayload
 	if json.Unmarshal(payload, &input) != nil {
+		ts.logger.Warnw("terminal_input_unmarshal_failed")
 		return
 	}
+
+	ts.logger.Infow("terminal_input_handling", "terminal_id", input.TerminalID, "data_length", len(input.Data))
 
 	ts.mu.RLock()
 	term, ok := ts.sessions[input.TerminalID]
 	ts.mu.RUnlock()
 
-	if !ok || term.Status != "active" || term.pty == nil {
+	if !ok {
+		ts.logger.Warnw("terminal_session_not_found", "terminal_id", input.TerminalID)
+		return
+	}
+
+	if term.Status != "active" {
+		ts.logger.Warnw("terminal_session_not_active", "terminal_id", input.TerminalID, "status", term.Status)
+		return
+	}
+
+	if term.pty == nil {
+		ts.logger.Warnw("terminal_pty_nil", "terminal_id", input.TerminalID)
 		return
 	}
 
@@ -181,8 +195,10 @@ func (ts *TerminalService) HandleInput(session *BrowserSession, payload json.Raw
 
 	// Write directly to the PTY stdin — this is the persistent shell
 	term.stdinMu.Lock()
-	_, err := term.pty.Stdin.Write([]byte(input.Data))
+	n, err := term.pty.Stdin.Write([]byte(input.Data))
 	term.stdinMu.Unlock()
+
+	ts.logger.Infow("terminal_stdin_write", "terminal_id", term.ID, "bytes_written", n, "error", err)
 
 	if err != nil {
 		ts.logger.Warnw("terminal_stdin_write_failed",
@@ -240,8 +256,11 @@ func (ts *TerminalService) ListSessions(workspaceID string) []*TerminalSession {
 func (ts *TerminalService) streamOutput(ctx context.Context, session *TerminalSession) {
 	buf := make([]byte, 32*1024) // 32KB read buffer
 
+	ts.logger.Infow("terminal_output_stream_starting", "terminal_id", session.ID)
+
 	for {
 		if ctx.Err() != nil {
+			ts.logger.Infow("terminal_output_stream_cancelled", "terminal_id", session.ID)
 			return
 		}
 
@@ -250,6 +269,7 @@ func (ts *TerminalService) streamOutput(ctx context.Context, session *TerminalSe
 			// Publish output to all subscribed browsers
 			data := make([]byte, n)
 			copy(data, buf[:n])
+			ts.logger.Infow("terminal_output_read", "terminal_id", session.ID, "bytes", n)
 			ts.gateway.Publish(session.WorkspaceID, ChTerminal, "output", map[string]interface{}{
 				"terminal_id": session.ID,
 				"data":        string(data),

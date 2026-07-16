@@ -68,13 +68,43 @@ async def gather_context(
         )
 
         if not file_exists:
+            # The planned path doesn't exist. This is frequently a wrong
+            # extension from the planner (e.g. App.tsx vs the real App.jsx), so
+            # list the parent directory and hand the model the real siblings —
+            # otherwise it has no way to discover the correct file and either
+            # writes a stub at the wrong path or fails the step doing nothing.
+            parent = path.rsplit("/", 1)[0] if "/" in path else "."
+            siblings: list[str] = []
+            dir_result = await tool_client.call(
+                tool="list_dir",
+                args={"path": parent},
+                reasoning=f"Planned file {path} is missing — listing {parent} to find the real file",
+                step_id=ctx.step_id,
+            )
+            if (
+                dir_result.success
+                and isinstance(dir_result.result, dict)
+                and isinstance(dir_result.result.get("entries"), list)
+            ):
+                for e in dir_result.result["entries"]:
+                    if isinstance(e, dict) and e.get("name"):
+                        name = e["name"]
+                        siblings.append(f"{name}/" if e.get("type") == "directory" else name)
             results.append({
                 "path": path,
                 "content": "",
                 "exists": False,
                 "error": None,   # genuinely missing — agent should create it
+                "dir": parent,
+                "siblings": siblings,
             })
-            logger.info("context_file_not_found", path=path, step_id=ctx.step_id)
+            logger.info(
+                "context_file_not_found",
+                path=path,
+                step_id=ctx.step_id,
+                dir=parent,
+                sibling_count=len(siblings),
+            )
             continue
 
         result = await tool_client.call(

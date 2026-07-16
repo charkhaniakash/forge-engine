@@ -37,6 +37,7 @@ type Orchestrator struct {
 	agentClient      *AgentRepairClient
 	policy           *RepairPolicy
 	publisher        func(sessionID string, eventType string, payload map[string]interface{})
+	onStartHook      func(sessionID, workspaceID string)
 	jwtSecret        string
 	logger           *zap.SugaredLogger
 }
@@ -72,6 +73,17 @@ func NewOrchestrator(
 // Called by NewHandlers to avoid an import cycle.
 func (o *Orchestrator) SetPublisher(pub func(sessionID string, eventType string, payload map[string]interface{})) {
 	o.publisher = pub
+}
+
+// GetPublisher returns the current publisher (used by the EventBridge to wrap it).
+func (o *Orchestrator) GetPublisher() func(sessionID string, eventType string, payload map[string]interface{}) {
+	return o.publisher
+}
+
+// SetOnStartHook registers a callback invoked when a repair session is created,
+// binding sessionID→workspaceID so the EventBridge can resolve the target gateway.
+func (o *Orchestrator) SetOnStartHook(hook func(sessionID, workspaceID string)) {
+	o.onStartHook = hook
 }
 
 // publish fans a repair event to the WebSocket hub (no-op if no publisher set).
@@ -175,6 +187,11 @@ func (o *Orchestrator) Run(
 
 	log = log.With("repair_session_id", session.ID)
 	log.Info("repair_session_created")
+
+	// Bind sessionID→workspaceID for the EventBridge before publishing any events.
+	if o.onStartHook != nil {
+		o.onStartHook(session.ID, workspaceID)
+	}
 
 	// Publish session started event
 	o.publish(session.ID, "repair_started", map[string]interface{}{

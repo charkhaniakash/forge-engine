@@ -3,7 +3,6 @@ package repository
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -12,18 +11,44 @@ import (
 	"github.com/lib/pq"
 )
 
-// seqInsertMaxAttempts bounds retries when concurrent execs on the same
-// workspace race for the next execution_logs.seq value.
-const seqInsertMaxAttempts = 8
-
-// isSeqConflict reports whether err is a Postgres unique-violation (23505),
-// which for execution_logs means two concurrent inserts picked the same seq.
-func isSeqConflict(err error) bool {
-	var pqErr *pq.Error
-	if errors.As(err, &pqErr) {
-		return pqErr.Code == "23505"
+// insertLogWithSeq allocates the next per-workspace execution_logs.seq and runs
+// the caller's INSERT under a transaction-scoped advisory lock keyed on the
+// workspace. The lock serializes seq allocation across concurrent execs on the
+// same workspace (e.g. a browser terminal running alongside a repair pass), so
+// two inserts can never pick the same seq — no unique-violation, no Postgres
+// error-log noise. `insert` receives the tx and the allocated seq and must
+// return the RETURNING row.
+func (r *WorkspaceRepository) insertLogWithSeq(
+	ctx context.Context,
+	workspaceID string,
+	insert func(tx *sql.Tx, seq int) *sql.Row,
+) (*models.ExecutionLog, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
 	}
-	return false
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, workspaceID); err != nil {
+		return nil, fmt.Errorf("advisory lock: %w", err)
+	}
+
+	var seq int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(seq), 0) + 1 FROM execution_logs WHERE workspace_id = $1`,
+		workspaceID).Scan(&seq); err != nil {
+		return nil, fmt.Errorf("next seq: %w", err)
+	}
+
+	log, err := scanLog(insert(tx, seq))
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return log, nil
 }
 
 // WorkspaceRepository handles all persistence for workspaces and execution_logs.
@@ -180,46 +205,28 @@ func (r *WorkspaceRepository) MarkDestroyed(ctx context.Context, id string) erro
 
 // ── Execution logs ────────────────────────────────────────────────────────────
 
-// nextSeq atomically returns and increments the per-workspace sequence counter.
-// Uses a DB-level advisory lock on the workspace ID to avoid races.
-// LogLifecycle inserts a lifecycle event into execution_logs.
-//
-// seq is computed atomically inside the INSERT and retried on a unique-
-// violation, so concurrent execs on the same workspace (e.g. a browser
-// terminal + a repair pass) can't collide on execution_logs(workspace_id, seq).
+// LogLifecycle inserts a lifecycle event into execution_logs. seq allocation is
+// serialized per workspace by insertLogWithSeq's advisory lock.
 func (r *WorkspaceRepository) LogLifecycle(
 	ctx context.Context,
 	workspaceID, lifecycleEvent, message string,
 ) (*models.ExecutionLog, error) {
 	now := time.Now()
-	var lastErr error
-	for attempt := 0; attempt < seqInsertMaxAttempts; attempt++ {
-		row := r.db.QueryRowContext(ctx, `
+	return r.insertLogWithSeq(ctx, workspaceID, func(tx *sql.Tx, seq int) *sql.Row {
+		return tx.QueryRowContext(ctx, `
 			INSERT INTO execution_logs
 				(id, workspace_id, seq, event_type, lifecycle_event, message, created_at)
-			VALUES ($1, $2,
-				(SELECT COALESCE(MAX(seq), 0) + 1 FROM execution_logs WHERE workspace_id = $2),
-				'lifecycle', $3, $4, $5)
+			VALUES ($1, $2, $3, 'lifecycle', $4, $5, $6)
 			RETURNING id, workspace_id, seq, event_type, lifecycle_event,
 			          command, working_dir, exit_code, timed_out, timeout_seconds,
 			          duration_ms, stdout, stderr, message,
 			          started_at, completed_at, created_at
-		`, uuid.New().String(), workspaceID, lifecycleEvent, message, now)
-		log, err := scanLog(row)
-		if err == nil {
-			return log, nil
-		}
-		if isSeqConflict(err) {
-			lastErr = err
-			continue
-		}
-		return nil, err
-	}
-	return nil, fmt.Errorf("execution_logs seq contention (lifecycle): %w", lastErr)
+		`, uuid.New().String(), workspaceID, seq, lifecycleEvent, message, now)
+	})
 }
 
 // LogCommandStart inserts a command event before execution begins.
-// Returns the log ID so the caller can update it on completion.
+// Returns the log so the caller can update it on completion.
 func (r *WorkspaceRepository) LogCommandStart(
 	ctx context.Context,
 	workspaceID string,
@@ -228,31 +235,18 @@ func (r *WorkspaceRepository) LogCommandStart(
 	timeoutSeconds int,
 ) (*models.ExecutionLog, error) {
 	now := time.Now()
-	var lastErr error
-	for attempt := 0; attempt < seqInsertMaxAttempts; attempt++ {
-		row := r.db.QueryRowContext(ctx, `
+	return r.insertLogWithSeq(ctx, workspaceID, func(tx *sql.Tx, seq int) *sql.Row {
+		return tx.QueryRowContext(ctx, `
 			INSERT INTO execution_logs
 				(id, workspace_id, seq, event_type, command, working_dir,
 				 timeout_seconds, started_at, created_at)
-			VALUES ($1, $2,
-				(SELECT COALESCE(MAX(seq), 0) + 1 FROM execution_logs WHERE workspace_id = $2),
-				'command', $3, $4, $5, $6, $6)
+			VALUES ($1, $2, $3, 'command', $4, $5, $6, $7, $7)
 			RETURNING id, workspace_id, seq, event_type, lifecycle_event,
 			          command, working_dir, exit_code, timed_out, timeout_seconds,
 			          duration_ms, stdout, stderr, message,
 			          started_at, completed_at, created_at
-		`, uuid.New().String(), workspaceID, pq.Array(command), workingDir, timeoutSeconds, now)
-		log, err := scanLog(row)
-		if err == nil {
-			return log, nil
-		}
-		if isSeqConflict(err) {
-			lastErr = err
-			continue
-		}
-		return nil, err
-	}
-	return nil, fmt.Errorf("execution_logs seq contention (command): %w", lastErr)
+		`, uuid.New().String(), workspaceID, seq, pq.Array(command), workingDir, timeoutSeconds, now)
+	})
 }
 
 // LogCommandComplete updates a command log with its results.

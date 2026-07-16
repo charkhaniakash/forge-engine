@@ -17,6 +17,7 @@ type Handlers struct {
 	termService *TerminalService
 	wsRepo      *repository.WorkspaceRepository
 	workItemRepo *repository.WorkItemRepository
+	execRepo    *repository.ExecutionRepository
 	wsManager   *workspace.WorkspaceManager
 	logger      *zap.SugaredLogger
 }
@@ -28,6 +29,7 @@ func NewHandlers(
 	termService *TerminalService,
 	wsRepo *repository.WorkspaceRepository,
 	workItemRepo *repository.WorkItemRepository,
+	execRepo *repository.ExecutionRepository,
 	wsManager *workspace.WorkspaceManager,
 	logger *zap.SugaredLogger,
 ) *Handlers {
@@ -37,9 +39,25 @@ func NewHandlers(
 		termService:  termService,
 		wsRepo:       wsRepo,
 		workItemRepo: workItemRepo,
+		execRepo:     execRepo,
 		wsManager:    wsManager,
 		logger:       logger,
 	}
+}
+
+// latestExecForWorkspace resolves the workspace's work item and returns the id
+// of its most recent execution — the one the collaborate controls act on.
+func (h *Handlers) latestExecForWorkspace(c *fiber.Ctx, workspaceID string) (string, bool) {
+	ctx := c.Context()
+	ws, err := h.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil {
+		return "", false
+	}
+	exec, err := h.execRepo.GetLatestForWorkItem(ctx, ws.WorkItemID)
+	if err != nil {
+		return "", false
+	}
+	return exec.ID, true
 }
 
 // ── File Endpoints ───────────────────────────────────────────────────────────
@@ -257,44 +275,64 @@ func (h *Handlers) GetHealth(c *fiber.Ctx) error {
 
 // PauseExecution pauses the current execution.
 // POST /v1/workspace/:workspaceID/collaborate/pause
+// Pauses the workspace's current execution. The orchestrator observes the
+// 'paused' status between steps (isPaused → waitForResume) and blocks there.
 func (h *Handlers) PauseExecution(c *fiber.Ctx) error {
 	workspaceID := c.Params("workspaceID")
+	execID, ok := h.latestExecForWorkspace(c, workspaceID)
+	if !ok {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "no execution found for workspace"})
+	}
 
-	h.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
-		"status":  "pausing",
-		"message": "Pause requested — will pause after current step",
-	})
-
-	// TODO: Wire to Redis control queue (Phase 12 fully implements this)
-	return c.JSON(fiber.Map{"status": "pausing"})
+	// Change execution status only. The authoritative collaboration WS event
+	// ("paused") is emitted by the orchestrator when it actually holds between
+	// steps (exec_paused → event bridge), so we don't publish here — that would
+	// duplicate the state event and report "paused" before it truly is.
+	if err := h.execRepo.MarkPaused(c.Context(), execID); err != nil {
+		h.logger.Warnw("collaborate_pause_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to pause"})
+	}
+	h.logger.Infow("collaborate_pause_requested", "workspace_id", workspaceID, "exec_id", execID)
+	return c.JSON(fiber.Map{"status": "pausing", "execution_id": execID})
 }
 
 // ResumeExecution resumes a paused execution.
 // POST /v1/workspace/:workspaceID/collaborate/resume
 func (h *Handlers) ResumeExecution(c *fiber.Ctx) error {
 	workspaceID := c.Params("workspaceID")
+	execID, ok := h.latestExecForWorkspace(c, workspaceID)
+	if !ok {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "no execution found for workspace"})
+	}
 
-	h.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
-		"status":  "running",
-		"message": "Execution resumed",
-	})
-
-	// TODO: Wire to Redis control queue (Phase 12 fully implements this)
-	return c.JSON(fiber.Map{"status": "running"})
+	// Status change only; the orchestrator emits the authoritative "running"
+	// collaboration event (exec_resumed) once waitForResume unblocks.
+	if err := h.execRepo.MarkResumed(c.Context(), execID); err != nil {
+		h.logger.Warnw("collaborate_resume_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to resume"})
+	}
+	h.logger.Infow("collaborate_resume_requested", "workspace_id", workspaceID, "exec_id", execID)
+	return c.JSON(fiber.Map{"status": "running", "execution_id": execID})
 }
 
-// StopExecution stops the current execution.
+// StopExecution stops the current execution (reuses the Phase 7 cancel path:
+// status='cancelled', observed by isCancelled between steps).
 // POST /v1/workspace/:workspaceID/collaborate/stop
 func (h *Handlers) StopExecution(c *fiber.Ctx) error {
 	workspaceID := c.Params("workspaceID")
+	execID, ok := h.latestExecForWorkspace(c, workspaceID)
+	if !ok {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "no execution found for workspace"})
+	}
 
-	h.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
-		"status":  "stopping",
-		"message": "Stop requested",
-	})
-
-	// TODO: Wire to execution cancel (reuses Phase 7 mechanism)
-	return c.JSON(fiber.Map{"status": "stopping"})
+	// Status change only; the orchestrator emits the authoritative "stopped"
+	// collaboration event (exec_cancelled) when it observes the cancellation.
+	if err := h.execRepo.MarkCancelled(c.Context(), execID); err != nil {
+		h.logger.Warnw("collaborate_stop_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to stop"})
+	}
+	h.logger.Infow("collaborate_stop_requested", "workspace_id", workspaceID, "exec_id", execID)
+	return c.JSON(fiber.Map{"status": "stopping", "execution_id": execID})
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

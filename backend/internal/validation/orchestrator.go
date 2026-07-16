@@ -18,6 +18,10 @@ import (
 // ValidationEventPublisher fans NDJSON events to the WebSocket hub.
 type ValidationEventPublisher func(validationRunID string, eventType string, payload map[string]interface{})
 
+// ValidationStartHook is invoked once a validation run is created, binding the
+// runID to its workspaceID so the EventBridge can resolve the target gateway.
+type ValidationStartHook func(runID, workspaceID string)
+
 // ContainerRunner is the interface the ValidationOrchestrator uses to provision
 // and tear down short-lived language-specific validation containers.
 // It is satisfied by workspace.WorkspaceManager.
@@ -61,6 +65,7 @@ type ValidationOrchestrator struct {
 	detector    *StackDetector
 	envDetector *environment.Detector
 	publisher   ValidationEventPublisher
+	onStartHook ValidationStartHook
 	logger      *zap.SugaredLogger
 }
 
@@ -85,6 +90,17 @@ func NewValidationOrchestrator(
 
 func (o *ValidationOrchestrator) SetPublisher(pub ValidationEventPublisher) {
 	o.publisher = pub
+}
+
+// GetPublisher returns the current publisher (used by the EventBridge to wrap it).
+func (o *ValidationOrchestrator) GetPublisher() ValidationEventPublisher {
+	return o.publisher
+}
+
+// SetOnStartHook registers a callback invoked when a validation run is created,
+// binding runID→workspaceID so the EventBridge can resolve the target gateway.
+func (o *ValidationOrchestrator) SetOnStartHook(hook ValidationStartHook) {
+	o.onStartHook = hook
 }
 
 // Run detects the stack, provisions a language-specific validation container,
@@ -126,6 +142,11 @@ func (o *ValidationOrchestrator) Run(
 		return nil, fmt.Errorf("create validation run: %w", err)
 	}
 	log = log.With("validation_run_id", run.ID)
+
+	// Bind runID→workspaceID for the EventBridge before publishing any events.
+	if o.onStartHook != nil {
+		o.onStartHook(run.ID, workspaceID)
+	}
 
 	_ = o.repo.MarkRunning(ctx, run.ID)
 	o.publish(run.ID, "validation_start", map[string]interface{}{
@@ -559,12 +580,13 @@ func (o *ValidationOrchestrator) runStage(
 					log.Warnw("insert_diagnostics_failed", "error", insertErr)
 				}
 				o.publish(run.ID, "stage_diagnostics", map[string]interface{}{
-					"stage":          stageCfg.Name,
-					"count":          len(parseResp.Diagnostics),
-					"errors":         parseResp.ErrorCount,
-					"warnings":       parseResp.WarningCount,
-					"failure_origin": parseResp.FailureOrigin,
-				})
+						"stage":          stageCfg.Name,
+						"count":          len(parseResp.Diagnostics),
+						"errors":         parseResp.ErrorCount,
+						"warnings":       parseResp.WarningCount,
+						"failure_origin": parseResp.FailureOrigin,
+						"items":          parseResp.Diagnostics,
+					})
 			}
 		}
 	} else if exitCode == 127 {

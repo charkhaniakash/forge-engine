@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Group, Panel, Separator, usePanelRef, type Layout } from 'react-resizable-panels'
 import { Icon, Spinner } from '@/components/common'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { useWorkspaceSocket } from '@/hooks/useWorkspaceSocket'
@@ -10,50 +11,53 @@ import {
   useGetWorkspaceHealthQuery,
 } from '@/services/api/workspaceEditorApi'
 import { setFileTree, setHealth } from '@/store/slices/workspaceEditorSlice'
-import { FileExplorer } from '@/features/workspace/FileExplorer'
+import { FileExplorer, type GitDecorations } from '@/features/workspace/FileExplorer'
 import { CodeEditor } from '@/features/workspace/CodeEditor'
 import { TerminalPanel } from '@/features/workspace/TerminalPanel'
 import { TimelinePanel } from '@/features/workspace/TimelinePanel'
 import { AIActivityFeed } from '@/features/workspace/AIActivityFeed'
+import { OutputPanel } from '@/features/workspace/OutputPanel'
 import { GitPanel } from '@/features/workspace/GitPanel'
 import { DiagnosticsPanel } from '@/features/workspace/DiagnosticsPanel'
 import { CollaborationBar } from '@/features/workspace/CollaborationBar'
 import { ROUTES } from '@/constants/routes'
 import styles from './Workspace.module.css'
 
-type RightTab = 'timeline' | 'ai' | 'terminal' | 'diagnostics' | 'git'
+type SidebarTab = 'timeline' | 'ai' | 'output' | 'git' | 'diagnostics'
 
-const RIGHT_TABS: Array<{ id: RightTab; label: string; icon: Parameters<typeof Icon>[0]['name'] }> = [
+const SIDEBAR_TABS: Array<{ id: SidebarTab; label: string; icon: Parameters<typeof Icon>[0]['name'] }> = [
+  { id: 'output', label: 'Output', icon: 'tool' },
   { id: 'timeline', label: 'Timeline', icon: 'clock' },
-  { id: 'ai', label: 'AI Activity', icon: 'chat' },
-  { id: 'terminal', label: 'Terminal', icon: 'tool' },
-  { id: 'diagnostics', label: 'Diagnostics', icon: 'alert' },
+  { id: 'ai', label: 'AI', icon: 'chat' },
+  { id: 'diagnostics', label: 'Problems', icon: 'alert' },
   { id: 'git', label: 'Git', icon: 'branch' },
 ]
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v))
-}
-
-function readWidth(key: string, fallback: number): number {
-  const raw = localStorage.getItem(key)
-  const n = raw ? Number(raw) : NaN
-  return Number.isFinite(n) ? n : fallback
-}
-
-function writeWidth(key: string, value: number): void {
-  try {
-    localStorage.setItem(key, String(value))
-  } catch {
-    // ignore
-  }
-}
 
 function healthColor(status: string | undefined): string {
   if (status === 'running' || status === 'ready' || status === 'executing') return 'var(--success)'
   if (status === 'provisioning') return 'var(--warning)'
   return 'var(--danger)'
 }
+
+function loadLayout(key: string): Layout | undefined {
+  try {
+    const raw = localStorage.getItem(key)
+    return raw ? (JSON.parse(raw) as Layout) : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function saveLayout(key: string, layout: Layout): void {
+  try {
+    localStorage.setItem(key, JSON.stringify(layout))
+  } catch {
+    // ignore quota / unavailability
+  }
+}
+
+const COLS_KEY = 'workspace_layout_cols'
+const ROWS_KEY = 'workspace_layout_rows'
 
 export function Workspace() {
   const { workspaceId = '' } = useParams()
@@ -62,44 +66,17 @@ export function Workspace() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
 
-  const [rightTab, setRightTab] = useState<RightTab>('timeline')
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('output')
+  const [explorerCollapsed, setExplorerCollapsed] = useState(false)
+  const explorerPanel = usePanelRef()
+
+  // Persisted pane layouts.
+  const [colsLayout] = useState<Layout | undefined>(() => loadLayout(COLS_KEY))
+  const [rowsLayout] = useState<Layout | undefined>(() => loadLayout(ROWS_KEY))
 
   // Single multiplexed socket for the whole IDE + tab session recovery.
   useWorkspaceSocket(workspaceId)
   useWorkspaceTabs(workspaceId)
-
-  // Resizable side panels (persisted).
-  const [leftWidth, setLeftWidth] = useState(() => readWidth('workspace_left_w', 250))
-  const [rightWidth, setRightWidth] = useState(() => readWidth('workspace_right_w', 350))
-
-  const startDrag = (side: 'left' | 'right') => (e: React.MouseEvent) => {
-    e.preventDefault()
-    const startX = e.clientX
-    const startLeft = leftWidth
-    const startRight = rightWidth
-    const onMove = (ev: MouseEvent) => {
-      const dx = ev.clientX - startX
-      if (side === 'left') setLeftWidth(clamp(startLeft + dx, 180, 480))
-      else setRightWidth(clamp(startRight - dx, 260, 620))
-    }
-    const onUp = () => {
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      window.removeEventListener('mousemove', onMove)
-      window.removeEventListener('mouseup', onUp)
-    }
-    document.body.style.cursor = 'col-resize'
-    document.body.style.userSelect = 'none'
-    window.addEventListener('mousemove', onMove)
-    window.addEventListener('mouseup', onUp)
-  }
-
-  useEffect(() => {
-    writeWidth('workspace_left_w', leftWidth)
-  }, [leftWidth])
-  useEffect(() => {
-    writeWidth('workspace_right_w', rightWidth)
-  }, [rightWidth])
 
   const { data: treeData, isLoading: treeLoading } = useGetFileTreeQuery(workspaceId, {
     skip: !workspaceId,
@@ -120,11 +97,20 @@ export function Workspace() {
   const connectionStatus = useAppSelector((s) => s.workspaceEditor.connectionStatus)
   const openFiles = useAppSelector((s) => s.workspaceEditor.openFiles)
 
-  // Measure the explorer area so react-window gets a concrete height.
-  const explorerRef = useRef<HTMLDivElement>(null)
+  // Git decorations for the explorer (path → change kind).
+  const decorations = useMemo<GitDecorations>(() => {
+    const m = new Map<string, 'staged' | 'modified' | 'untracked'>()
+    gitStatus?.untracked?.forEach((p) => m.set(p, 'untracked'))
+    gitStatus?.modified?.forEach((p) => m.set(p, 'modified'))
+    gitStatus?.staged?.forEach((p) => m.set(p, 'staged'))
+    return m
+  }, [gitStatus])
+
+  // Measure the explorer body so react-window gets a concrete height.
+  const explorerBodyRef = useRef<HTMLDivElement>(null)
   const [explorerHeight, setExplorerHeight] = useState(300)
   useLayoutEffect(() => {
-    const el = explorerRef.current
+    const el = explorerBodyRef.current
     if (!el) return
     const ro = new ResizeObserver((entries) => {
       const h = entries[0]?.contentRect.height
@@ -133,6 +119,18 @@ export function Workspace() {
     ro.observe(el)
     return () => ro.disconnect()
   }, [])
+
+  const toggleExplorer = () => {
+    const p = explorerPanel.current
+    if (!p) return
+    if (p.isCollapsed()) {
+      p.expand()
+      setExplorerCollapsed(false)
+    } else {
+      p.collapse()
+      setExplorerCollapsed(true)
+    }
+  }
 
   const reconnecting = connectionStatus === 'connecting' || connectionStatus === 'disconnected'
   const containerStatus = health?.container.status
@@ -143,8 +141,11 @@ export function Workspace() {
 
   return (
     <div className={styles.root}>
-      {/* Toolbar */}
+      {/* ── Toolbar ─────────────────────────────────────────────────────── */}
       <div className={styles.toolbar}>
+        <button className={styles.iconBtn} onClick={toggleExplorer} title="Toggle Explorer" aria-pressed={!explorerCollapsed}>
+          <Icon name="sidebar" size={15} />
+        </button>
         <button className={styles.back} onClick={() => (taskId ? navigate(`/mission/${taskId}`) : navigate(ROUTES.root))}>
           <Icon name="chevronLeft" size={14} /> Back
         </button>
@@ -166,77 +167,110 @@ export function Workspace() {
         </div>
       )}
 
-      {/* Body */}
+      {/* ── Body: resizable panes ───────────────────────────────────────── */}
       <div className={styles.body}>
-        {/* Left */}
-        <aside className={styles.left} style={{ width: leftWidth }}>
-          <div className={styles.sectionHeader}>Explorer</div>
-          <div ref={explorerRef} className={styles.explorer}>
-            {treeLoading ? (
-              <div className={styles.center}><Spinner size={16} /></div>
-            ) : (
-              <FileExplorer workspaceId={workspaceId} height={explorerHeight} />
-            )}
-          </div>
-          <div className={styles.gitMini}>
-            <Icon name="branch" size={12} /> {gitStatus?.branch ?? '—'}
-            <span className={styles.gitMiniCount}>{gitCounts} changed</span>
-          </div>
-        </aside>
-
-        <div
-          className={styles.resizer}
-          onMouseDown={startDrag('left')}
-          role="separator"
-          aria-orientation="vertical"
-        />
-
-        {/* Center */}
-        <main className={styles.center}>
-          <CodeEditor workspaceId={workspaceId} />
-        </main>
-
-        <div
-          className={styles.resizer}
-          onMouseDown={startDrag('right')}
-          role="separator"
-          aria-orientation="vertical"
-        />
-
-        {/* Right */}
-        <aside className={styles.right} style={{ width: rightWidth }}>
-          <div className={styles.rightTabs}>
-            {RIGHT_TABS.map((t) => (
-              <button
-                key={t.id}
-                className={`${styles.rightTab} ${rightTab === t.id ? styles.rightTabActive : ''}`}
-                onClick={() => setRightTab(t.id)}
-                title={t.label}
-              >
-                <Icon name={t.icon} size={13} />
-                <span>{t.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className={styles.rightBody}>
-            {/* Terminal stays mounted so its session + xterm survive tab switches. */}
-            <div style={{ display: rightTab === 'terminal' ? 'block' : 'none', height: '100%' }}>
-              <TerminalPanel workspaceId={workspaceId} active={rightTab === 'terminal'} />
+        <Group
+          orientation="horizontal"
+          id="ws-cols"
+          className={styles.group}
+          defaultLayout={colsLayout}
+          onLayoutChanged={(l) => saveLayout(COLS_KEY, l)}
+        >
+          {/* Explorer (collapsible) */}
+          <Panel
+            id="explorer"
+            className={styles.pane}
+            panelRef={explorerPanel}
+            collapsible
+            collapsedSize={0}
+            minSize="12"
+            defaultSize="18"
+            onResize={(s) => setExplorerCollapsed(s.asPercentage < 1)}
+          >
+            <div className={styles.paneHeader}>
+              <span>Explorer</span>
             </div>
-            {rightTab === 'timeline' && <TimelinePanel />}
-            {rightTab === 'ai' && <AIActivityFeed />}
-            {rightTab === 'diagnostics' && <DiagnosticsPanel workspaceId={workspaceId} />}
-            {rightTab === 'git' && <GitPanel workspaceId={workspaceId} />}
-          </div>
-        </aside>
+            <div ref={explorerBodyRef} className={styles.explorerBody}>
+              {treeLoading ? (
+                <div className={styles.centerFill}><Spinner size={16} /></div>
+              ) : (
+                <FileExplorer workspaceId={workspaceId} height={explorerHeight} decorations={decorations} />
+              )}
+            </div>
+            <div className={styles.gitMini}>
+              <Icon name="branch" size={12} /> {gitStatus?.branch ?? '—'}
+              <span className={styles.gitMiniCount}>{gitCounts} changed</span>
+            </div>
+          </Panel>
+
+          <Separator className={styles.sepV} />
+
+          {/* Center: editor over terminal */}
+          <Panel id="center" className={styles.pane} minSize="30">
+            <Group
+              orientation="vertical"
+              id="ws-rows"
+              className={styles.group}
+              defaultLayout={rowsLayout}
+              onLayoutChanged={(l) => saveLayout(ROWS_KEY, l)}
+            >
+              <Panel id="editor" className={styles.pane} minSize="20" defaultSize="70">
+                <CodeEditor workspaceId={workspaceId} />
+              </Panel>
+
+              <Separator className={styles.sepH} />
+
+              <Panel id="terminal" className={styles.pane} minSize="8" defaultSize="30">
+                <div className={styles.paneHeader}>
+                  <Icon name="tool" size={12} /> <span>Terminal</span>
+                </div>
+                <div className={styles.terminalBody}>
+                  <TerminalPanel workspaceId={workspaceId} active />
+                </div>
+              </Panel>
+            </Group>
+          </Panel>
+
+          <Separator className={styles.sepV} />
+
+          {/* Right sidebar: Timeline / AI / Problems / Git */}
+          <Panel id="sidebar" className={styles.pane} minSize="14" defaultSize="22">
+            <div className={styles.sidebarTabs}>
+              {SIDEBAR_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  className={`${styles.sidebarTab} ${sidebarTab === t.id ? styles.sidebarTabActive : ''}`}
+                  onClick={() => setSidebarTab(t.id)}
+                  title={t.label}
+                >
+                  <Icon name={t.icon} size={13} />
+                  <span>{t.label}</span>
+                </button>
+              ))}
+            </div>
+            <div className={styles.sidebarBody}>
+              {/* Output stays mounted so xterm keeps its buffer across tab switches. */}
+              <div style={{ display: sidebarTab === 'output' ? 'block' : 'none', height: '100%' }}>
+                <OutputPanel active={sidebarTab === 'output'} />
+              </div>
+              {sidebarTab === 'timeline' && <TimelinePanel />}
+              {sidebarTab === 'ai' && <AIActivityFeed />}
+              {sidebarTab === 'diagnostics' && <DiagnosticsPanel workspaceId={workspaceId} />}
+              {sidebarTab === 'git' && <GitPanel workspaceId={workspaceId} />}
+            </div>
+          </Panel>
+        </Group>
       </div>
 
-      {/* Status bar */}
+      {/* ── Status bar ──────────────────────────────────────────────────── */}
       <div className={styles.statusBar}>
-        <span><Icon name="branch" size={11} /> {gitStatus?.branch ?? '—'}</span>
         <span className={styles.statusConn} data-status={connectionStatus}>
-          {connectionStatus === 'connected' ? '● connected' : `● ${connectionStatus}`}
+          <span className={styles.statusDot} style={{ background: healthColor(containerStatus) }} />
+          {connectionStatus}
         </span>
+        <span><Icon name="branch" size={11} /> {gitStatus?.branch ?? '—'}</span>
+        <span>{gitCounts} changes</span>
+        <div className={styles.toolbarSpacer} />
         <span>{openFiles.length} open</span>
       </div>
     </div>

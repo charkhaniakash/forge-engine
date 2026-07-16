@@ -14,6 +14,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: '0.0.0.0',
     proxy: {
       // REST + WebSocket both live under /v1 on the Go backend.
       '/v1': {

@@ -22,7 +22,7 @@ const slice = createSlice({
     terminalCreated(state, action: PayloadAction<{ id: string; status?: string }>) {
       const { id, status = 'active' } = action.payload
       state.sessions[id] = { id, status }
-      if (!state.activeTerminalId) state.activeTerminalId = id
+      state.activeTerminalId = id
       if (!state.output[id]) state.output[id] = []
     },
     terminalClosed(state, action: PayloadAction<string>) {

@@ -639,9 +639,19 @@ def route_after_result(state: ExecutionState) -> str:
         return "already_satisfied"
 
     result: ToolCallResult | None = state.get("latest_tool_result")
-    # If the tool failed with a hard error, stop the step.
+    # A failed tool call (e.g. read_file on a wrong path) is NOT a reason to end
+    # the step doing nothing — let the model see the error and retry with a
+    # corrected path (it has the directory listing to self-correct). The
+    # repeated-tool and max-iteration guards in node_reason bound any looping,
+    # and the model can still emit execution_error/requires_human itself if it
+    # genuinely cannot proceed.
     if result and not result.success and result.error:
-        return "complete_step"
+        logger.info(
+            "route_after_result_tool_failed_retrying",
+            step_id=state["ctx"].step_id,
+            error=str(result.error)[:200],
+        )
+        return "reason"
     # Continue reasoning loop.
     return "reason"
 
@@ -667,4 +677,21 @@ def _format_context(retrieved_context: list[dict]) -> str:
         if entry.get("exists") and entry.get("content"):
             header = f"// File: {entry['path']}"
             parts.append(f"{header}\n```\n{entry['content']}\n```")
+        elif entry.get("exists") is False:
+            # Missing planned file — tell the model, and show the real files in
+            # that directory so it can pick the correct one (the planner often
+            # gets the extension wrong, e.g. App.tsx vs App.jsx).
+            path = entry.get("path", "")
+            siblings = entry.get("siblings") or []
+            note = f"// NOTE: {path} does not exist."
+            if siblings:
+                listing = ", ".join(siblings)
+                note += (
+                    f" Directory '{entry.get('dir', '.')}' actually contains: {listing}.\n"
+                    f"// If one of these is the file the step means (e.g. a different extension), "
+                    f"read and edit THAT file instead of assuming {path}."
+                )
+            else:
+                note += " Create it if the step requires a new file."
+            parts.append(note)
     return "\n\n".join(parts)

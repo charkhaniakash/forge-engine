@@ -2,41 +2,49 @@ package browserworkspace
 
 import (
 	"encoding/json"
+	"strings"
 
 	"go.uber.org/zap"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/execution"
+	"github.com/charkhaniakash/forge-engine/backend/internal/validation"
 )
 
 // EventBridge forwards events from existing orchestrators (execution, validation,
 // repair, publishing) into the unified workspace gateway so that browser clients
 // see AI activity, timeline events, and diagnostics in real-time.
 //
-// Design: Each wrapper binds the workspaceID at creation time. The caller (main.go)
-// knows the workspaceID when constructing the closure, so we avoid any runtime lookup.
-// All wrappers follow the same pattern:
-//   1. Call the original publisher (preserves existing per-phase WebSocket behavior)
-//   2. Forward to the browser workspace gateway (adds unified browser stream)
+// Design: Each phase's publisher is wrapped. The wrapper:
+//   1. Calls the original publisher (preserves existing per-phase WebSocket behavior)
+//   2. Resolves the workspaceID from a per-phase registry (populated by OnStart hooks)
+//   3. Forwards to the browser workspace gateway
 //
 // Event lifecycle contract for every phase:
 //   phase_started → progress events → phase_completed | phase_failed
 type EventBridge struct {
-	gateway            *Gateway
+	gateway              *Gateway
 	executionWorkspaces map[string]string // taskExecutionID → workspaceID
-	logger             *zap.SugaredLogger
+	validationWorkspaces map[string]string // validationRunID → workspaceID
+	repairWorkspaces     map[string]string // repairSessionID → workspaceID
+	publishingWorkspaces map[string]string // publishingSessionID → workspaceID
+	logger               *zap.SugaredLogger
 }
 
 // NewEventBridge creates an event bridge.
 func NewEventBridge(gateway *Gateway, logger *zap.SugaredLogger) *EventBridge {
 	return &EventBridge{
-		gateway:            gateway,
+		gateway:              gateway,
 		executionWorkspaces: make(map[string]string),
-		logger:             logger,
+		validationWorkspaces: make(map[string]string),
+		repairWorkspaces:     make(map[string]string),
+		publishingWorkspaces: make(map[string]string),
+		logger:               logger,
 	}
 }
 
+// ── Execution registry ────────────────────────────────────────────────────────
+
 // RegisterExecution maps a task execution ID to its workspace ID.
-// Called when execution starts so the execution publisher can resolve workspace.
 func (eb *EventBridge) RegisterExecution(taskExecutionID, workspaceID string) {
 	eb.executionWorkspaces[taskExecutionID] = workspaceID
 }
@@ -44,6 +52,62 @@ func (eb *EventBridge) RegisterExecution(taskExecutionID, workspaceID string) {
 // UnregisterExecution removes the mapping when execution completes.
 func (eb *EventBridge) UnregisterExecution(taskExecutionID string) {
 	delete(eb.executionWorkspaces, taskExecutionID)
+}
+
+// ── Validation registry ──────────────────────────────────────────────────────
+
+// RegisterValidation maps a validation run ID to its workspace ID.
+func (eb *EventBridge) RegisterValidation(validationRunID, workspaceID string) {
+	eb.validationWorkspaces[validationRunID] = workspaceID
+}
+
+// UnregisterValidation removes the mapping when validation completes.
+func (eb *EventBridge) UnregisterValidation(validationRunID string) {
+	delete(eb.validationWorkspaces, validationRunID)
+}
+
+// ── Repair registry ───────────────────────────────────────────────────────────
+
+// RegisterRepair maps a repair session ID to its workspace ID.
+func (eb *EventBridge) RegisterRepair(sessionID, workspaceID string) {
+	eb.repairWorkspaces[sessionID] = workspaceID
+}
+
+// UnregisterRepair removes the mapping when repair completes.
+func (eb *EventBridge) UnregisterRepair(sessionID string) {
+	delete(eb.repairWorkspaces, sessionID)
+}
+
+// ── Publishing registry ────────────────────────────────────────────────────────
+
+// RegisterPublishing maps a publishing session ID to its workspace ID.
+func (eb *EventBridge) RegisterPublishing(sessionID, workspaceID string) {
+	eb.publishingWorkspaces[sessionID] = workspaceID
+}
+
+// UnregisterPublishing removes the mapping when publishing completes.
+func (eb *EventBridge) UnregisterPublishing(sessionID string) {
+	delete(eb.publishingWorkspaces, sessionID)
+}
+
+// ── Planning marker ───────────────────────────────────────────────────────────
+
+// EmitPlanningMarker emits completed planning phase entries into the workspace
+// timeline. Called at execution start (when the workspace exists), it presents
+// the already-completed planning phase as the first timeline entry so the user
+// sees the full lifecycle: Planning → Executing → Validation → …
+//
+// The live thinking stream remains on the dedicated task WebSocket unchanged.
+func (eb *EventBridge) EmitPlanningMarker(workspaceID string) {
+	eb.gateway.Publish(workspaceID, ChTimeline, "phase_started", map[string]interface{}{
+		"phase":   "planning",
+		"status":  "completed",
+		"message": "Planning completed — execution starting",
+	})
+	eb.gateway.Publish(workspaceID, ChTimeline, "phase_completed", map[string]interface{}{
+		"phase":  "planning",
+		"status": "success",
+	})
 }
 
 // ── Execution (Phase 7) ─────────────────────────────────────────────────────
@@ -67,8 +131,6 @@ func (eb *EventBridge) WrapExecutionPublisher(
 		// 2. Resolve workspace ID from registry
 		workspaceID, ok := eb.executionWorkspaces[taskExecutionID]
 		if !ok || workspaceID == "" {
-			// Not registered yet — skip (common for the first few events
-			// before the handler registers it; they'll be in the existing WS stream anyway)
 			return
 		}
 
@@ -83,17 +145,43 @@ func (eb *EventBridge) WrapExecutionPublisher(
 			eb.gateway.Publish(workspaceID, ChAIActivity, "phase_started", map[string]interface{}{
 				"phase": "executing",
 			})
+			// Mark the run as live so the browser IDE shows the pause/stop controls.
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "running",
+				"message": "Execution running",
+			})
 
 		case "exec_complete":
 			eb.gateway.Publish(workspaceID, ChTimeline, "phase_completed", map[string]interface{}{
 				"phase":  "executing",
 				"status": "success",
 			})
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status": "completed",
+			})
 
 		case "exec_cancelled":
 			eb.gateway.Publish(workspaceID, ChTimeline, "phase_completed", map[string]interface{}{
 				"phase":  "executing",
 				"status": "cancelled",
+			})
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status": "stopped",
+			})
+
+		// Pause/resume are driven by the collaborate endpoints, but the
+		// orchestrator emits these when it actually holds/continues between
+		// steps — bridge them so the collaboration status stays authoritative.
+		case "exec_paused":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "paused",
+				"message": event.Message,
+			})
+
+		case "exec_resumed":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "running",
+				"message": event.Message,
 			})
 
 		case "execution_error", "error":
@@ -103,6 +191,10 @@ func (eb *EventBridge) WrapExecutionPublisher(
 				"message": event.Message,
 			})
 			eb.gateway.Publish(workspaceID, ChAIActivity, "error", map[string]interface{}{
+				"message": event.Message,
+			})
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "stopped",
 				"message": event.Message,
 			})
 
@@ -223,20 +315,34 @@ func (eb *EventBridge) WrapExecutionPublisher(
 
 // ── Validation (Phase 8) ────────────────────────────────────────────────────
 
-// WrapValidationPublisher returns a function that forwards validation events
-// to the browser workspace gateway. The validation orchestrator doesn't use
-// a typed publisher interface — it publishes directly to its own WebSocket hub.
-// This wrapper is called from the validation trigger closure in main.go.
+// WrapValidationPublisher returns a new ValidationEventPublisher that forwards
+// validation events to the browser workspace gateway IN ADDITION to calling the
+// original. It resolves workspaceID from the validationWorkspaces registry by
+// runID (populated by the orchestrator's OnStart hook).
 //
 // Lifecycle: validation_start → stage_start/complete → validation_complete
-func (eb *EventBridge) WrapValidationPublisher(workspaceID string) func(event string, payload map[string]interface{}) {
-	return func(event string, payload map[string]interface{}) {
-		switch event {
+func (eb *EventBridge) WrapValidationPublisher(
+	original validation.ValidationEventPublisher,
+) validation.ValidationEventPublisher {
+	return func(runID string, eventType string, payload map[string]interface{}) {
+		// 1. Call original (sends to per-run validation WebSocket)
+		if original != nil {
+			original(runID, eventType, payload)
+		}
+
+		// 2. Resolve workspace ID from registry
+		workspaceID, ok := eb.validationWorkspaces[runID]
+		if !ok || workspaceID == "" {
+			return
+		}
+
+		// 3. Forward to browser workspace gateway
+		switch eventType {
 		case "validation_start":
 			eb.gateway.Publish(workspaceID, ChTimeline, "phase_started", map[string]interface{}{
-				"phase":   "validation",
-				"status":  "running",
-				"stack":   payload["stack"],
+				"phase":  "validation",
+				"status": "running",
+				"stack":  payload["stack"],
 				"profile": payload["profile"],
 			})
 			eb.gateway.Publish(workspaceID, ChDiagnostics, "run_started", payload)
@@ -246,6 +352,17 @@ func (eb *EventBridge) WrapValidationPublisher(workspaceID string) func(event st
 			eb.gateway.Publish(workspaceID, ChAIActivity, "validation_stage", map[string]interface{}{
 				"stage":  payload["stage"],
 				"status": "running",
+			})
+			// Send command header to terminal
+			stage, _ := payload["stage"].(string)
+			command, _ := payload["command"].([]string)
+			cmdStr := ""
+			if len(command) > 0 {
+				cmdStr = " — " + strings.Join(command, " ")
+			}
+			eb.gateway.Publish(workspaceID, ChTerminal, "output", map[string]interface{}{
+				"terminal_id": "agent",
+				"data":        "\r\n\x1b[1;33m$ " + stage + cmdStr + "\x1b[0m\r\n",
 			})
 
 		case "stage_complete":
@@ -258,6 +375,12 @@ func (eb *EventBridge) WrapValidationPublisher(workspaceID string) func(event st
 
 		case "stage_output":
 			eb.gateway.Publish(workspaceID, ChDiagnostics, "stage_output", payload)
+			// Also send to terminal channel so agent commands appear in user's interactive terminal
+			// Use a special terminal_id "agent" for system/agent output
+			eb.gateway.Publish(workspaceID, ChTerminal, "output", map[string]interface{}{
+				"terminal_id": "agent",
+				"data":        payload["chunk"],
+			})
 
 		case "stage_diagnostics":
 			eb.gateway.Publish(workspaceID, ChDiagnostics, "items_added", payload)
@@ -272,6 +395,13 @@ func (eb *EventBridge) WrapValidationPublisher(workspaceID string) func(event st
 				"overall": payload["overall"],
 			})
 			eb.gateway.Publish(workspaceID, ChDiagnostics, "run_completed", payload)
+
+		case "error":
+			eb.gateway.Publish(workspaceID, ChTimeline, "phase_completed", map[string]interface{}{
+				"phase":   "validation",
+				"status":  "failed",
+				"message": payload["message"],
+			})
 		}
 	}
 }
@@ -279,12 +409,13 @@ func (eb *EventBridge) WrapValidationPublisher(workspaceID string) func(event st
 // ── Repair (Phase 9) ────────────────────────────────────────────────────────
 
 // WrapRepairPublisher wraps the repair orchestrator's publish function to also
-// forward events to the browser workspace gateway.
+// forward events to the browser workspace gateway. It resolves workspaceID from
+// the repairWorkspaces registry by sessionID (populated by the orchestrator's
+// OnStart hook).
 //
 // Lifecycle: repair_started → attempt_started → reasoning/tool events → attempt_complete → repair_complete|repair_escalated
 func (eb *EventBridge) WrapRepairPublisher(
 	original func(sessionID, eventType string, payload map[string]interface{}),
-	workspaceID string,
 ) func(sessionID, eventType string, payload map[string]interface{}) {
 	return func(sessionID, eventType string, payload map[string]interface{}) {
 		// 1. Call original (sends to per-session repair WebSocket)
@@ -292,7 +423,13 @@ func (eb *EventBridge) WrapRepairPublisher(
 			original(sessionID, eventType, payload)
 		}
 
-		// 2. Forward to browser workspace gateway
+		// 2. Resolve workspace ID from registry
+		workspaceID, ok := eb.repairWorkspaces[sessionID]
+		if !ok || workspaceID == "" {
+			return
+		}
+
+		// 3. Forward to browser workspace gateway
 		switch eventType {
 		// ── Lifecycle ──
 		case "repair_started":
@@ -390,13 +527,14 @@ func (eb *EventBridge) WrapRepairPublisher(
 
 // ── Publishing (Phase 10) ───────────────────────────────────────────────────
 
-// WrapPublishingPublisher wraps the publishing orchestrator's publish function
-// to forward events to the browser workspace gateway.
+// WrapPublishingPublisher wraps the publishing orchestrator's publish function to
+// forward events to the browser workspace gateway. It resolves workspaceID from
+// the publishingWorkspaces registry by sessionID (populated by the orchestrator's
+// OnStart hook).
 //
 // Lifecycle: publishing_started → step progress → publishing_complete
 func (eb *EventBridge) WrapPublishingPublisher(
 	original func(sessionID, eventType string, payload map[string]interface{}),
-	workspaceID string,
 ) func(sessionID, eventType string, payload map[string]interface{}) {
 	return func(sessionID, eventType string, payload map[string]interface{}) {
 		// 1. Call original (sends to per-session publishing WebSocket)
@@ -404,7 +542,13 @@ func (eb *EventBridge) WrapPublishingPublisher(
 			original(sessionID, eventType, payload)
 		}
 
-		// 2. Forward to browser workspace gateway
+		// 2. Resolve workspace ID from registry
+		workspaceID, ok := eb.publishingWorkspaces[sessionID]
+		if !ok || workspaceID == "" {
+			return
+		}
+
+		// 3. Forward to browser workspace gateway
 		switch eventType {
 		case "publishing_progress":
 			step, _ := payload["step"].(string)

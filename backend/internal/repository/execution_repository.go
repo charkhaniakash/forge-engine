@@ -153,6 +153,27 @@ func (r *ExecutionRepository) MarkCancelled(ctx context.Context, id string) erro
 	return err
 }
 
+// MarkPaused transitions a running execution to paused.
+// The orchestrator spin-waits on this status between steps until resumed.
+func (r *ExecutionRepository) MarkPaused(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE task_executions
+		SET status = 'paused', updated_at = NOW()
+		WHERE id = $1 AND status = 'running'
+	`, id)
+	return err
+}
+
+// MarkResumed transitions a paused execution back to running.
+func (r *ExecutionRepository) MarkResumed(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE task_executions
+		SET status = 'running', updated_at = NOW()
+		WHERE id = $1 AND status = 'paused'
+	`, id)
+	return err
+}
+
 // ── StepExecution ─────────────────────────────────────────────────────────────
 
 // CreateStepExecution inserts a step_execution in 'pending' status.

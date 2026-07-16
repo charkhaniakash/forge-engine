@@ -68,10 +68,24 @@
 .treeName {
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1 1 auto;
 }
 .spacer {
   flex: 0 0 auto;
 }
+
+/* ── Git decorations (explorer) ─────────────────────────────────────────────── */
+.decorMark {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+}
+.decorModified { color: var(--warning); }
+.decorUntracked { color: var(--success); }
+.decorStaged { color: var(--success); }
 
 /* ── Git summary ───────────────────────────────────────────────────────────── */
 

@@ -152,6 +152,22 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 			return
 		}
 
+		// ── Pause check ───────────────────────────────────────────────────────
+		// If the user paused, block here (between steps) until they resume or
+		// cancel. waitForResume polls the execution status.
+		if o.isPaused(ctx, execID) {
+			log.Infow("execution_paused_between_steps")
+			o.publishLifecycle(execID, "exec_paused", "Execution paused by user")
+			if cancelled := o.waitForResume(ctx, execID); cancelled {
+				log.Infow("execution_cancelled_while_paused")
+				_ = o.execRepo.MarkCancelled(ctx, execID)
+				o.publishLifecycle(execID, "exec_cancelled", "Execution cancelled by user")
+				return
+			}
+			log.Infow("execution_resumed")
+			o.publishLifecycle(execID, "exec_resumed", "Execution resumed")
+		}
+
 		// ── Dependency skip check ─────────────────────────────────────────────
 		// If any prerequisite step deviated or failed, skip this step rather
 		// than executing it and producing a meaningless deviation.
@@ -522,6 +538,34 @@ func (o *ExecutionOrchestrator) isCancelled(ctx context.Context, execID string) 
 		return false
 	}
 	return exec.Status == "cancelled"
+}
+
+// isPaused checks whether the execution has been paused by a user.
+func (o *ExecutionOrchestrator) isPaused(ctx context.Context, execID string) bool {
+	exec, err := o.execRepo.GetExecution(ctx, execID)
+	if err != nil {
+		return false
+	}
+	return exec.Status == "paused"
+}
+
+// waitForResume blocks until a paused execution is resumed or cancelled.
+// Called between steps when isPaused returns true.
+func (o *ExecutionOrchestrator) waitForResume(ctx context.Context, execID string) (cancelled bool) {
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			return true
+		}
+		if o.isCancelled(ctx, execID) {
+			return true
+		}
+		if !o.isPaused(ctx, execID) {
+			return false
+		}
+		<-ticker.C
+	}
 }
 
 // publishLifecycle sends a synthetic lifecycle event to the WebSocket hub.

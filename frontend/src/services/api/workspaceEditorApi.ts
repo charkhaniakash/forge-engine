@@ -21,6 +21,7 @@ export const workspaceEditorApi = baseApi.injectEndpoints({
     getFileContent: builder.query<FileContent, { workspaceId: string; path: string }>({
       query: ({ workspaceId, path }) =>
         `/workspace/${workspaceId}/files/${encodePath(path)}`,
+      providesTags: (_r, _e, { path }) => [{ type: 'WsFileContent', id: path }],
     }),
     writeFile: builder.mutation<
       { written: number },
@@ -31,6 +32,10 @@ export const workspaceEditorApi = baseApi.injectEndpoints({
         method: 'PUT',
         body: { content },
       }),
+      invalidatesTags: (_r, _e, { path }) => [
+        { type: 'WsFileContent', id: path },
+        'WsGit',
+      ],
     }),
     createTerminal: builder.mutation<
       TerminalSession,

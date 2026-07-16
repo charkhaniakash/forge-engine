@@ -82,6 +82,10 @@ export class WorkspaceSocketManager {
   private open(): void {
     this.emitStatus('connecting')
     const url = `${websocketBase()}/workspace/${this.workspaceId}/stream?token=${encodeURIComponent(this.token)}`
+    console.log('[WorkspaceSocket] Opening tests WebSocket connection to', url)
+    console.log('[WorkspaceSocket] websocketBase:', websocketBase())
+    console.log('[WorkspaceSocket] workspaceId:', this.workspaceId)
+    console.log('[WorkspaceSocket] token length:', this.token.length)
     const ws = new WebSocket(url)
     this.ws = ws
 
@@ -110,6 +114,7 @@ export class WorkspaceSocketManager {
       } catch {
         return
       }
+      console.log('[WorkspaceSocket] Message received', { channel: env.ch, event: env.ev, seq: env.seq })
       if (typeof env.seq === 'number' && env.ch) {
         this.lastSeq.set(env.ch, env.seq)
       }
@@ -124,11 +129,19 @@ export class WorkspaceSocketManager {
       this.persistSession()
     }
 
-    ws.onerror = () => {
+    ws.onerror = (error) => {
+      console.error('[WorkspaceSocket] WebSocket error:', error)
+      console.error('[WorkspaceSocket] WebSocket readyState:', ws.readyState)
       this.emitStatus('error')
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
+      console.error('[WorkspaceSocket] WebSocket closed:', {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+        readyState: ws.readyState,
+      })
       this.ws = null
       if (this.closedByUser) return
       this.emitStatus('disconnected')
@@ -166,6 +179,7 @@ export class WorkspaceSocketManager {
 
   /** Subscribe a handler to a channel. Returns an unsubscribe function. */
   subscribe(channel: WSChannel | string, handler: EnvelopeHandler): () => void {
+    console.log('[WorkspaceSocket] Subscribing to channel', channel)
     let set = this.listeners.get(channel)
     if (!set) {
       set = new Set()
@@ -175,6 +189,7 @@ export class WorkspaceSocketManager {
 
     if (!this.subscribed.has(channel)) {
       this.subscribed.add(channel)
+      console.log('[WorkspaceSocket] Sending subscribe message for channel', channel)
       this.rawSend({ type: 'subscribe', channels: [channel] })
     }
 

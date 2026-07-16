@@ -33,6 +33,9 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
   const output = useAppSelector((s) =>
     activeTerminalId ? s.workspaceTerminal.output[activeTerminalId] ?? [] : [],
   )
+  console.log('[TerminalPanel] activeTerminalId:', activeTerminalId, 'output length:', output.length)
+  const agentOutput = useAppSelector((s) => s.workspaceTerminal.output['agent'] ?? [])
+  const agentWrittenRef = useRef(0)
 
   // Boot xterm + backend session once, only when the panel is visible & sized.
   useEffect(() => {
@@ -74,9 +77,22 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
       }
     })()
 
+    const sendResize = () => {
+      const id = terminalIdRef.current
+      const t = termRef.current
+      if (id && t) {
+        workspaceSocket.send('terminal', 'resize', {
+          terminal_id: id,
+          cols: t.cols,
+          rows: t.rows,
+        })
+      }
+    }
+
     const ro = new ResizeObserver(() => {
       try {
         fitRef.current?.fit()
+        sendResize()
       } catch {
         // xterm throws on a 0-size element (hidden tab) — ignore.
       }
@@ -105,6 +121,15 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
       requestAnimationFrame(() => {
         try {
           fitRef.current?.fit()
+          const id = terminalIdRef.current
+          const t = termRef.current
+          if (id && t) {
+            workspaceSocket.send('terminal', 'resize', {
+              terminal_id: id,
+              cols: t.cols,
+              rows: t.rows,
+            })
+          }
         } catch {
           /* ignore */
         }
@@ -116,11 +141,26 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
   useEffect(() => {
     const term = termRef.current
     if (!term) return
+    console.log('[TerminalPanel] Writing output to xterm', { from: writtenRef.current, to: output.length, chunks: output.length - writtenRef.current })
     for (let i = writtenRef.current; i < output.length; i++) {
       term.write(output[i])
     }
     writtenRef.current = output.length
   }, [output])
+
+  // Stream agent output (validation commands) into the same terminal
+  useEffect(() => {
+    const term = termRef.current
+    if (!term) return
+    if (agentOutput.length < agentWrittenRef.current) {
+      // Buffer was reset
+      agentWrittenRef.current = 0
+    }
+    for (let i = agentWrittenRef.current; i < agentOutput.length; i++) {
+      term.write(agentOutput[i])
+    }
+    agentWrittenRef.current = agentOutput.length
+  }, [agentOutput])
 
   return <div ref={containerRef} className={styles.terminalWrap} />
 }

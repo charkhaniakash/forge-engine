@@ -8,6 +8,21 @@ import { languageForPath } from './language'
 import type { FileNode } from '@/types/workspaceEditor'
 import styles from './workspace.module.css'
 
+export type GitChangeKind = 'staged' | 'modified' | 'untracked'
+/** Map of repo-relative path → git change kind, for explorer decorations. */
+export type GitDecorations = Map<string, GitChangeKind>
+
+const DECOR_MARK: Record<GitChangeKind, string> = {
+  staged: 'A',
+  modified: 'M',
+  untracked: 'U',
+}
+const DECOR_CLASS: Record<GitChangeKind, string> = {
+  staged: styles.decorStaged,
+  modified: styles.decorModified,
+  untracked: styles.decorUntracked,
+}
+
 interface FlatNode {
   node: FileNode
   depth: number
@@ -34,15 +49,18 @@ interface RowData {
   rows: FlatNode[]
   expanded: Set<string>
   activePath: string | null
+  decorations: GitDecorations
   onToggle: (path: string) => void
   onOpen: (node: FileNode) => void
 }
 
-function Row({ index, style, rows, expanded, activePath, onToggle, onOpen }: RowComponentProps<RowData>) {
+function Row({ index, style, rows, expanded, activePath, decorations, onToggle, onOpen }: RowComponentProps<RowData>) {
   const { node, depth } = rows[index]
   const isDir = node.type === 'directory'
   const isOpen = expanded.has(node.path)
   const active = node.path === activePath
+  const decor = !isDir ? decorations.get(node.path) : undefined
+  const decorCls = decor ? DECOR_CLASS[decor] : ''
   return (
     <div
       style={{ ...style, paddingLeft: `calc(${depth} * var(--space-4) + var(--space-2))` }}
@@ -58,12 +76,21 @@ function Row({ index, style, rows, expanded, activePath, onToggle, onOpen }: Row
         <span className={styles.spacer} style={{ width: 12 }} />
       )}
       <Icon name={isDir ? 'repo' : 'file'} size={13} />
-      <span className={styles.treeName}>{node.name}</span>
+      <span className={`${styles.treeName} ${decorCls}`}>{node.name}</span>
+      {decor && <span className={`${styles.decorMark} ${decorCls}`}>{DECOR_MARK[decor]}</span>}
     </div>
   )
 }
 
-export function FileExplorer({ workspaceId, height }: { workspaceId: string; height: number }) {
+export function FileExplorer({
+  workspaceId,
+  height,
+  decorations = new Map(),
+}: {
+  workspaceId: string
+  height: number
+  decorations?: GitDecorations
+}) {
   const dispatch = useAppDispatch()
   const fileTree = useAppSelector((s) => s.workspaceEditor.fileTree)
   const activePath = useAppSelector((s) => s.workspaceEditor.activeFilePath)
@@ -107,7 +134,7 @@ export function FileExplorer({ workspaceId, height }: { workspaceId: string; hei
       rowCount={rows.length}
       rowHeight={26}
       rowComponent={Row}
-      rowProps={{ rows, expanded, activePath, onToggle, onOpen }}
+      rowProps={{ rows, expanded, activePath, decorations, onToggle, onOpen }}
       style={{ height, width: '100%' }}
     />
   )

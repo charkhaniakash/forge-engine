@@ -5,9 +5,12 @@
  */
 
 const rawBackend = import.meta.env.VITE_BACKEND_URL ?? ''
+console.log('[config] VITE_BACKEND_URL:', import.meta.env.VITE_BACKEND_URL)
+console.log('[config] rawBackend:', rawBackend)
 
 /** Absolute or relative HTTP base for the REST API (no trailing slash). */
 export const BACKEND_URL = rawBackend.replace(/\/$/, '')
+console.log('[config] BACKEND_URL:', BACKEND_URL)
 
 /** API version prefix. */
 export const API_PREFIX = '/v1'
@@ -16,10 +19,12 @@ export const API_PREFIX = '/v1'
 export const API_BASE_URL = `${BACKEND_URL}${API_PREFIX}`
 
 /**
- * Derive the WebSocket origin from the HTTP origin. When BACKEND_URL is
- * relative we fall back to the current page origin at call time.
+ * Derive the WebSocket origin from the HTTP origin. Always use BACKEND_URL
+ * for WebSocket connections since they don't go through the Vite proxy.
  */
 export function websocketBase(): string {
+  // In Docker, VITE_BACKEND_URL should be set to http://localhost:8080
+  // If not set, fall back to window.location.origin (for local dev without Docker)
   const origin = BACKEND_URL || window.location.origin
   return origin.replace(/^http/, 'ws') + API_PREFIX
 }

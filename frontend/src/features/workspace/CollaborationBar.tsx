@@ -6,7 +6,7 @@ import {
   useStopExecutionMutation,
 } from '@/services/api/workspaceEditorApi'
 import { useToast } from '@/hooks/useToast'
-import styles from './Workspace.module.css'
+import styles from './workspace.module.css'
 
 const STATUS_LABEL: Record<string, string> = {
   running: 'Running',

@@ -271,6 +271,58 @@ func (h *Handlers) GetHealth(c *fiber.Ctx) error {
 	})
 }
 
+// GetProgress returns execution progress for the workspace.
+// GET /v1/workspace/:workspaceID/progress
+func (h *Handlers) GetProgress(c *fiber.Ctx) error {
+	workspaceID := c.Params("workspaceID")
+	ctx := c.Context()
+
+	// Find the workspace to get work_item_id
+	ws, err := h.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "workspace not found"})
+	}
+
+	// Get latest execution for this workspace
+	exec, err := h.execRepo.GetLatestForWorkItem(ctx, ws.WorkItemID)
+	if err != nil {
+		return c.JSON(fiber.Map{
+			"status":       "idle",
+			"current_step": 0,
+			"total_steps":  0,
+			"percent":      0,
+		})
+	}
+
+	// Get step count
+	steps, _ := h.execRepo.ListStepExecutions(ctx, exec.ID)
+	totalSteps := len(steps)
+	completedSteps := 0
+	currentStepName := ""
+	for _, s := range steps {
+		if s.Status == "completed" {
+			completedSteps++
+		}
+		if s.Status == "running" {
+			currentStepName = s.StepStableID
+		}
+	}
+
+	percent := 0
+	if totalSteps > 0 {
+		percent = (completedSteps * 100) / totalSteps
+	}
+
+	return c.JSON(fiber.Map{
+		"status":          exec.Status,
+		"current_step":    completedSteps + 1,
+		"total_steps":     totalSteps,
+		"percent":         percent,
+		"current_action":  currentStepName,
+		"execution_id":    exec.ID,
+	})
+}
+
 // ── Collaboration Endpoints ──────────────────────────────────────────────────
 
 // PauseExecution pauses the current execution.

@@ -352,6 +352,17 @@ func main() {
 					// doesn't fully resolve them (or validation couldn't even run) we
 					// proceed anyway. ForceToDone recovers the item even if an
 					// intermediate step marked it "failed".
+
+					// Phase 10B: Notify browser workspace that validation is starting
+					if bwGateway != nil {
+						bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_started", map[string]interface{}{
+							"phase": "validation", "status": "running",
+						})
+						bwGateway.Publish(workspaceID, browserworkspace.ChAIActivity, "validation_started", map[string]interface{}{
+							"message": "Running validation (build, test, lint)...",
+						})
+					}
+
 					log.Info("phase_8_auto_validation_starting")
 					validationRun, err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change")
 					if err != nil {
@@ -368,16 +379,47 @@ func main() {
 					}
 					log.Infow("phase_8_validation_complete", "overall_result", overallResult)
 
+					// Phase 10B: Notify browser workspace of validation completion
+					if bwGateway != nil {
+						bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
+							"phase": "validation", "status": "completed", "overall": overallResult,
+						})
+						bwGateway.Publish(workspaceID, browserworkspace.ChDiagnostics, "run_completed", map[string]interface{}{
+							"overall": overallResult, "run_id": validationRun.ID,
+						})
+					}
+
 					// Auto-repair repairable issues (best-effort). The RepairOrchestrator
 					// evaluates RepairPolicy and may mark the item failed internally on
 					// escalation / budget exhaustion — that's fine, ForceToDone below
 					// recovers it. We proceed regardless of the repair outcome.
 					if overallResult == "failed_repairable" {
 						log.Info("validation_failed_repairable_attempting_repair")
+
+						// Phase 10B: Notify browser workspace that repair is starting
+						if bwGateway != nil {
+							bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_started", map[string]interface{}{
+								"phase": "repair", "status": "running",
+							})
+							bwGateway.Publish(workspaceID, browserworkspace.ChAIActivity, "repair_started", map[string]interface{}{
+								"message": "Auto-repair starting...",
+							})
+						}
+
 						if repErr := repairOrch.Run(ctx, taskExecutionID, workspaceID, validationRun.ID, traceID); repErr != nil {
 							log.Warnw("repair_pass_incomplete_proceeding_anyway", "error", repErr)
+							if bwGateway != nil {
+								bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
+									"phase": "repair", "status": "failed",
+								})
+							}
 						} else {
 							log.Info("phase_9_repair_complete")
+							if bwGateway != nil {
+								bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
+									"phase": "repair", "status": "success",
+								})
+							}
 						}
 					}
 
@@ -387,6 +429,16 @@ func main() {
 					log.Infow("validation_advisory_marking_done", "advisory_result", overallResult)
 					if doneErr := workItemRepo.ForceToDone(ctx, workItemID); doneErr != nil {
 						log.Errorw("force_to_done_failed", "error", doneErr)
+					}
+
+					// Phase 10B: Notify browser workspace that the task is done
+					if bwGateway != nil {
+						bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
+							"phase": "done", "status": "success",
+						})
+						bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{
+							"status": "completed",
+						})
 					}
 				})
 
@@ -640,6 +692,7 @@ func main() {
 		app.Get("/v1/workspace/:workspaceID/git/status", middleware.RequireAuth(sugar), bwHandlers.GetGitStatus)
 		app.Get("/v1/workspace/:workspaceID/git/diff", middleware.RequireAuth(sugar), bwHandlers.GetGitDiff)
 		app.Get("/v1/workspace/:workspaceID/health", middleware.RequireAuth(sugar), bwHandlers.GetHealth)
+		app.Get("/v1/workspace/:workspaceID/progress", middleware.RequireAuth(sugar), bwHandlers.GetProgress)
 		app.Post("/v1/workspace/:workspaceID/collaborate/pause", middleware.RequireAuth(sugar), bwHandlers.PauseExecution)
 		app.Post("/v1/workspace/:workspaceID/collaborate/resume", middleware.RequireAuth(sugar), bwHandlers.ResumeExecution)
 		app.Post("/v1/workspace/:workspaceID/collaborate/stop", middleware.RequireAuth(sugar), bwHandlers.StopExecution)

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
+import { MissionHero } from '@/features/task-workspace/MissionHero'
 import { useRepairStream } from '@/features/task-workspace/useRepairStream'
 import {
   buildConversation,
@@ -459,34 +460,97 @@ export function TaskWorkspace() {
             ? (publishSession?.current_step ? `Publishing · ${publishSession.current_step}` : 'Publishing…')
             : undefined
 
+  // ── Hero: phase title + honest pipeline-position ring ─────────────────────
+  const heroProgress = missionFailed || missionDone
+    ? 1
+    : publishActive
+      ? 0.92
+      : repairing
+        ? 0.85
+        : valLiveState
+          ? 0.78
+          : execDone
+            ? 0.66
+            : isExecuting
+              ? 0.55
+              : status === 'plan_approved'
+                ? 0.34
+                : status === 'plan_ready'
+                  ? 0.22
+                  : isPlanningLive
+                    ? 0.12
+                    : 0.05
+  const heroTone: 'active' | 'success' | 'danger' | 'neutral' = missionFailed
+    ? 'danger'
+    : missionDone
+      ? 'success'
+      : live
+        ? 'active'
+        : 'neutral'
+  const heroTitle = isPlanningLive
+    ? 'Planning your changes'
+    : isExecuting
+      ? 'Writing code'
+      : valLiveState
+        ? 'Validating changes'
+        : repairing
+          ? 'Repairing issues'
+          : publishActive
+            ? 'Publishing to GitHub'
+            : missionDone
+              ? 'Mission complete'
+              : missionFailed
+                ? (status === 'cancelled' ? 'Mission cancelled' : 'Mission failed')
+                : canApprove
+                  ? 'Plan ready for your review'
+                  : canValidate
+                    ? 'Ready to validate'
+                    : canExecute
+                      ? 'Ready to execute'
+                      : 'Mission'
+
+  const hero = (
+    <MissionHero
+      title={heroTitle}
+      subtitle={task.intent}
+      progress={heroProgress}
+      live={live}
+      tone={heroTone}
+      right={
+        <>
+          <StatusBadge map={WORK_ITEM_STATUS} status={task.status} size="sm" />
+          {prUrl && (
+            <a className={styles.prChip} href={prUrl} target="_blank" rel="noreferrer">
+              <Icon name="git" size={13} /> {publishSession?.pr_number ? `#${publishSession.pr_number}` : 'PR'}
+            </a>
+          )}
+        </>
+      }
+    />
+  )
+
   const header = (
     <div className={styles.header}>
       <button className={styles.back} onClick={() => navigate(ROUTES.root)}>
         <Icon name="chevronLeft" size={14} /> Missions
       </button>
-      <h1 className={styles.intentTitle}>{task.intent}</h1>
+      <span className={styles.crumb}>Mission</span>
+      {live && (
+        <span className={styles.liveDot}>
+          <span />
+          {liveHint ?? 'live'}
+        </span>
+      )}
       <div className={styles.headerRight}>
         {workspace && (workspace.status === 'ready' || workspace.status === 'executing') && (
           <Button
             size="sm"
             variant="secondary"
             leadingIcon={<Icon name="code" size={14} />}
-            onClick={() => navigate(routeTo.workspaceEditor(workspace.id, taskId))}
+            onClick={() => navigate(routeTo.workspaceEditor(workspace.id, taskId, repoId))}
           >
             Open IDE
           </Button>
-        )}
-        <StatusBadge map={WORK_ITEM_STATUS} status={task.status} size="sm" />
-        {live && (
-          <span className={styles.liveDot}>
-            <span />
-            {liveHint ?? 'live'}
-          </span>
-        )}
-        {prUrl && (
-          <a className={styles.prChip} href={prUrl} target="_blank" rel="noreferrer">
-            <Icon name="git" size={13} /> {publishSession?.pr_number ? `#${publishSession.pr_number}` : 'PR'}
-          </a>
         )}
       </div>
     </div>
@@ -496,7 +560,8 @@ export function TaskWorkspace() {
     <>
       <MissionThread
         header={header}
-        entries={conversation}
+        hero={hero}
+        entries={conversation.filter((e) => e.type !== 'intent')}
         live={live}
         planActions={planActions}
         actionRow={actionRow}

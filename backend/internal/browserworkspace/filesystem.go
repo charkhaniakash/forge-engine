@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -37,15 +38,43 @@ type FilesystemService struct {
 	driver  *workspace.WorkspaceManager
 	gateway *Gateway
 	logger  *zap.SugaredLogger
+	// recentAIEvents tracks file paths recently emitted by the event bridge
+	// (AI writes). The watcher debounces these to avoid duplicate events.
+	recentAIEvents map[string]time.Time
+	aiEventsMu     sync.Mutex
 }
 
 // NewFilesystemService creates a filesystem service.
 func NewFilesystemService(driver *workspace.WorkspaceManager, gateway *Gateway, logger *zap.SugaredLogger) *FilesystemService {
 	return &FilesystemService{
-		driver:  driver,
-		gateway: gateway,
-		logger:  logger,
+		driver:         driver,
+		gateway:        gateway,
+		logger:         logger,
+		recentAIEvents: make(map[string]time.Time),
 	}
+}
+
+// MarkAIWrite records that a file was written by the AI, so the watcher
+// can skip emitting a duplicate event for it.
+func (fs *FilesystemService) MarkAIWrite(path string) {
+	fs.aiEventsMu.Lock()
+	fs.recentAIEvents[path] = time.Now()
+	fs.aiEventsMu.Unlock()
+}
+
+// isRecentAIWrite checks if a path was recently written by the AI (within 2s).
+func (fs *FilesystemService) isRecentAIWrite(path string) bool {
+	fs.aiEventsMu.Lock()
+	defer fs.aiEventsMu.Unlock()
+	t, ok := fs.recentAIEvents[path]
+	if !ok {
+		return false
+	}
+	if time.Since(t) > 2*time.Second {
+		delete(fs.recentAIEvents, path)
+		return false
+	}
+	return true
 }
 
 // GetFileTree returns the full recursive directory structure of the workspace.
@@ -214,6 +243,11 @@ func (fs *FilesystemService) StartWatcher(ctx context.Context, workspaceID strin
 			case strings.Contains(eventType, "MOVED_TO"):
 				fsEvent = "file_created"
 			default:
+				continue
+			}
+
+			// Skip if this file was recently written by the AI (event bridge already emitted)
+			if fs.isRecentAIWrite(relPath) {
 				continue
 			}
 

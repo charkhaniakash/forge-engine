@@ -42,6 +42,10 @@ export type IconName =
   | 'spinner'
   | 'code'
   | 'tool'
+  | 'pause'
+  | 'stop'
+  | 'sparkles'
+  | 'folder'
 
 const PATHS: Record<IconName, string> = {
   dashboard: 'M3 3h7v7H3zM14 3h7v4h-7zM14 10h7v11h-7zM3 14h7v7H3z',
@@ -82,6 +86,11 @@ const PATHS: Record<IconName, string> = {
   spinner: 'M12 3a9 9 0 1 0 9 9',
   code: 'M8 8l-4 4 4 4M16 8l4 4-4 4M13 5l-2 14',
   tool: 'M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18v3h3l6.3-6.3a4 4 0 0 0 5.4-5.4l-2.5 2.5-2-2z',
+  pause: 'M9 4v16M15 4v16',
+  stop: 'M6 6h12v12H6z',
+  sparkles:
+    'M12 3l1.7 4.5L18 9l-4.3 1.5L12 15l-1.7-4.5L6 9l4.3-1.5zM18 14l.9 2.3 2.1.7-2.1.7-.9 2.3-.9-2.3-2.1-.7 2.1-.7z',
+  folder: 'M3 6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
 }
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

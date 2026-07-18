@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Group, Panel, Separator, usePanelRef, type Layout } from 'react-resizable-panels'
 import { Icon, Spinner } from '@/components/common'
+import type { IconName } from '@/components/common'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { useWorkspaceSocket } from '@/hooks/useWorkspaceSocket'
 import { useWorkspaceTabs } from '@/hooks/useWorkspaceTabs'
@@ -15,23 +16,31 @@ import { FileExplorer, type GitDecorations } from '@/features/workspace/FileExpl
 import { CodeEditor } from '@/features/workspace/CodeEditor'
 import { TerminalPanel } from '@/features/workspace/TerminalPanel'
 import { TimelinePanel } from '@/features/workspace/TimelinePanel'
-import { AIActivityFeed } from '@/features/workspace/AIActivityFeed'
 import { OutputPanel } from '@/features/workspace/OutputPanel'
 import { GitPanel } from '@/features/workspace/GitPanel'
 import { DiagnosticsPanel } from '@/features/workspace/DiagnosticsPanel'
-import { CollaborationBar } from '@/features/workspace/CollaborationBar'
+import { AICollabPanel } from '@/features/workspace/AICollabPanel'
+import { useMissionPhase } from '@/features/workspace/useMissionPhase'
 import { ROUTES } from '@/constants/routes'
 import styles from './Workspace.module.css'
 
-type SidebarTab = 'timeline' | 'ai' | 'output' | 'git' | 'diagnostics'
+type BottomTab = 'terminal' | 'output' | 'problems' | 'git' | 'timeline'
 
-const SIDEBAR_TABS: Array<{ id: SidebarTab; label: string; icon: Parameters<typeof Icon>[0]['name'] }> = [
-  { id: 'output', label: 'Output', icon: 'tool' },
-  { id: 'timeline', label: 'Timeline', icon: 'clock' },
-  { id: 'ai', label: 'AI', icon: 'chat' },
-  { id: 'diagnostics', label: 'Problems', icon: 'alert' },
+const BOTTOM_TABS: Array<{ id: BottomTab; label: string; icon: IconName }> = [
+  { id: 'terminal', label: 'Terminal', icon: 'tool' },
+  { id: 'output', label: 'Output', icon: 'execution' },
+  { id: 'problems', label: 'Problems', icon: 'alert' },
   { id: 'git', label: 'Git', icon: 'branch' },
+  { id: 'timeline', label: 'Timeline', icon: 'clock' },
 ]
+
+const COLLAB_LABEL: Record<string, string> = {
+  running: 'AI is working',
+  paused: 'AI paused',
+  stopped: 'AI stopped',
+  completed: 'AI finished',
+  idle: 'Idle',
+}
 
 function healthColor(status: string | undefined): string {
   if (status === 'running' || status === 'ready' || status === 'executing') return 'var(--success)'
@@ -39,10 +48,26 @@ function healthColor(status: string | undefined): string {
   return 'var(--danger)'
 }
 
-function loadLayout(key: string): Layout | undefined {
+/**
+ * Load a persisted layout, but only apply it when its panel ids exactly match
+ * the panels currently rendered. `react-resizable-panels` keys layouts by panel
+ * id ({ [id]: flexGrow }); feeding it a layout for a different set of ids (e.g.
+ * after the panels are renamed) makes it thrash and can blank the page. When the
+ * ids don't line up we drop the stale entry and fall back to panel defaultSize.
+ */
+function loadLayout(key: string, expectedIds: string[]): Layout | undefined {
   try {
     const raw = localStorage.getItem(key)
-    return raw ? (JSON.parse(raw) as Layout) : undefined
+    if (!raw) return undefined
+    const parsed = JSON.parse(raw) as Layout
+    const ids = Object.keys(parsed)
+    const matches =
+      ids.length === expectedIds.length && expectedIds.every((id) => id in parsed)
+    if (!matches) {
+      localStorage.removeItem(key)
+      return undefined
+    }
+    return parsed
   } catch {
     return undefined
   }
@@ -56,23 +81,30 @@ function saveLayout(key: string, layout: Layout): void {
   }
 }
 
-const COLS_KEY = 'workspace_layout_cols'
-const ROWS_KEY = 'workspace_layout_rows'
+const COLS_KEY = 'workspace_layout_cols_v2'
+const ROWS_KEY = 'workspace_layout_rows_v2'
+const COLS_IDS = ['explorer', 'center', 'ai']
+const ROWS_IDS = ['editor', 'bottom']
 
 export function Workspace() {
   const { workspaceId = '' } = useParams()
   const [params] = useSearchParams()
   const taskId = params.get('task')
+  const repoId = params.get('repo') ?? ''
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
 
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('output')
+  // Mirror the mission's real phase (task + execution + validation) so the IDE
+  // never contradicts the mission page. Falls back gracefully without repo ctx.
+  const mission = useMissionPhase(repoId, taskId ?? '')
+
+  const [bottomTab, setBottomTab] = useState<BottomTab>('terminal')
   const [explorerCollapsed, setExplorerCollapsed] = useState(false)
   const explorerPanel = usePanelRef()
 
   // Persisted pane layouts.
-  const [colsLayout] = useState<Layout | undefined>(() => loadLayout(COLS_KEY))
-  const [rowsLayout] = useState<Layout | undefined>(() => loadLayout(ROWS_KEY))
+  const [colsLayout] = useState<Layout | undefined>(() => loadLayout(COLS_KEY, COLS_IDS))
+  const [rowsLayout] = useState<Layout | undefined>(() => loadLayout(ROWS_KEY, ROWS_IDS))
 
   // Single multiplexed socket for the whole IDE + tab session recovery.
   useWorkspaceSocket(workspaceId)
@@ -96,6 +128,8 @@ export function Workspace() {
 
   const connectionStatus = useAppSelector((s) => s.workspaceEditor.connectionStatus)
   const openFiles = useAppSelector((s) => s.workspaceEditor.openFiles)
+  const collab = useAppSelector((s) => s.workspaceActivity.collaboration)
+  const diagnostics = useAppSelector((s) => s.workspaceActivity.diagnostics)
 
   // Git decorations for the explorer (path → change kind).
   const decorations = useMemo<GitDecorations>(() => {
@@ -138,27 +172,56 @@ export function Workspace() {
     (gitStatus?.modified?.length ?? 0) +
     (gitStatus?.staged?.length ?? 0) +
     (gitStatus?.untracked?.length ?? 0)
+  const collabActive = collab.status === 'running' || collab.status === 'paused'
+  // Prefer the mission phase for the header/status chrome; fall back to the
+  // agent collaboration status when we don't have repo context.
+  const phaseLive = mission.available ? mission.live : collabActive
+  const phaseText = mission.available
+    ? mission.label
+    : collab.label ?? COLLAB_LABEL[collab.status] ?? 'Idle'
+  const problemCount = diagnostics.length
 
   return (
     <div className={styles.root}>
-      {/* ── Toolbar ─────────────────────────────────────────────────────── */}
+      {/* ── Top bar ─────────────────────────────────────────────────────── */}
       <div className={styles.toolbar}>
-        <button className={styles.iconBtn} onClick={toggleExplorer} title="Toggle Explorer" aria-pressed={!explorerCollapsed}>
-          <Icon name="sidebar" size={15} />
-        </button>
-        <button className={styles.back} onClick={() => (taskId ? navigate(`/mission/${taskId}`) : navigate(ROUTES.root))}>
-          <Icon name="chevronLeft" size={14} /> Back
-        </button>
-        <span className={styles.wsName}>
-          <Icon name="workspace" size={14} /> Workspace
-          <code className={styles.wsId}>{workspaceId.slice(0, 8)}</code>
-        </span>
-        <span className={styles.health} title={`container: ${containerStatus ?? 'unknown'}`}>
-          <span className={styles.healthDot} style={{ background: healthColor(containerStatus) }} />
-          {containerStatus ?? '—'}
-        </span>
-        <div className={styles.toolbarSpacer} />
-        <CollaborationBar workspaceId={workspaceId} />
+        <div className={styles.toolbarLeft}>
+          <button className={styles.iconBtn} onClick={toggleExplorer} title="Toggle Explorer" aria-pressed={!explorerCollapsed}>
+            <Icon name="sidebar" size={15} />
+          </button>
+          <button className={styles.back} onClick={() => (taskId ? navigate(`/mission/${taskId}`) : navigate(ROUTES.root))} title="Back to mission">
+            <Icon name="chevronLeft" size={14} />
+          </button>
+          <span className={styles.brandMark}>
+            <Icon name="sparkles" size={14} />
+          </span>
+          <span className={styles.crumb}>
+            <span className={styles.crumbRepo}>{workspaceId.slice(0, 8)}</span>
+            <Icon name="chevronRight" size={12} className={styles.crumbSep} />
+            <span className={styles.crumbBranch}>
+              <Icon name="branch" size={12} /> {gitStatus?.branch ?? '—'}
+            </span>
+          </span>
+        </div>
+
+        <div className={styles.toolbarCenter}>
+          {phaseLive && (
+            <div className={styles.aiStatus}>
+              <span className={styles.aiPulse} />
+              {phaseText}
+              <span className={styles.aiTrack}>
+                <span className={styles.aiBar} />
+              </span>
+            </div>
+          )}
+        </div>
+
+        <div className={styles.toolbarRight}>
+          <span className={styles.health} title={`container: ${containerStatus ?? 'unknown'}`}>
+            <span className={styles.healthDot} style={{ background: healthColor(containerStatus) }} />
+            {containerStatus ?? '—'}
+          </span>
+        </div>
       </div>
 
       {reconnecting && (
@@ -188,7 +251,7 @@ export function Workspace() {
             onResize={(s) => setExplorerCollapsed(s.asPercentage < 1)}
           >
             <div className={styles.paneHeader}>
-              <span>Explorer</span>
+              <Icon name="folder" size={13} /> <span>Explorer</span>
             </div>
             <div ref={explorerBodyRef} className={styles.explorerBody}>
               {treeLoading ? (
@@ -205,7 +268,7 @@ export function Workspace() {
 
           <Separator className={styles.sepV} />
 
-          {/* Center: editor over terminal */}
+          {/* Center: editor over bottom dev panel */}
           <Panel id="center" className={styles.pane} minSize="30">
             <Group
               orientation="vertical"
@@ -214,18 +277,42 @@ export function Workspace() {
               defaultLayout={rowsLayout}
               onLayoutChanged={(l) => saveLayout(ROWS_KEY, l)}
             >
-              <Panel id="editor" className={styles.pane} minSize="20" defaultSize="70">
+              <Panel id="editor" className={styles.pane} minSize="20" defaultSize="68">
                 <CodeEditor workspaceId={workspaceId} />
               </Panel>
 
               <Separator className={styles.sepH} />
 
-              <Panel id="terminal" className={styles.pane} minSize="8" defaultSize="30">
-                <div className={styles.paneHeader}>
-                  <Icon name="tool" size={12} /> <span>Terminal</span>
+              <Panel id="bottom" className={styles.pane} minSize="8" defaultSize="32">
+                <div className={styles.bottomTabs}>
+                  {BOTTOM_TABS.map((t) => (
+                    <button
+                      key={t.id}
+                      className={`${styles.bottomTab} ${bottomTab === t.id ? styles.bottomTabActive : ''}`}
+                      onClick={() => setBottomTab(t.id)}
+                    >
+                      <Icon name={t.icon} size={12} />
+                      <span>{t.label}</span>
+                      {t.id === 'problems' && problemCount > 0 && (
+                        <span className={styles.tabBadge}>{problemCount}</span>
+                      )}
+                      {t.id === 'git' && gitCounts > 0 && (
+                        <span className={styles.tabBadge}>{gitCounts}</span>
+                      )}
+                    </button>
+                  ))}
                 </div>
-                <div className={styles.terminalBody}>
-                  <TerminalPanel workspaceId={workspaceId} active />
+                <div className={styles.bottomBody}>
+                  {/* Terminal + Output stay mounted so xterm keeps its buffer. */}
+                  <div className={styles.mount} style={{ display: bottomTab === 'terminal' ? 'block' : 'none' }}>
+                    <TerminalPanel workspaceId={workspaceId} active={bottomTab === 'terminal'} />
+                  </div>
+                  <div className={styles.mount} style={{ display: bottomTab === 'output' ? 'block' : 'none' }}>
+                    <OutputPanel active={bottomTab === 'output'} />
+                  </div>
+                  {bottomTab === 'problems' && <DiagnosticsPanel workspaceId={workspaceId} />}
+                  {bottomTab === 'git' && <GitPanel workspaceId={workspaceId} />}
+                  {bottomTab === 'timeline' && <TimelinePanel />}
                 </div>
               </Panel>
             </Group>
@@ -233,31 +320,9 @@ export function Workspace() {
 
           <Separator className={styles.sepV} />
 
-          {/* Right sidebar: Timeline / AI / Problems / Git */}
-          <Panel id="sidebar" className={styles.pane} minSize="14" defaultSize="22">
-            <div className={styles.sidebarTabs}>
-              {SIDEBAR_TABS.map((t) => (
-                <button
-                  key={t.id}
-                  className={`${styles.sidebarTab} ${sidebarTab === t.id ? styles.sidebarTabActive : ''}`}
-                  onClick={() => setSidebarTab(t.id)}
-                  title={t.label}
-                >
-                  <Icon name={t.icon} size={13} />
-                  <span>{t.label}</span>
-                </button>
-              ))}
-            </div>
-            <div className={styles.sidebarBody}>
-              {/* Output stays mounted so xterm keeps its buffer across tab switches. */}
-              <div style={{ display: sidebarTab === 'output' ? 'block' : 'none', height: '100%' }}>
-                <OutputPanel active={sidebarTab === 'output'} />
-              </div>
-              {sidebarTab === 'timeline' && <TimelinePanel />}
-              {sidebarTab === 'ai' && <AIActivityFeed />}
-              {sidebarTab === 'diagnostics' && <DiagnosticsPanel workspaceId={workspaceId} />}
-              {sidebarTab === 'git' && <GitPanel workspaceId={workspaceId} />}
-            </div>
+          {/* Right: AI Collaboration */}
+          <Panel id="ai" className={styles.pane} minSize="16" defaultSize="24">
+            <AICollabPanel workspaceId={workspaceId} mission={mission} />
           </Panel>
         </Group>
       </div>
@@ -272,6 +337,9 @@ export function Workspace() {
         <span>{gitCounts} changes</span>
         <div className={styles.toolbarSpacer} />
         <span>{openFiles.length} open</span>
+        <span className={`${styles.forgeAi} ${phaseLive ? styles.forgeAiActive : ''}`}>
+          <Icon name="sparkles" size={11} /> {phaseLive ? 'Forge AI Active' : 'Forge AI Idle'}
+        </span>
       </div>
     </div>
   )

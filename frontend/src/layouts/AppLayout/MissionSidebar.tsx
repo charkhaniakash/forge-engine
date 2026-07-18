@@ -1,5 +1,6 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { Icon, StatusBadge, Dropdown, Tooltip } from '@/components/common'
+import type { IconName } from '@/components/common'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { themeToggled } from '@/store/slices/uiSlice'
 import { loggedOut } from '@/store/slices/authSlice'
@@ -12,9 +13,15 @@ import styles from './MissionSidebar.module.css'
 
 /**
  * The single persistent navigation surface. A Mission is the primary object:
- * the rail is "New Mission" + the live list of recent missions, not a set of
- * CRUD destinations. Everything else (repositories, settings) is secondary.
+ * the rail is "New Mission" + the live list of recent missions, plus links to
+ * the few real destinations (Console, Repositories). Everything is anchored to
+ * the account footer at the bottom.
  */
+const NAV: Array<{ to: string; label: string; icon: IconName; end?: boolean }> = [
+  { to: ROUTES.root, label: 'Console', icon: 'dashboard', end: true },
+  { to: ROUTES.repositories, label: 'Repositories', icon: 'repo' },
+]
+
 export function MissionSidebar() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
@@ -28,13 +35,22 @@ export function MissionSidebar() {
   const repoName = (repoId: string) =>
     repos.find((r) => r.id === repoId)?.repo_full_name ?? 'repository'
 
+  const activeCount = missions.filter((m) =>
+    ['planning', 'draft', 'plan_ready', 'plan_approved', 'executing', 'validating', 'repairing', 'publishing'].includes(m.status),
+  ).length
+
   return (
     <aside className={styles.sidebar}>
+      {/* ── Brand ─────────────────────────────────────────────────────────── */}
       <div className={styles.top}>
         <div className={styles.brand}>
-          <span className={styles.logo}>◆</span>
-          <span className={styles.brandName}>Forge</span>
-          {org && <span className={styles.org}>{org.name}</span>}
+          <span className={styles.logo}>
+            <Icon name="sparkles" size={18} />
+          </span>
+          <span className={styles.brandText}>
+            <span className={styles.brandName}>Forge</span>
+            <span className={styles.brandSub}>{org?.name ?? 'Engine'}</span>
+          </span>
         </div>
       </div>
 
@@ -42,8 +58,26 @@ export function MissionSidebar() {
         <Icon name="plus" size={16} /> New Mission
       </button>
 
+      {/* ── Primary nav ───────────────────────────────────────────────────── */}
+      <nav className={styles.nav}>
+        {NAV.map((n) => (
+          <NavLink
+            key={n.to}
+            to={n.to}
+            end={n.end}
+            className={({ isActive }) => `${styles.navItem} ${isActive ? styles.navItemActive : ''}`}
+          >
+            <Icon name={n.icon} size={16} /> {n.label}
+          </NavLink>
+        ))}
+      </nav>
+
+      {/* ── Recent missions ───────────────────────────────────────────────── */}
       <div className={styles.recent}>
-        <div className={styles.recentHead}>Missions</div>
+        <div className={styles.recentHead}>
+          <span>Recent Missions</span>
+          {activeCount > 0 && <span className={styles.activePill}>{activeCount} active</span>}
+        </div>
         <div className={styles.list}>
           {isLoading && <div className={styles.muted}>Loading…</div>}
           {!isLoading && missions.length === 0 && (
@@ -65,15 +99,8 @@ export function MissionSidebar() {
         </div>
       </div>
 
+      {/* ── Account footer ────────────────────────────────────────────────── */}
       <div className={styles.footer}>
-        <NavLink to={ROUTES.repositories} className={styles.footerLink}>
-          <Icon name="repo" size={16} /> Repositories
-        </NavLink>
-        <Tooltip content={theme === 'dark' ? 'Light mode' : 'Dark mode'} side="right">
-          <button className={styles.footerBtn} onClick={() => dispatch(themeToggled())} aria-label="Toggle theme">
-            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
-          </button>
-        </Tooltip>
         <Dropdown
           align="start"
           width={220}
@@ -88,11 +115,20 @@ export function MissionSidebar() {
             { id: 'logout', label: 'Log out', icon: <Icon name="logout" size={14} />, danger: true, divider: true, onSelect: () => { dispatch(loggedOut()); navigate(ROUTES.login) } },
           ]}
           trigger={({ toggle }) => (
-            <button className={styles.avatar} onClick={toggle} aria-label="Account">
-              {user?.name?.[0]?.toUpperCase() ?? '?'}
+            <button className={styles.account} onClick={toggle} aria-label="Account">
+              <span className={styles.avatar}>{user?.name?.[0]?.toUpperCase() ?? '?'}</span>
+              <span className={styles.accountText}>
+                <span className={styles.accountName}>{user?.name ?? 'Account'}</span>
+                <span className={styles.accountEmail}>{user?.email}</span>
+              </span>
             </button>
           )}
         />
+        <Tooltip content={theme === 'dark' ? 'Light mode' : 'Dark mode'} side="top">
+          <button className={styles.footerBtn} onClick={() => dispatch(themeToggled())} aria-label="Toggle theme">
+            <Icon name={theme === 'dark' ? 'sun' : 'moon'} size={16} />
+          </button>
+        </Tooltip>
       </div>
     </aside>
   )

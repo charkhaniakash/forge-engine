@@ -39,9 +39,42 @@ export class WorkspaceSocketManager {
   private closedByUser = false
 
   connect(workspaceId: string, token: string): void {
-    this.workspaceId = workspaceId
     this.token = token
     this.closedByUser = false
+
+    const sameWorkspace = this.workspaceId === workspaceId
+
+    // Reuse a live/connecting socket for the same workspace instead of opening
+    // a second one. Opening unconditionally was the root cause of leaked backend
+    // sessions: repeated connect() calls, re-renders and StrictMode double-invokes
+    // each spawned a new WebSocket while the previous one stayed open server-side.
+    if (
+      sameWorkspace &&
+      this.ws &&
+      (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)
+    ) {
+      return
+    }
+
+    // Tear down any existing socket before opening a new one so it can't linger
+    // as an orphaned session.
+    if (this.ws) {
+      try {
+        this.ws.onclose = null
+        this.ws.close()
+      } catch {
+        // ignore
+      }
+      this.ws = null
+    }
+
+    // Switching workspaces → drop the previous session/sequence state.
+    if (!sameWorkspace) {
+      this.sessionId = null
+      this.lastSeq.clear()
+    }
+
+    this.workspaceId = workspaceId
     this.restoreSession()
     this.open()
   }

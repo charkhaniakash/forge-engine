@@ -107,6 +107,7 @@ type Gateway struct {
 	watcherMu   sync.Mutex
 	wsRepo      *repository.WorkspaceRepository
 	workItemRepo *repository.WorkItemRepository
+	execRepo    *repository.ExecutionRepository
 	logger      *zap.SugaredLogger
 }
 
@@ -125,6 +126,11 @@ func NewGateway(
 		workItemRepo: workItemRepo,
 		logger:       logger,
 	}
+}
+
+// SetExecutionRepository wires the execution repository for collaboration commands.
+func (g *Gateway) SetExecutionRepository(execRepo *repository.ExecutionRepository) {
+	g.execRepo = execRepo
 }
 
 // SetTerminalService wires the terminal service for handling terminal input.
@@ -229,7 +235,7 @@ func (g *Gateway) Publish(workspaceID, channel, event string, payload interface{
 		Payload: payload,
 	}
 
-	g.logger.Infow("gateway_publish", "workspace_id", workspaceID, "channel", channel, "event", event, "seq", env.Seq)
+	g.logger.Debugw("gateway_publish", "workspace_id", workspaceID, "channel", channel, "event", event, "seq", env.Seq)
 
 	// Buffer for replay
 	g.replayMu.Lock()
@@ -247,8 +253,6 @@ func (g *Gateway) Publish(workspaceID, channel, event string, payload interface{
 	sessionIDs := g.workspaces[workspaceID]
 	g.mu.RUnlock()
 
-	g.logger.Infow("gateway_broadcast", "workspace_id", workspaceID, "channel", channel, "session_count", len(sessionIDs))
-
 	for _, sid := range sessionIDs {
 		g.mu.RLock()
 		sess, ok := g.sessions[sid]
@@ -257,10 +261,7 @@ func (g *Gateway) Publish(workspaceID, channel, event string, payload interface{
 			continue
 		}
 		if sess.Subscriptions[channel] {
-			g.logger.Infow("gateway_sending_to_session", "session_id", sid, "channel", channel, "subscribed", sess.Subscriptions[channel])
 			g.sendToSession(sess, env)
-		} else {
-			g.logger.Infow("gateway_session_not_subscribed", "session_id", sid, "channel", channel)
 		}
 	}
 }
@@ -277,13 +278,11 @@ func (g *Gateway) sendToSession(session *BrowserSession, env Envelope) {
 		g.logger.Warnw("gateway_marshal_failed", "error", err)
 		return
 	}
-	g.logger.Infow("gateway_sending_to_channel", "session_id", session.ID, "channel", env.Channel, "event", env.Event, "data_length", len(raw))
 	select {
 	case session.SendCh <- raw:
-		g.logger.Infow("gateway_sent_to_channel", "session_id", session.ID)
 	default:
 		// Backpressure — drop for slow client
-		g.logger.Warnw("gateway_backpressure_drop", "session_id", session.ID)
+		g.logger.Warnw("gateway_backpressure_drop", "session_id", session.ID, "channel", env.Channel)
 	}
 }
 
@@ -376,14 +375,20 @@ func (g *Gateway) readPump(conn *websocket.Conn, session *BrowserSession) {
 				Ts:      time.Now().UnixMilli(),
 				Payload: map[string]interface{}{"channels": clientMsg.Channels},
 			})
-			// First-join catch-up: replay buffered events for the requested
+			// First-join catch-up: replay buffered events for ALL subscribed
 			// channels so a browser opening the IDE mid-execution immediately
 			// sees the current state (e.g. collaboration "running" → pause/stop
-			// controls, existing timeline). Reconnecting clients sync via the
-			// reconnect path instead, so this runs at most once per session.
+			// controls, existing timeline). We use session.Subscriptions (which
+			// includes DefaultSubscriptions + any just-added) rather than only
+			// the channels in this single message, because the frontend sends
+			// subscribe messages one-at-a-time and only the first triggers replay.
 			if !session.synced {
 				session.synced = true
-				g.replayForChannels(session, clientMsg.Channels)
+				allChannels := make([]string, 0, len(session.Subscriptions))
+				for ch := range session.Subscriptions {
+					allChannels = append(allChannels, ch)
+				}
+				g.replayForChannels(session, allChannels)
 			}
 
 		case "unsubscribe":
@@ -476,7 +481,7 @@ func (g *Gateway) handleChannelMessage(session *BrowserSession, msg ClientMessag
 // Placeholder handlers — will be wired to services
 func (g *Gateway) onTerminalInput(session *BrowserSession, msg ClientMessage) {
 	// Forward to terminal service — needs to be wired after construction
-	g.logger.Infow("terminal_input_received", "event", msg.Ev, "workspace_id", session.WorkspaceID)
+	g.logger.Debugw("terminal_input_received", "event", msg.Ev, "workspace_id", session.WorkspaceID)
 	if g.termService != nil {
 		switch msg.Ev {
 		case "input":
@@ -490,4 +495,52 @@ func (g *Gateway) onTerminalInput(session *BrowserSession, msg ClientMessage) {
 		g.logger.Warnw("terminal_service_not_configured")
 	}
 }
-func (g *Gateway) onCollaborationCommand(session *BrowserSession, msg ClientMessage) {}
+func (g *Gateway) onCollaborationCommand(session *BrowserSession, msg ClientMessage) {
+	workspaceID := session.WorkspaceID
+
+	if g.execRepo == nil {
+		g.logger.Warnw("collaboration_command_no_exec_repo", "workspace_id", workspaceID)
+		return
+	}
+
+	// Resolve the execution ID for this workspace
+	ctx := context.Background()
+	ws, err := g.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil {
+		g.logger.Warnw("collaboration_command_workspace_not_found", "workspace_id", workspaceID, "error", err)
+		return
+	}
+	exec, err := g.execRepo.GetLatestForWorkItem(ctx, ws.WorkItemID)
+	if err != nil {
+		g.logger.Warnw("collaboration_command_no_execution", "workspace_id", workspaceID, "error", err)
+		return
+	}
+
+	execID := exec.ID
+
+	switch msg.Ev {
+	case "pause":
+		if err := g.execRepo.MarkPaused(ctx, execID); err != nil {
+			g.logger.Warnw("collaboration_ws_pause_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
+			return
+		}
+		g.logger.Infow("collaboration_ws_pause_requested", "workspace_id", workspaceID, "exec_id", execID)
+
+	case "resume":
+		if err := g.execRepo.MarkResumed(ctx, execID); err != nil {
+			g.logger.Warnw("collaboration_ws_resume_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
+			return
+		}
+		g.logger.Infow("collaboration_ws_resume_requested", "workspace_id", workspaceID, "exec_id", execID)
+
+	case "stop":
+		if err := g.execRepo.MarkCancelled(ctx, execID); err != nil {
+			g.logger.Warnw("collaboration_ws_stop_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
+			return
+		}
+		g.logger.Infow("collaboration_ws_stop_requested", "workspace_id", workspaceID, "exec_id", execID)
+
+	default:
+		g.logger.Debugw("collaboration_unknown_event", "workspace_id", workspaceID, "event", msg.Ev)
+	}
+}

@@ -23,6 +23,7 @@ import (
 //   phase_started → progress events → phase_completed | phase_failed
 type EventBridge struct {
 	gateway              *Gateway
+	fsService            *FilesystemService
 	executionWorkspaces map[string]string // taskExecutionID → workspaceID
 	validationWorkspaces map[string]string // validationRunID → workspaceID
 	repairWorkspaces     map[string]string // repairSessionID → workspaceID
@@ -40,6 +41,11 @@ func NewEventBridge(gateway *Gateway, logger *zap.SugaredLogger) *EventBridge {
 		publishingWorkspaces: make(map[string]string),
 		logger:               logger,
 	}
+}
+
+// SetFilesystemService wires the filesystem service for AI write dedup.
+func (eb *EventBridge) SetFilesystemService(fs *FilesystemService) {
+	eb.fsService = fs
 }
 
 // ── Execution registry ────────────────────────────────────────────────────────
@@ -253,6 +259,9 @@ func (eb *EventBridge) WrapExecutionPublisher(
 				switch event.ToolName {
 				case "write_file":
 					if filePath != "" {
+						if eb.fsService != nil {
+							eb.fsService.MarkAIWrite(filePath)
+						}
 						eb.gateway.Publish(workspaceID, ChFilesystem, "file_modified", map[string]interface{}{
 							"path":   filePath,
 							"source": "ai",
@@ -260,6 +269,9 @@ func (eb *EventBridge) WrapExecutionPublisher(
 					}
 				case "create_file":
 					if filePath != "" {
+						if eb.fsService != nil {
+							eb.fsService.MarkAIWrite(filePath)
+						}
 						eb.gateway.Publish(workspaceID, ChFilesystem, "file_created", map[string]interface{}{
 							"path":   filePath,
 							"source": "ai",
@@ -267,6 +279,9 @@ func (eb *EventBridge) WrapExecutionPublisher(
 					}
 				case "delete_file":
 					if filePath != "" {
+						if eb.fsService != nil {
+							eb.fsService.MarkAIWrite(filePath)
+						}
 						eb.gateway.Publish(workspaceID, ChFilesystem, "file_deleted", map[string]interface{}{
 							"path":   filePath,
 							"source": "ai",
@@ -274,6 +289,9 @@ func (eb *EventBridge) WrapExecutionPublisher(
 					}
 				case "rename_file":
 					if filePath != "" {
+						if eb.fsService != nil {
+							eb.fsService.MarkAIWrite(filePath)
+						}
 						eb.gateway.Publish(workspaceID, ChFilesystem, "file_renamed", map[string]interface{}{
 							"path":   filePath,
 							"source": "ai",
@@ -346,6 +364,12 @@ func (eb *EventBridge) WrapValidationPublisher(
 				"profile": payload["profile"],
 			})
 			eb.gateway.Publish(workspaceID, ChDiagnostics, "run_started", payload)
+			// Keep collaboration status "running" during validation so the
+			// pause/stop controls remain active in the browser IDE.
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "running",
+				"message": "Validating",
+			})
 
 		case "stage_start":
 			eb.gateway.Publish(workspaceID, ChDiagnostics, "stage_started", payload)
@@ -439,6 +463,11 @@ func (eb *EventBridge) WrapRepairPublisher(
 				"max_attempts": payload["max_attempts"],
 			})
 			eb.gateway.Publish(workspaceID, ChAIActivity, "repair_started", payload)
+			// Keep collaboration controls active during repair.
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "running",
+				"message": "Repairing",
+			})
 
 		case "repair_complete":
 			eb.gateway.Publish(workspaceID, ChTimeline, "phase_completed", map[string]interface{}{
@@ -560,6 +589,11 @@ func (eb *EventBridge) WrapPublishingPublisher(
 					"phase":   "publishing",
 					"status":  "running",
 					"message": message,
+				})
+				// Keep collaboration controls active during publishing.
+				eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+					"status":  "running",
+					"message": "Publishing",
 				})
 			}
 

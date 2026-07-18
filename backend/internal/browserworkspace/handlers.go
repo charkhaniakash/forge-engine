@@ -294,6 +294,25 @@ func (h *Handlers) GetProgress(c *fiber.Ctx) error {
 		})
 	}
 
+	// Determine the effective pipeline status. The execution may be "completed"
+	// but validation/repair/publishing may still be running — check work item
+	// status to surface "running" for the full pipeline lifecycle.
+	effectiveStatus := exec.Status
+	workItem, wiErr := h.workItemRepo.GetByIDInternal(ctx, ws.WorkItemID)
+	if wiErr == nil && workItem != nil {
+		// Work item statuses that indicate the pipeline is still active
+		switch workItem.Status {
+		case "executing", "validating", "repairing", "publishing":
+			effectiveStatus = "running"
+		case "paused":
+			effectiveStatus = "paused"
+		case "done":
+			effectiveStatus = "completed"
+		case "cancelled":
+			effectiveStatus = "cancelled"
+		}
+	}
+
 	// Get step count
 	steps, _ := h.execRepo.ListStepExecutions(ctx, exec.ID)
 	totalSteps := len(steps)
@@ -314,7 +333,7 @@ func (h *Handlers) GetProgress(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(fiber.Map{
-		"status":          exec.Status,
+		"status":          effectiveStatus,
 		"current_step":    completedSteps + 1,
 		"total_steps":     totalSteps,
 		"percent":         percent,

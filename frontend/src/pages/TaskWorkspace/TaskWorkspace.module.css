@@ -28,22 +28,19 @@
 .back:hover {
   color: var(--text-primary);
 }
-.intentTitle {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--text-base);
-  font-weight: var(--font-medium);
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin: 0;
+.crumb {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .headerRight {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex-shrink: 0;
+  margin-left: auto;
 }
 .liveDot {
   display: inline-flex;

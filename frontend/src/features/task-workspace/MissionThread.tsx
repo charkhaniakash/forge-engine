@@ -1,5 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 import { Icon } from '@/components/common'
+import type { IconName } from '@/components/common'
 import { PlanStepCard } from '@/features/planning/PlanStepCard'
 import { ArtifactCard } from './ArtifactCard'
 import { ThoughtGroup } from './ThoughtGroup'
@@ -12,6 +13,8 @@ import styles from './MissionThread.module.css'
 
 export interface MissionThreadProps {
   header: ReactNode
+  /** Optional status hero rendered above the timeline. */
+  hero?: ReactNode
   entries: ConversationEntry[]
   live: boolean
   /** Rendered inside the plan card — approve/reject/replan, only while a decision is pending. */
@@ -20,6 +23,8 @@ export interface MissionThreadProps {
   actionRow?: ReactNode
   emptyLabel?: string
 }
+
+type NodeTone = 'accent' | 'success' | 'warning' | 'danger' | 'neutral'
 
 function filesSubtitle(files: { linesAdded: number; linesRemoved: number }[]): string {
   const add = files.reduce((a, f) => a + f.linesAdded, 0)
@@ -61,7 +66,6 @@ function ValidationEntry({ entry }: { entry: Extract<ConversationEntry, { type: 
   const running = entry.overall == null
   const passed = entry.overall === 'passed'
   // Non-blocking policy: any non-passed result is advisory, not a failure.
-  // Lint/test/build issues are surfaced as logs but never block publishing.
   const hasIssues = !running && !passed
 
   const passedStages = entry.stages.filter((s) => s.state === 'passed').length
@@ -132,13 +136,76 @@ function PublishEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'pu
   )
 }
 
+/** Icon + tone for the timeline node marker of each entry type. */
+function nodeMeta(entry: ConversationEntry): { icon: IconName; tone: NodeTone } {
+  switch (entry.type) {
+    case 'intent':
+      return { icon: 'chat', tone: 'accent' }
+    case 'work':
+      return { icon: entry.group.hasToolActivity ? 'tool' : 'sparkles', tone: 'neutral' }
+    case 'message':
+      return { icon: 'dot', tone: 'neutral' }
+    case 'plan':
+      return { icon: 'file', tone: 'accent' }
+    case 'files':
+      return { icon: 'code', tone: 'accent' }
+    case 'validation':
+      return {
+        icon: entry.overall === 'passed' ? 'check' : entry.overall == null ? 'clock' : 'alert',
+        tone: entry.overall === 'passed' ? 'success' : entry.overall == null ? 'neutral' : 'warning',
+      }
+    case 'repair':
+      return { icon: 'repair', tone: 'success' }
+    case 'publish':
+      return {
+        icon: 'git',
+        tone: entry.session.status === 'completed' ? 'success' : entry.session.status === 'failed' ? 'danger' : 'neutral',
+      }
+    default:
+      return { icon: 'dot', tone: 'neutral' }
+  }
+}
+
+function renderEntry(entry: ConversationEntry, planActions?: ReactNode): ReactNode {
+  switch (entry.type) {
+    case 'intent':
+      return <div className={styles.intent}>{entry.text}</div>
+    case 'work':
+      return <ThoughtGroup group={entry.group} isLive={entry.isLive} />
+    case 'message':
+      return <ActivityRow ev={entry.event} />
+    case 'plan':
+      return <PlanEntry entry={entry} actions={planActions} />
+    case 'files':
+      return <FilesEntry entry={entry} />
+    case 'validation':
+      return <ValidationEntry entry={entry} />
+    case 'repair':
+      return <RepairEntry entry={entry} />
+    case 'publish':
+      return <PublishEntry entry={entry} />
+    default:
+      return null
+  }
+}
+
+function entryKey(entry: ConversationEntry, i: number): string {
+  switch (entry.type) {
+    case 'work':
+      return entry.group.id
+    case 'message':
+      return entry.event.id
+    default:
+      return `${entry.type}-${i}`
+  }
+}
+
 /**
- * The Mission page: one continuous conversation. The task intent opens the
- * thread; everything else — thinking, tool use, plan/files/validation/repair/
- * publish outcomes — appears as chronological entries, collapsed by default,
- * so backend phase names never surface as separate dashboard panels.
+ * The Mission page: one continuous, timeline-style conversation. The hero shows
+ * the current phase at a glance; below it, every step — thinking, tool use,
+ * plan/files/validation/repair/publish outcomes — hangs off a connected spine.
  */
-export function MissionThread({ header, entries, live, planActions, actionRow, emptyLabel = 'Waiting for the agent…' }: MissionThreadProps) {
+export function MissionThread({ header, hero, entries, live, planActions, actionRow, emptyLabel = 'Waiting for the agent…' }: MissionThreadProps) {
   const endRef = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -158,38 +225,41 @@ export function MissionThread({ header, entries, live, planActions, actionRow, e
       <div className={styles.top}>{header}</div>
       <div className={styles.scroll} ref={scrollRef} onScroll={onScroll}>
         <div className={styles.thread}>
+          {hero && <div className={styles.heroSlot}>{hero}</div>}
+
           {entries.length === 0 && <div className={styles.empty}>{emptyLabel}</div>}
-          {entries.map((entry, i) => {
-            switch (entry.type) {
-              case 'intent':
-                return (
-                  <div key={`intent-${i}`} className={styles.intent}>
-                    {entry.text}
+
+          <div className={styles.timeline}>
+            {entries.map((entry, i) => {
+              const { icon, tone } = nodeMeta(entry)
+              return (
+                <div className={styles.row} key={entryKey(entry, i)}>
+                  <div className={styles.gutter}>
+                    <span className={`${styles.node} ${styles[`node_${tone}`]}`}>
+                      <Icon name={icon} size={13} />
+                    </span>
                   </div>
-                )
-              case 'work':
-                return <ThoughtGroup key={entry.group.id} group={entry.group} isLive={entry.isLive} />
-              case 'message':
-                return <ActivityRow key={entry.event.id} ev={entry.event} />
-              case 'plan':
-                return <PlanEntry key={`plan-${i}`} entry={entry} actions={planActions} />
-              case 'files':
-                return <FilesEntry key={`files-${i}`} entry={entry} />
-              case 'validation':
-                return <ValidationEntry key={`validation-${i}`} entry={entry} />
-              case 'repair':
-                return <RepairEntry key={`repair-${i}`} entry={entry} />
-              case 'publish':
-                return <PublishEntry key={`publish-${i}`} entry={entry} />
-              default:
-                return null
-            }
-          })}
-          {live && (
-            <div className={styles.working}>
-              <span className={styles.cursor}>▋</span> working…
-            </div>
-          )}
+                  <div className={styles.content}>{renderEntry(entry, planActions)}</div>
+                </div>
+              )
+            })}
+
+            {live && (
+              <div className={styles.row}>
+                <div className={styles.gutter}>
+                  <span className={`${styles.node} ${styles.node_accent} ${styles.nodeLive}`}>
+                    <Icon name="sparkles" size={13} />
+                  </span>
+                </div>
+                <div className={styles.content}>
+                  <div className={styles.working}>
+                    <span className={styles.cursor}>▋</span> working…
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {actionRow && <div className={styles.actionRow}>{actionRow}</div>}
           <div ref={endRef} />
         </div>

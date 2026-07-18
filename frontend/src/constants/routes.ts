@@ -47,6 +47,11 @@ export const routeTo = {
   taskExecution: (id: string) => `/tasks/${id}/execution`,
   taskWorkspace: (id: string) => `/tasks/${id}/workspace`,
   taskValidation: (id: string) => `/tasks/${id}/validation`,
-  workspaceEditor: (workspaceId: string, taskId?: string) =>
-    `/workspace/${workspaceId}${taskId ? `?task=${taskId}` : ''}`,
+  workspaceEditor: (workspaceId: string, taskId?: string, repoId?: string) => {
+    const qs = new URLSearchParams()
+    if (taskId) qs.set('task', taskId)
+    if (repoId) qs.set('repo', repoId)
+    const suffix = qs.toString()
+    return `/workspace/${workspaceId}${suffix ? `?${suffix}` : ''}`
+  },
 }

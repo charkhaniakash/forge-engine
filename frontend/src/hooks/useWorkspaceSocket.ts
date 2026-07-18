@@ -21,6 +21,8 @@ import {
 } from '@/store/slices/workspaceActivitySlice'
 import type { WSEnvelope, CollaborationStatus } from '@/types/workspaceEditor'
 
+const EXEC_LIVE_STATUSES = new Set(['pending', 'running', 'paused'])
+
 /** Human-readable label for an ai_activity event. */
 function aiLabel(ev: string, p: Record<string, unknown>): string {
   const tool = typeof p.tool === 'string' ? p.tool : undefined
@@ -70,6 +72,27 @@ export function useWorkspaceSocket(workspaceId: string): void {
     }
     console.log('[useWorkspaceSocket] Connecting to workspace', workspaceId)
     dispatch(workspaceOpened(workspaceId))
+
+    // Seed collaboration status from REST so pause/stop buttons appear
+    // immediately even if the WebSocket replay hasn't arrived yet.
+    const progressUrl = `${import.meta.env.VITE_BACKEND_URL ?? ''}/v1/workspace/${workspaceId}/progress`
+    fetch(progressUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data && EXEC_LIVE_STATUSES.has(data.status)) {
+          dispatch(collaborationChanged({
+            status: data.status === 'paused' ? 'paused' : 'running',
+            label: data.current_action
+              ? `Step ${data.current_step} of ${data.total_steps}`
+              : undefined,
+          }))
+        } else if (data?.status === 'completed') {
+          dispatch(collaborationChanged({ status: 'completed' }))
+        }
+      })
+      .catch(() => { /* non-critical */ })
 
     // Connect to the workspace WebSocket
     workspaceSocket.connect(workspaceId, token)
@@ -247,8 +270,6 @@ export function useWorkspaceSocket(workspaceId: string): void {
         dispatch(workspaceEditorApi.util.invalidateTags(['WsGit']))
       }),
     )
-
-    workspaceSocket.connect(workspaceId, token)
 
     return () => {
       offStatus()

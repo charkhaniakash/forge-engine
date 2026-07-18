@@ -64,6 +64,12 @@ export const workspaceEditorApi = baseApi.injectEndpoints({
     getWorkspaceHealth: builder.query<WorkspaceHealth, string>({
       query: (workspaceId) => `/workspace/${workspaceId}/health`,
     }),
+    getProgress: builder.query<
+      { status: string; current_step: number; total_steps: number; percent: number; current_action?: string; execution_id?: string },
+      string
+    >({
+      query: (workspaceId) => `/workspace/${workspaceId}/progress`,
+    }),
     pauseExecution: builder.mutation<void, string>({
       query: (workspaceId) => ({
         url: `/workspace/${workspaceId}/collaborate/pause`,
@@ -102,6 +108,7 @@ export const {
   useGetGitStatusQuery,
   useGetGitDiffQuery,
   useGetWorkspaceHealthQuery,
+  useGetProgressQuery,
   usePauseExecutionMutation,
   useResumeExecutionMutation,
   useStopExecutionMutation,

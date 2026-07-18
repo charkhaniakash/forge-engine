@@ -302,6 +302,7 @@ func main() {
 				bwTermService := browserworkspace.NewTerminalService(wsManager, bwGateway, sugar)
 				bwGateway.SetTerminalService(bwTermService)
 				bwGateway.SetFilesystemService(bwFsService)
+				bwGateway.SetExecutionRepository(execRepo)
 				bwHandlers = browserworkspace.NewHandlers(bwGateway, bwFsService, bwTermService, wsRepo, workItemRepo, execRepo, wsManager, sugar)
 				_ = bwFsService  // used by handlers
 				_ = bwTermService // used by handlers
@@ -310,6 +311,7 @@ func main() {
 				// into the unified browser workspace gateway so browser clients see
 				// AI activity in real-time.
 				eventBridge := browserworkspace.NewEventBridge(bwGateway, sugar)
+				eventBridge.SetFilesystemService(bwFsService)
 				_ = eventBridge // used below when wiring execution publisher
 
 				// Wire automatic validation + repair trigger into the execution orchestrator.
@@ -361,6 +363,9 @@ func main() {
 						bwGateway.Publish(workspaceID, browserworkspace.ChAIActivity, "validation_started", map[string]interface{}{
 							"message": "Running validation (build, test, lint)...",
 						})
+						bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{
+							"status": "running", "message": "Validating",
+						})
 					}
 
 					log.Info("phase_8_auto_validation_starting")
@@ -403,6 +408,9 @@ func main() {
 							})
 							bwGateway.Publish(workspaceID, browserworkspace.ChAIActivity, "repair_started", map[string]interface{}{
 								"message": "Auto-repair starting...",
+							})
+							bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{
+								"status": "running", "message": "Repairing",
 							})
 						}
 

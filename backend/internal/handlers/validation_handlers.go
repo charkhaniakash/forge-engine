@@ -82,6 +82,7 @@ func (h *ValidationHandlers) StartValidation(c *fiber.Ctx) error {
 		if _, err := h.orchestrator.Run(
 			context.Background(),
 			exec.ID, exec.WorkspaceID, traceID, "post_change",
+			"", nil,
 		); err != nil {
 			h.logger.Errorw("validation_run_failed",
 				"task_id", taskID, "error", err, "trace_id", traceID)

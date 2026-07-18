@@ -3,6 +3,7 @@ package repair
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -14,6 +15,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/execution"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 	"github.com/charkhaniakash/forge-engine/backend/internal/validation"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
@@ -111,6 +113,17 @@ func (o *Orchestrator) isCancelled(ctx context.Context, sessionID string) bool {
 	return session.Status == "cancelled"
 }
 
+// markCancelledFresh marks the repair session cancelled using a fresh, short-lived
+// context. It exists because Stop cancels the pipeline context, and DB writes on a
+// cancelled context fail — so the "cancelled" status would never persist. Used on
+// the context-cancellation paths (Property 4: cancellation ⇒ row status "cancelled").
+func (o *Orchestrator) markCancelledFresh(sessionID, reason string) {
+	markCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = o.repairRepo.MarkCancelled(markCtx, sessionID)
+	o.publish(sessionID, "repair_cancelled", map[string]interface{}{"reason": reason})
+}
+
 // Run executes the bounded repair loop for a task.
 //
 // Workflow:
@@ -135,6 +148,7 @@ func (o *Orchestrator) isCancelled(ctx context.Context, sessionID string) bool {
 func (o *Orchestrator) Run(
 	ctx context.Context,
 	taskExecutionID, workspaceID, validationRunID, traceID string,
+	execID string, pauseChecker pipeline.PauseChecker,
 ) error {
 	log := o.logger.With(
 		"task_execution_id", taskExecutionID,
@@ -219,6 +233,15 @@ func (o *Orchestrator) Run(
 			return fmt.Errorf("repair session cancelled")
 		}
 
+		// Stop propagation via context cancellation (ContextRegistry.Cancel). A
+		// cancelled sessionCtx can't perform DB reads/writes, so classify it here
+		// as a cancellation (not an escalation) and persist with a fresh context.
+		if sessionCtx.Err() != nil {
+			log.Infow("repair_cancelled_via_context")
+			o.markCancelledFresh(session.ID, "context_cancelled")
+			return fmt.Errorf("execution cancelled (context): %w", sessionCtx.Err())
+		}
+
 		// Check wall-clock budget
 		elapsed := time.Since(sessionStartTime).Seconds()
 		if elapsed > float64(session.MaxDurationSecs) {
@@ -251,6 +274,14 @@ func (o *Orchestrator) Run(
 		)
 
 		if attemptErr != nil {
+			// A Stop that cancelled the pipeline context surfaces here as a context
+			// error from the agent call — classify it as a cancellation (Property 4),
+			// not an escalation, and persist with a fresh context.
+			if sessionCtx.Err() != nil || errors.Is(attemptErr, context.Canceled) {
+				log.Infow("repair_attempt_cancelled_via_context")
+				o.markCancelledFresh(session.ID, "context_cancelled")
+				return attemptErr
+			}
 			log.Errorw("repair_attempt_failed", "error", attemptErr)
 			_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, fmt.Sprintf("attempt %d error: %v", attemptNum, attemptErr))
 			_ = o.workItemRepo.TransitionToFailed(sessionCtx, workItemID, fmt.Sprintf("repair failed: %v", attemptErr))
@@ -268,9 +299,27 @@ func (o *Orchestrator) Run(
 			return fmt.Errorf("repair escalated: %s", attemptResult.CannotRepairReason)
 		}
 
-		// Re-run Phase 8 validation
+		// Check pause/cancel after agent invocation but before post-repair validation
+		if pauseChecker != nil && execID != "" {
+			if pauseChecker.IsCancelled(sessionCtx, execID) {
+				o.markCancelledFresh(session.ID, "cancelled_by_user")
+				return fmt.Errorf("execution cancelled by user")
+			}
+			if pauseChecker.IsPaused(sessionCtx, execID) {
+				o.publish(session.ID, "repair_paused", map[string]interface{}{"phase": "before_post_repair_validation"})
+				if cancelled := pauseChecker.WaitForResume(sessionCtx, execID); cancelled {
+					o.markCancelledFresh(session.ID, "cancelled_while_paused")
+					return fmt.Errorf("execution cancelled while paused")
+				}
+				o.publish(session.ID, "repair_resumed", nil)
+			}
+		}
+
+		// Re-run Phase 8 validation — forward pause/cancel awareness so a Stop
+		// during a post-repair validation stage is observed between stages (and
+		// via ctx cancellation) rather than only after the whole run returns.
 		log.Info("running_post_repair_validation")
-		postRepairRun, valErr := o.validationOrch.Run(sessionCtx, taskExecutionID, workspaceID, traceID, "post_repair")
+		postRepairRun, valErr := o.validationOrch.Run(sessionCtx, taskExecutionID, workspaceID, traceID, "post_repair", execID, pauseChecker)
 		if valErr != nil {
 			log.Errorw("post_repair_validation_failed", "error", valErr)
 			_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, fmt.Sprintf("validation error: %v", valErr))
@@ -330,6 +379,21 @@ func (o *Orchestrator) Run(
 
 		case "improved":
 			log.Info("repair_improved_continuing")
+			// Check pause/cancel between repair attempts before continuing
+			if pauseChecker != nil && execID != "" {
+				if pauseChecker.IsCancelled(sessionCtx, execID) {
+					o.markCancelledFresh(session.ID, "cancelled_by_user")
+					return fmt.Errorf("execution cancelled by user")
+				}
+				if pauseChecker.IsPaused(sessionCtx, execID) {
+					o.publish(session.ID, "repair_paused", map[string]interface{}{"phase": "between_attempts"})
+					if cancelled := pauseChecker.WaitForResume(sessionCtx, execID); cancelled {
+						o.markCancelledFresh(session.ID, "cancelled_while_paused")
+						return fmt.Errorf("execution cancelled while paused")
+					}
+					o.publish(session.ID, "repair_resumed", nil)
+				}
+			}
 			// Continue to next attempt
 
 		case "no_change":

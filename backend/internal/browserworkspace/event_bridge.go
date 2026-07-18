@@ -412,6 +412,24 @@ func (eb *EventBridge) WrapValidationPublisher(
 		case "stage_skipped":
 			eb.gateway.Publish(workspaceID, ChDiagnostics, "stage_skipped", payload)
 
+		case "validation_paused":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "paused",
+				"message": "Paused during validation",
+			})
+
+		case "validation_resumed":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "running",
+				"message": "Validating",
+			})
+
+		case "validation_cancelled":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "stopped",
+				"message": "Cancelled during validation",
+			})
+
 		case "validation_complete":
 			eb.gateway.Publish(workspaceID, ChTimeline, "phase_completed", map[string]interface{}{
 				"phase":   "validation",
@@ -550,6 +568,24 @@ func (eb *EventBridge) WrapRepairPublisher(
 					}
 				}
 			}
+
+		case "repair_paused":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "paused",
+				"message": "Paused during repair",
+			})
+
+		case "repair_resumed":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "running",
+				"message": "Repairing",
+			})
+
+		case "repair_cancelled":
+			eb.gateway.Publish(workspaceID, ChCollaboration, "state_changed", map[string]interface{}{
+				"status":  "stopped",
+				"message": "Cancelled during repair",
+			})
 		}
 	}
 }

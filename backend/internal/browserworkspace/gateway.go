@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/auth"
+	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 )
 
@@ -95,20 +96,21 @@ type BrowserSession struct {
 // Gateway manages all WebSocket connections for browser workspace sessions.
 // It multiplexes multiple channels over a single WebSocket connection per client.
 type Gateway struct {
-	sessions    map[string]*BrowserSession // sessionID → session
-	workspaces  map[string][]string        // workspaceID → []sessionID
-	globalSeq   atomic.Int64
-	replayBuf   map[string][]Envelope      // workspaceID → recent events
-	mu          sync.RWMutex
-	replayMu    sync.RWMutex
-	termService *TerminalService
-	fsService   *FilesystemService
-	watchers    map[string]context.CancelFunc // workspaceID → watcher cancel
-	watcherMu   sync.Mutex
-	wsRepo      *repository.WorkspaceRepository
-	workItemRepo *repository.WorkItemRepository
-	execRepo    *repository.ExecutionRepository
-	logger      *zap.SugaredLogger
+	sessions        map[string]*BrowserSession // sessionID → session
+	workspaces      map[string][]string        // workspaceID → []sessionID
+	globalSeq       atomic.Int64
+	replayBuf       map[string][]Envelope      // workspaceID → recent events
+	mu              sync.RWMutex
+	replayMu        sync.RWMutex
+	termService     *TerminalService
+	fsService       *FilesystemService
+	watchers        map[string]context.CancelFunc // workspaceID → watcher cancel
+	watcherMu       sync.Mutex
+	wsRepo          *repository.WorkspaceRepository
+	workItemRepo    *repository.WorkItemRepository
+	execRepo        *repository.ExecutionRepository
+	contextRegistry *pipeline.ContextRegistry
+	logger          *zap.SugaredLogger
 }
 
 // NewGateway creates a new workspace WebSocket gateway.
@@ -141,6 +143,11 @@ func (g *Gateway) SetTerminalService(ts *TerminalService) {
 // SetFilesystemService wires the filesystem service for starting watchers.
 func (g *Gateway) SetFilesystemService(fs *FilesystemService) {
 	g.fsService = fs
+}
+
+// SetContextRegistry wires the pipeline context registry for cancellation propagation.
+func (g *Gateway) SetContextRegistry(cr *pipeline.ContextRegistry) {
+	g.contextRegistry = cr
 }
 
 // ── HTTP Handlers ────────────────────────────────────────────────────────────
@@ -525,6 +532,8 @@ func (g *Gateway) onCollaborationCommand(session *BrowserSession, msg ClientMess
 			return
 		}
 		g.logger.Infow("collaboration_ws_pause_requested", "workspace_id", workspaceID, "exec_id", execID)
+		// Broadcast control_requested so all connected sessions enter transitional state
+		g.Publish(workspaceID, ChCollaboration, "control_requested", map[string]interface{}{"action": "pause"})
 
 	case "resume":
 		if err := g.execRepo.MarkResumed(ctx, execID); err != nil {
@@ -532,13 +541,21 @@ func (g *Gateway) onCollaborationCommand(session *BrowserSession, msg ClientMess
 			return
 		}
 		g.logger.Infow("collaboration_ws_resume_requested", "workspace_id", workspaceID, "exec_id", execID)
+		// Broadcast control_requested so all connected sessions enter transitional state
+		g.Publish(workspaceID, ChCollaboration, "control_requested", map[string]interface{}{"action": "resume"})
 
 	case "stop":
 		if err := g.execRepo.MarkCancelled(ctx, execID); err != nil {
 			g.logger.Warnw("collaboration_ws_stop_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
 			return
 		}
+		// Immediate context propagation — cancels in-flight operations across all pipeline phases.
+		if g.contextRegistry != nil {
+			g.contextRegistry.Cancel(execID)
+		}
 		g.logger.Infow("collaboration_ws_stop_requested", "workspace_id", workspaceID, "exec_id", execID)
+		// Broadcast control_requested so all connected sessions enter transitional state
+		g.Publish(workspaceID, ChCollaboration, "control_requested", map[string]interface{}{"action": "stop"})
 
 	default:
 		g.logger.Debugw("collaboration_unknown_event", "workspace_id", workspaceID, "event", msg.Ev)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/validation/environment"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
@@ -115,6 +116,8 @@ func (o *ValidationOrchestrator) Run(
 	ctx context.Context,
 	taskExecutionID, workspaceID, traceID string,
 	runType string,
+	execID string,
+	pauseChecker pipeline.PauseChecker,
 ) (*models.ValidationRun, error) {
 	ctx = ingestion.WithTraceID(ctx, traceID)
 	log := o.logger.With("task_exec_id", taskExecutionID, "workspace_id", workspaceID)
@@ -264,6 +267,52 @@ func (o *ValidationOrchestrator) Run(
 		}
 		if stageCfg.Name == "build" && !stagePassed {
 			buildPassed = false
+		}
+
+		// Check pause/cancel between stages (Requirements 3.1, 3.2, 3.3)
+		if pauseChecker != nil && execID != "" {
+			if pauseChecker.IsCancelled(ctx, execID) {
+				log.Infow("validation_cancelled_between_stages", "after_stage", stageCfg.Name)
+				_ = o.repo.MarkCancelled(ctx, run.ID)
+				o.publish(run.ID, "validation_cancelled", map[string]interface{}{
+					"after_stage": stageCfg.Name,
+					"reason":      "cancelled_by_user",
+				})
+				return run, fmt.Errorf("execution cancelled by user")
+			}
+			if pauseChecker.IsPaused(ctx, execID) {
+				log.Infow("validation_paused_between_stages", "after_stage", stageCfg.Name)
+				o.publish(run.ID, "validation_paused", map[string]interface{}{
+					"after_stage": stageCfg.Name,
+				})
+				if cancelled := pauseChecker.WaitForResume(ctx, execID); cancelled {
+					log.Infow("validation_cancelled_while_paused", "after_stage", stageCfg.Name)
+					_ = o.repo.MarkCancelled(ctx, run.ID)
+					o.publish(run.ID, "validation_cancelled", map[string]interface{}{
+						"after_stage": stageCfg.Name,
+						"reason":      "cancelled_while_paused",
+					})
+					return run, fmt.Errorf("execution cancelled while paused")
+				}
+				log.Infow("validation_resumed", "after_stage", stageCfg.Name)
+				o.publish(run.ID, "validation_resumed", map[string]interface{}{
+					"after_stage": stageCfg.Name,
+				})
+			}
+		}
+
+		// Check context cancellation (from ContextRegistry Stop propagation)
+		if ctx.Err() != nil {
+			log.Infow("validation_context_cancelled", "after_stage", stageCfg.Name)
+			// Use a fresh context for DB write since the original ctx is cancelled.
+			markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = o.repo.MarkCancelled(markCtx, run.ID)
+			markCancel()
+			o.publish(run.ID, "validation_cancelled", map[string]interface{}{
+				"after_stage": stageCfg.Name,
+				"reason":      "context_cancelled",
+			})
+			return run, fmt.Errorf("execution cancelled (context): %w", ctx.Err())
 		}
 	}
 

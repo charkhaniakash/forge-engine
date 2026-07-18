@@ -6,6 +6,9 @@ import type {
   TimelineEvent,
 } from '@/types/workspaceEditor'
 
+/** Transitional action triggered by a control_requested WS event (multi-tab). */
+export type TransitionalAction = 'pausing' | 'stopping' | 'resuming'
+
 interface ActivityState {
   timeline: TimelineEvent[]
   aiEvents: AIActivityEvent[]
@@ -13,6 +16,11 @@ interface ActivityState {
   /** Live command output chunks (install/build/test/lint), in arrival order. */
   output: string[]
   collaboration: { status: CollaborationStatus; label?: string }
+  /**
+   * Set via `control_requested` WS event so all tabs see the transitional state.
+   * Cleared when an authoritative collaboration status arrives that confirms it.
+   */
+  transitionalAction: TransitionalAction | null
 }
 
 const initialState: ActivityState = {
@@ -21,6 +29,7 @@ const initialState: ActivityState = {
   diagnostics: [],
   output: [],
   collaboration: { status: 'idle' },
+  transitionalAction: null,
 }
 
 const MAX_AI_EVENTS = 500
@@ -61,6 +70,20 @@ const slice = createSlice({
       action: PayloadAction<{ status: CollaborationStatus; label?: string }>,
     ) {
       state.collaboration = action.payload
+      // Clear transitional action when an authoritative status confirms it
+      if (state.transitionalAction) {
+        const s = action.payload.status
+        if (
+          (state.transitionalAction === 'pausing' && s === 'paused') ||
+          (state.transitionalAction === 'stopping' && (s === 'stopped' || s === 'completed')) ||
+          (state.transitionalAction === 'resuming' && s === 'running')
+        ) {
+          state.transitionalAction = null
+        }
+      }
+    },
+    transitionalActionSet(state, action: PayloadAction<TransitionalAction | null>) {
+      state.transitionalAction = action.payload
     },
     resetActivity() {
       return initialState
@@ -76,6 +99,7 @@ export const {
   outputAppended,
   outputReset,
   collaborationChanged,
+  transitionalActionSet,
   resetActivity,
 } = slice.actions
 

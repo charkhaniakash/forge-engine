@@ -16,13 +16,14 @@ import (
 	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 
+	"github.com/charkhaniakash/forge-engine/backend/internal/browserworkspace"
 	"github.com/charkhaniakash/forge-engine/backend/internal/db"
 	"github.com/charkhaniakash/forge-engine/backend/internal/execution"
 	"github.com/charkhaniakash/forge-engine/backend/internal/github"
 	"github.com/charkhaniakash/forge-engine/backend/internal/handlers"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
-	"github.com/charkhaniakash/forge-engine/backend/internal/browserworkspace"
+	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repair"
@@ -266,6 +267,11 @@ func main() {
 				)
 				repairHandlers = repair.NewHandlers(repairRepo, repairOrch, sugar)
 
+				// ── Pipeline pause/cancel infrastructure ──────────────────────
+				contextRegistry := pipeline.NewContextRegistry()
+				execOrchestrator.SetContextRegistry(contextRegistry)
+				pauseChecker := pipeline.NewPauseChecker(execRepo)
+
 				// ── Publishing (Phase 10) ─────────────────────────────────────
 				publishingRepo := publishing.NewRepository(dbConn)
 				agentSummaryClient := publishing.NewAgentSummaryClient()
@@ -303,7 +309,8 @@ func main() {
 				bwGateway.SetTerminalService(bwTermService)
 				bwGateway.SetFilesystemService(bwFsService)
 				bwGateway.SetExecutionRepository(execRepo)
-				bwHandlers = browserworkspace.NewHandlers(bwGateway, bwFsService, bwTermService, wsRepo, workItemRepo, execRepo, wsManager, sugar)
+				bwGateway.SetContextRegistry(contextRegistry)
+				bwHandlers = browserworkspace.NewHandlers(bwGateway, bwFsService, bwTermService, wsRepo, workItemRepo, execRepo, wsManager, contextRegistry, sugar)
 				_ = bwFsService  // used by handlers
 				_ = bwTermService // used by handlers
 
@@ -328,6 +335,36 @@ func main() {
 						if eventBridge != nil {
 							defer eventBridge.UnregisterExecution(taskExecutionID)
 						}
+
+					// The taskExecutionID IS the execution ID for pause/cancel checks.
+					execID := taskExecutionID
+
+					// checkPauseCancel checks pause/cancel at a phase transition.
+					// Returns true if cancelled (caller should abort).
+					checkPauseCancel := func(phase string) bool {
+						if pauseChecker.IsCancelled(ctx, execID) {
+							if bwGateway != nil {
+								bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{"status": "stopped", "message": phase + " cancelled"})
+							}
+							return true
+						}
+						if pauseChecker.IsPaused(ctx, execID) {
+							if bwGateway != nil {
+								bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{"status": "paused"})
+							}
+							if cancelled := pauseChecker.WaitForResume(ctx, execID); cancelled {
+								if bwGateway != nil {
+									bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{"status": "stopped"})
+								}
+								return true
+							}
+							// Resumed — publish running again
+							if bwGateway != nil {
+								bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{"status": "running", "message": phase})
+							}
+						}
+						return false
+					}
 
 					log := sugar.With(
 						"task_execution_id", taskExecutionID,
@@ -355,6 +392,12 @@ func main() {
 					// proceed anyway. ForceToDone recovers the item even if an
 					// intermediate step marked it "failed".
 
+					// ── Pause/Cancel check BEFORE Phase 8 (Validation) ────────
+					if checkPauseCancel("Validating") {
+						log.Info("validation_trigger_cancelled_before_phase_8")
+						return
+					}
+
 					// Phase 10B: Notify browser workspace that validation is starting
 					if bwGateway != nil {
 						bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_started", map[string]interface{}{
@@ -369,12 +412,14 @@ func main() {
 					}
 
 					log.Info("phase_8_auto_validation_starting")
-					validationRun, err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change")
+					validationRun, err := valOrchestrator.Run(ctx, taskExecutionID, workspaceID, traceID, "post_change", execID, pauseChecker)
 					if err != nil {
 						// Validation infrastructure error — couldn't run at all.
 						// Per the non-blocking policy, proceed rather than fail.
 						log.Warnw("phase_8_validation_could_not_run_proceeding", "error", err)
-						_ = workItemRepo.ForceToDone(ctx, workItemID)
+						if !checkPauseCancel("ForceToDone") {
+							_ = workItemRepo.ForceToDone(ctx, workItemID)
+						}
 						return
 					}
 
@@ -399,6 +444,12 @@ func main() {
 					// escalation / budget exhaustion — that's fine, ForceToDone below
 					// recovers it. We proceed regardless of the repair outcome.
 					if overallResult == "failed_repairable" {
+						// ── Pause/Cancel check BEFORE Phase 9 (Repair) ────────
+						if checkPauseCancel("Repairing") {
+							log.Info("validation_trigger_cancelled_before_phase_9")
+							return
+						}
+
 						log.Info("validation_failed_repairable_attempting_repair")
 
 						// Phase 10B: Notify browser workspace that repair is starting
@@ -414,7 +465,7 @@ func main() {
 							})
 						}
 
-						if repErr := repairOrch.Run(ctx, taskExecutionID, workspaceID, validationRun.ID, traceID); repErr != nil {
+						if repErr := repairOrch.Run(ctx, taskExecutionID, workspaceID, validationRun.ID, traceID, execID, pauseChecker); repErr != nil {
 							log.Warnw("repair_pass_incomplete_proceeding_anyway", "error", repErr)
 							if bwGateway != nil {
 								bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
@@ -429,6 +480,12 @@ func main() {
 								})
 							}
 						}
+					}
+
+					// ── Pause/Cancel check BEFORE ForceToDone (Publishing) ────
+					if checkPauseCancel("ForceToDone") {
+						log.Info("validation_trigger_cancelled_before_force_to_done")
+						return
 					}
 
 					// Always finish in a publishable state — validation is advisory and

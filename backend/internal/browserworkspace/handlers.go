@@ -6,20 +6,22 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"go.uber.org/zap"
 
+	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
 
 // Handlers exposes REST endpoints for the browser workspace.
 type Handlers struct {
-	gateway     *Gateway
-	fsService   *FilesystemService
-	termService *TerminalService
-	wsRepo      *repository.WorkspaceRepository
-	workItemRepo *repository.WorkItemRepository
-	execRepo    *repository.ExecutionRepository
-	wsManager   *workspace.WorkspaceManager
-	logger      *zap.SugaredLogger
+	gateway         *Gateway
+	fsService       *FilesystemService
+	termService     *TerminalService
+	wsRepo          *repository.WorkspaceRepository
+	workItemRepo    *repository.WorkItemRepository
+	execRepo        *repository.ExecutionRepository
+	wsManager       *workspace.WorkspaceManager
+	contextRegistry *pipeline.ContextRegistry
+	logger          *zap.SugaredLogger
 }
 
 // NewHandlers creates browser workspace handlers.
@@ -31,17 +33,19 @@ func NewHandlers(
 	workItemRepo *repository.WorkItemRepository,
 	execRepo *repository.ExecutionRepository,
 	wsManager *workspace.WorkspaceManager,
+	contextRegistry *pipeline.ContextRegistry,
 	logger *zap.SugaredLogger,
 ) *Handlers {
 	return &Handlers{
-		gateway:      gateway,
-		fsService:    fsService,
-		termService:  termService,
-		wsRepo:       wsRepo,
-		workItemRepo: workItemRepo,
-		execRepo:     execRepo,
-		wsManager:    wsManager,
-		logger:       logger,
+		gateway:         gateway,
+		fsService:       fsService,
+		termService:     termService,
+		wsRepo:          wsRepo,
+		workItemRepo:    workItemRepo,
+		execRepo:        execRepo,
+		wsManager:       wsManager,
+		contextRegistry: contextRegistry,
+		logger:          logger,
 	}
 }
 
@@ -401,6 +405,10 @@ func (h *Handlers) StopExecution(c *fiber.Ctx) error {
 	if err := h.execRepo.MarkCancelled(c.Context(), execID); err != nil {
 		h.logger.Warnw("collaborate_stop_failed", "workspace_id", workspaceID, "exec_id", execID, "error", err)
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to stop"})
+	}
+	// Immediate context propagation — cancels in-flight operations across all pipeline phases.
+	if h.contextRegistry != nil {
+		h.contextRegistry.Cancel(execID)
 	}
 	h.logger.Infow("collaborate_stop_requested", "workspace_id", workspaceID, "exec_id", execID)
 	return c.JSON(fiber.Map{"status": "stopping", "execution_id": execID})

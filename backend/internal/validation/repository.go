@@ -111,6 +111,16 @@ func (r *ValidationRepository) MarkError(ctx context.Context, id, errMsg string)
 	return err
 }
 
+// MarkCancelled sets the validation run status to "cancelled" with a completion timestamp.
+func (r *ValidationRepository) MarkCancelled(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE validation_runs
+		SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+		WHERE id = $1
+	`, id)
+	return err
+}
+
 // ── ValidationStage ───────────────────────────────────────────────────────────
 
 func (r *ValidationRepository) CreateStage(

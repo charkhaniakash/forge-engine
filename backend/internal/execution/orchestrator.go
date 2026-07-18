@@ -11,6 +11,7 @@ import (
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
@@ -50,6 +51,7 @@ type ExecutionOrchestrator struct {
 	publisher         EventPublisher
 	validationTrigger ValidationTrigger
 	onStartHook       func(execID, workspaceID string)
+	contextRegistry   *pipeline.ContextRegistry
 	jwtSecret         string
 	logger            *zap.SugaredLogger
 }
@@ -98,12 +100,41 @@ func (o *ExecutionOrchestrator) SetValidationTrigger(trigger ValidationTrigger) 
 	o.validationTrigger = trigger
 }
 
+// SetContextRegistry wires the pipeline context registry for cancellation propagation.
+// When set, the Run method registers a cancellable context for each execution,
+// enabling Stop to immediately cancel in-flight operations across all pipeline phases.
+func (o *ExecutionOrchestrator) SetContextRegistry(cr *pipeline.ContextRegistry) {
+	o.contextRegistry = cr
+}
+
 // Run executes an approved plan step-by-step. Called as a goroutine.
 // It is the only place that advances task_executions.status.
 func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody json.RawMessage) {
 	log := o.logger.With("exec_id", execID)
 
-	exec, err := o.execRepo.GetExecution(ctx, execID)
+	// ── Register a cancellable pipeline context ───────────────────────────────
+	// When contextRegistry is set, create a cancellable context keyed by execID.
+	// Stop calls cancel this context, immediately terminating in-flight operations.
+	// Fall back to the provided ctx if no registry is configured.
+	//
+	// The entry must outlive Run when validation/repair run as a spawned goroutine
+	// (below): Run returns as soon as it launches that goroutine, so deregistering
+	// here would drop the entry while the pipeline is still active and make
+	// Cancel(execID) a no-op during validation/repair. We therefore only
+	// deregister here on the paths that DON'T hand off to the trigger goroutine;
+	// when we do hand off, that goroutine owns deregistration.
+	pipelineCtx := ctx
+	triggerSpawned := false
+	if o.contextRegistry != nil {
+		pipelineCtx = o.contextRegistry.Register(context.Background(), execID)
+		defer func() {
+			if !triggerSpawned {
+				o.contextRegistry.Deregister(execID)
+			}
+		}()
+	}
+
+	exec, err := o.execRepo.GetExecution(pipelineCtx, execID)
 	if err != nil {
 		log.Errorw("exec_load_failed", "error", err)
 		return
@@ -114,14 +145,14 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		o.onStartHook(execID, exec.WorkspaceID)
 	}
 
-	_ = o.execRepo.MarkRunning(ctx, execID)
+	_ = o.execRepo.MarkRunning(pipelineCtx, execID)
 	o.publishLifecycle(execID, "exec_start", "Execution started")
 
 	// Resolve ordered steps from plan body, respecting depends_on.
 	steps, err := resolveOrderedSteps(planBody)
 	if err != nil {
 		log.Errorw("resolve_steps_failed", "error", err)
-		_ = o.execRepo.MarkFailed(ctx, execID, fmt.Sprintf("could not resolve plan steps: %v", err))
+		_ = o.execRepo.MarkFailed(pipelineCtx, execID, fmt.Sprintf("could not resolve plan steps: %v", err))
 		return
 	}
 
@@ -129,7 +160,7 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 	var execCtx models.ExecutionContext
 	if err := json.Unmarshal(exec.ExecutionContext, &execCtx); err != nil {
 		log.Errorw("exec_ctx_unmarshal_failed", "error", err)
-		_ = o.execRepo.MarkFailed(ctx, execID, "invalid execution context")
+		_ = o.execRepo.MarkFailed(pipelineCtx, execID, "invalid execution context")
 		return
 	}
 
@@ -145,9 +176,9 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		log = log.With("step", stableID, "step_num", i+1)
 
 		// ── Control queue check ───────────────────────────────────────────────
-		if o.isCancelled(ctx, execID) {
+		if o.isCancelled(pipelineCtx, execID) {
 			log.Infow("execution_cancelled_between_steps")
-			_ = o.execRepo.MarkCancelled(ctx, execID)
+			_ = o.execRepo.MarkCancelled(pipelineCtx, execID)
 			o.publishLifecycle(execID, "exec_cancelled", "Execution cancelled by user")
 			return
 		}
@@ -155,12 +186,12 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		// ── Pause check ───────────────────────────────────────────────────────
 		// If the user paused, block here (between steps) until they resume or
 		// cancel. waitForResume polls the execution status.
-		if o.isPaused(ctx, execID) {
+		if o.isPaused(pipelineCtx, execID) {
 			log.Infow("execution_paused_between_steps")
 			o.publishLifecycle(execID, "exec_paused", "Execution paused by user")
-			if cancelled := o.waitForResume(ctx, execID); cancelled {
+			if cancelled := o.waitForResume(pipelineCtx, execID); cancelled {
 				log.Infow("execution_cancelled_while_paused")
-				_ = o.execRepo.MarkCancelled(ctx, execID)
+				_ = o.execRepo.MarkCancelled(pipelineCtx, execID)
 				o.publishLifecycle(execID, "exec_cancelled", "Execution cancelled by user")
 				return
 			}
@@ -175,10 +206,10 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		if blockedBy := o.findBlockingDep(step, deviatedOrFailed); blockedBy != "" {
 			log.Infow("step_skipped_blocked_dep",
 				"step", stableID, "blocked_by", blockedBy)
-			stepExec, err := o.execRepo.CreateStepExecution(ctx, execID, stableID, order)
+			stepExec, err := o.execRepo.CreateStepExecution(pipelineCtx, execID, stableID, order)
 			if err == nil {
 				skipNote := fmt.Sprintf("skipped: dependency '%s' deviated or failed", blockedBy)
-				_ = o.execRepo.MarkStepSkipped(ctx, stepExec.ID, skipNote)
+				_ = o.execRepo.MarkStepSkipped(pipelineCtx, stepExec.ID, skipNote)
 				o.publishLifecycle(execID, "step_skipped", fmt.Sprintf(
 					"Step %s skipped — dependency '%s' did not complete", stableID, blockedBy))
 			}
@@ -186,15 +217,15 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 			deviatedOrFailed[stableID] = true
 			continue
 		}
-		stepExec, err := o.execRepo.CreateStepExecution(ctx, execID, stableID, order)
+		stepExec, err := o.execRepo.CreateStepExecution(pipelineCtx, execID, stableID, order)
 		if err != nil {
 			log.Errorw("create_step_exec_failed", "error", err)
-			_ = o.execRepo.MarkFailed(ctx, execID, fmt.Sprintf("db error: %v", err))
+			_ = o.execRepo.MarkFailed(pipelineCtx, execID, fmt.Sprintf("db error: %v", err))
 			return
 		}
 
-		_ = o.execRepo.UpdateCurrentStep(ctx, execID, stableID)
-		_ = o.execRepo.MarkStepRunning(ctx, stepExec.ID)
+		_ = o.execRepo.UpdateCurrentStep(pipelineCtx, execID, stableID)
+		_ = o.execRepo.MarkStepRunning(pipelineCtx, stepExec.ID)
 
 		// ── Inject step_id and step_execution_id into execution context ─────────
 		stepCtx := execCtx
@@ -211,13 +242,13 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		}, o.jwtSecret)
 		if err != nil {
 			log.Errorw("sign_agent_token_failed", "error", err)
-			_ = o.execRepo.MarkStepFailed(ctx, stepExec.ID, err.Error())
-			_ = o.execRepo.MarkFailed(ctx, execID, err.Error())
+			_ = o.execRepo.MarkStepFailed(pipelineCtx, stepExec.ID, err.Error())
+			_ = o.execRepo.MarkFailed(pipelineCtx, execID, err.Error())
 			return
 		}
 
 		// ── Call agent for THIS step only ─────────────────────────────────────
-		stepCtxTimeout, cancel := context.WithTimeout(ctx, stepTimeout)
+		stepCtxTimeout, cancel := context.WithTimeout(pipelineCtx, stepTimeout)
 		stepCtxTimeout = ingestion.WithTraceID(stepCtxTimeout, execCtx.TraceID)
 
 		req := StepRequest{
@@ -239,7 +270,7 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 				if event.Event == "error" {
 					pipelineError = true
 				}
-				o.handleStepEvent(ctx, execID, stepExec.ID, event,
+				o.handleStepEvent(pipelineCtx, execID, stepExec.ID, event,
 					&stepReasoning, &stepDeviation,
 					&stepModified, &stepCreated, &stepDeleted)
 				// Fan to WebSocket.
@@ -259,40 +290,40 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 				errMsg = stepErr.Error()
 			}
 			log.Errorw("step_execution_failed", "error", errMsg)
-			_ = o.execRepo.MarkStepFailed(ctx, stepExec.ID, errMsg)
-			_ = o.execRepo.MarkFailed(ctx, execID, fmt.Sprintf("step %s failed: %s", stableID, errMsg))
+			_ = o.execRepo.MarkStepFailed(pipelineCtx, stepExec.ID, errMsg)
+			_ = o.execRepo.MarkFailed(pipelineCtx, execID, fmt.Sprintf("step %s failed: %s", stableID, errMsg))
 			return
 		}
 		if stepDeviation != "" {
 			// Classify the deviation type for the step record.
 			if strings.HasPrefix(stepDeviation, "execution_error:") {
-				_ = o.execRepo.MarkStepFailed(ctx, stepExec.ID,
+				_ = o.execRepo.MarkStepFailed(pipelineCtx, stepExec.ID,
 					strings.TrimPrefix(stepDeviation, "execution_error: "))
 				o.publishLifecycle(execID, "execution_error",
 					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
 				deviatedOrFailed[stableID] = true
 			} else if strings.HasPrefix(stepDeviation, "requires_human:") {
-				_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
+				_ = o.execRepo.MarkStepDeviated(pipelineCtx, stepExec.ID, stepDeviation)
 				o.publishLifecycle(execID, "requires_human",
 					fmt.Sprintf("Step %s requires human input: %s",
 						stableID, strings.TrimPrefix(stepDeviation, "requires_human: ")))
 				deviatedOrFailed[stableID] = true
 			} else if strings.HasPrefix(stepDeviation, "already_satisfied:") {
 				// Already satisfied - no changes needed, don't block downstream
-				_ = o.execRepo.MarkStepCompleted(ctx, stepExec.ID, stepReasoning)
+				_ = o.execRepo.MarkStepCompleted(pipelineCtx, stepExec.ID, stepReasoning)
 				o.publishLifecycle(execID, "already_satisfied",
 					fmt.Sprintf("Step %s already satisfied: %s",
 						stableID, strings.TrimPrefix(stepDeviation, "already_satisfied: ")))
 				// Do NOT mark as deviatedOrFailed - allow downstream to continue
 			} else {
 				// plan_deviation (including legacy deviation events)
-				_ = o.execRepo.MarkStepDeviated(ctx, stepExec.ID, stepDeviation)
+				_ = o.execRepo.MarkStepDeviated(pipelineCtx, stepExec.ID, stepDeviation)
 				o.publishLifecycle(execID, "plan_deviation",
 					fmt.Sprintf("Step %s: %s", stableID, stepDeviation))
 				deviatedOrFailed[stableID] = true
 			}
 		} else {
-			_ = o.execRepo.MarkStepCompleted(ctx, stepExec.ID, stepReasoning)
+			_ = o.execRepo.MarkStepCompleted(pipelineCtx, stepExec.ID, stepReasoning)
 		}
 
 		// ── Accumulate artifacts ──────────────────────────────────────────────
@@ -301,7 +332,7 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		deletedFiles = appendUnique(deletedFiles, stepDeleted...)
 
 		// ── Persist checkpoint after every step ───────────────────────────────
-		_, _ = o.execRepo.SaveCheckpoint(ctx, execID, stableID, order,
+		_, _ = o.execRepo.SaveCheckpoint(pipelineCtx, execID, stableID, order,
 			modifiedFiles, createdFiles, deletedFiles)
 
 		log.Infow("step_completed", "step", stableID)
@@ -325,7 +356,7 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		}
 	}
 	// Separate skipped from deviated using the execRepo.
-	stepExecs, _ := o.execRepo.ListStepExecutions(ctx, execID)
+	stepExecs, _ := o.execRepo.ListStepExecutions(pipelineCtx, execID)
 	for _, se := range stepExecs {
 		if se.Status == "skipped" {
 			skippedSteps++
@@ -391,7 +422,7 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		)
 	}
 
-	if err := o.execRepo.MarkCompletedWithStatus(ctx, execID, finalStatus); err != nil {
+	if err := o.execRepo.MarkCompletedWithStatus(pipelineCtx, execID, finalStatus); err != nil {
 		log.Errorw("mark_completed_failed", "error", err)
 	}
 
@@ -412,7 +443,19 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 	if o.validationTrigger != nil && (finalStatus == "completed" || finalStatus == "completed_with_deviations") {
 		o.publishLifecycle(execID, "validation_queued", "Execution complete — starting automatic validation")
 		log.Infow("auto_validation_triggered", "exec_id", execID)
-		go o.validationTrigger(context.Background(), execID, execCtx.WorkspaceID, execCtx.TraceID)
+		// The trigger goroutine owns the pipeline context for the remaining phases
+		// (validation → repair → publishing), so it must deregister the entry when
+		// it finishes — including on panic. Deregistering in Run (above) is skipped
+		// via triggerSpawned so the entry stays live for Cancel(execID) to reach.
+		triggerSpawned = true
+		trigger := o.validationTrigger
+		cr := o.contextRegistry
+		go func() {
+			if cr != nil {
+				defer cr.Deregister(execID)
+			}
+			trigger(pipelineCtx, execID, execCtx.WorkspaceID, execCtx.TraceID)
+		}()
 	}
 }
 

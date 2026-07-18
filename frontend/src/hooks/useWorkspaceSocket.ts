@@ -18,6 +18,7 @@ import {
   outputAppended,
   outputReset,
   timelineEventUpserted,
+  transitionalActionSet,
 } from '@/store/slices/workspaceActivitySlice'
 import type { WSEnvelope, CollaborationStatus } from '@/types/workspaceEditor'
 
@@ -102,6 +103,29 @@ export function useWorkspaceSocket(workspaceId: string): void {
 
     const offStatus = workspaceSocket.onStatus((s) => {
       dispatch(setConnectionStatus(s === 'connected' ? 'connected' : s))
+      // On reconnection: clear transitional state and fetch REST progress to reconcile (Task 9.4)
+      if (s === 'connected') {
+        dispatch(transitionalActionSet(null))
+        fetch(progressUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            if (data && EXEC_LIVE_STATUSES.has(data.status)) {
+              dispatch(collaborationChanged({
+                status: data.status === 'paused' ? 'paused' : 'running',
+                label: data.current_action
+                  ? `Step ${data.current_step} of ${data.total_steps}`
+                  : undefined,
+              }))
+            } else if (data?.status === 'completed') {
+              dispatch(collaborationChanged({ status: 'completed' }))
+            } else if (data?.status === 'cancelled') {
+              dispatch(collaborationChanged({ status: 'stopped' }))
+            }
+          })
+          .catch(() => { /* non-critical */ })
+      }
     })
 
     const unsubs: Array<() => void> = []
@@ -201,6 +225,21 @@ export function useWorkspaceSocket(workspaceId: string): void {
     unsubs.push(
       workspaceSocket.subscribe('collaboration', (env: WSEnvelope) => {
         const p = asObj(env.payload)
+
+        // Handle control_requested event for multi-tab consistency (Task 9.3)
+        if (env.ev === 'control_requested') {
+          const action = typeof p.action === 'string' ? p.action : ''
+          if (action === 'pause') {
+            dispatch(transitionalActionSet('pausing'))
+          } else if (action === 'stop') {
+            dispatch(transitionalActionSet('stopping'))
+          } else if (action === 'resume') {
+            dispatch(transitionalActionSet('resuming'))
+          }
+          return
+        }
+
+        // Authoritative state_changed / default collaboration event
         const status = (typeof p.status === 'string' ? p.status : 'running') as CollaborationStatus
         dispatch(
           collaborationChanged({

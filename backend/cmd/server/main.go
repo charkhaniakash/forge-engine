@@ -80,6 +80,7 @@ func main() {
 	ingestionJobRepo := repository.NewIngestionJobRepository(dbConn)
 	qaRepo := repository.NewQARepository(dbConn)
 	workItemRepo := repository.NewWorkItemRepository(dbConn)
+	missionMsgRepo := repository.NewMissionMessageRepository(dbConn)
 	wsRepo := repository.NewWorkspaceRepository(dbConn)
 	execRepo := repository.NewExecutionRepository(dbConn)
 	valRepo := validation.NewValidationRepository(dbConn)
@@ -207,6 +208,7 @@ func main() {
 			taskHandlers = handlers.NewTaskHandlers(
 				workItemRepo,
 				ingestionJobRepo,
+				missionMsgRepo,
 				agentPlanClient,
 				jwtSecret,
 				sugar,
@@ -653,6 +655,9 @@ func main() {
 		app.Put("/v1/repos/:repoID/tasks/:taskID/plan", middleware.RequireAuth(sugar), taskHandlers.UpdatePlan)
 		app.Post("/v1/repos/:repoID/tasks/:taskID/approve", middleware.RequireAuth(sugar), taskHandlers.ApproveTask)
 		app.Post("/v1/repos/:repoID/tasks/:taskID/replan", middleware.RequireAuth(sugar), taskHandlers.Replan)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/refine", middleware.RequireAuth(sugar), taskHandlers.RefinePlan)
+		app.Post("/v1/repos/:repoID/tasks/:taskID/follow-up", middleware.RequireAuth(sugar), taskHandlers.FollowUp)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/messages", middleware.RequireAuth(sugar), taskHandlers.ListMessages)
 		app.Post("/v1/repos/:repoID/tasks/:taskID/cancel", middleware.RequireAuth(sugar), taskHandlers.CancelTask)
 		// WebSocket — planning progress stream (token auth via ?token= query param)
 		app.Get("/v1/repos/:repoID/tasks/:taskID/stream",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,11 +33,12 @@ const planTimeout = 10 * time.Minute
 //   approval_status IN ('approved', 'auto_approved').
 //   This is enforced in Approve() and cannot be bypassed by the Agent.
 type TaskHandlers struct {
-	workItemRepo *repository.WorkItemRepository
-	jobRepo      *repository.IngestionJobRepository
-	agentClient  *ingestion.AgentPlanClient
-	jwtSecret    string
-	logger       *zap.SugaredLogger
+	workItemRepo   *repository.WorkItemRepository
+	jobRepo        *repository.IngestionJobRepository
+	missionMsgRepo *repository.MissionMessageRepository
+	agentClient    *ingestion.AgentPlanClient
+	jwtSecret      string
+	logger         *zap.SugaredLogger
 
 	// wsHub maps workItemID → channel of serialised WS messages.
 	// Used to stream "thinking" events to the frontend during planning.
@@ -54,18 +56,20 @@ type TaskHandlers struct {
 func NewTaskHandlers(
 	workItemRepo *repository.WorkItemRepository,
 	jobRepo *repository.IngestionJobRepository,
+	missionMsgRepo *repository.MissionMessageRepository,
 	agentClient *ingestion.AgentPlanClient,
 	jwtSecret string,
 	logger *zap.SugaredLogger,
 ) *TaskHandlers {
 	return &TaskHandlers{
-		workItemRepo: workItemRepo,
-		jobRepo:      jobRepo,
-		agentClient:  agentClient,
-		jwtSecret:    jwtSecret,
-		logger:       logger,
-		wsHub:        make(map[string]chan []byte),
-		planEventLog: make(map[string][][]byte),
+		workItemRepo:   workItemRepo,
+		jobRepo:        jobRepo,
+		missionMsgRepo: missionMsgRepo,
+		agentClient:    agentClient,
+		jwtSecret:      jwtSecret,
+		logger:         logger,
+		wsHub:          make(map[string]chan []byte),
+		planEventLog:   make(map[string][][]byte),
 	}
 }
 
@@ -127,6 +131,8 @@ func (h *TaskHandlers) CreateTask(c *fiber.Ctx) error {
 		context.Background(), // detached from request context
 		item.ID, doneJob.CommitSHA, plannerHint, traceID,
 		nil, // no prior plan for first-time planning
+		"",  // no refinement note
+		nil, // no history for initial planning
 	)
 
 	return c.Status(fiber.StatusCreated).JSON(item)
@@ -341,12 +347,223 @@ func (h *TaskHandlers) Replan(c *fiber.Ctx) error {
 		context.Background(),
 		item.ID, doneJob.CommitSHA, "implementation", traceID,
 		priorPlanBody,
+		"", // replan is a fresh cycle, not a refinement
+		nil, // no history for replan
 	)
 
 	// Return the updated item (now in 'planning' status).
 	item.Status = models.WorkItemStatusPlanning
 	item.ApprovalStatus = "pending_review"
 	return c.JSON(fiber.Map{"task": item})
+}
+
+// ── POST /v1/repos/:repoID/tasks/:taskID/refine ───────────────────────────────
+// Tier 1 follow-up: refine the CURRENT plan with an extra instruction, without
+// wiping the run. Unlike Replan (a destructive fresh cycle), Refine keeps the
+// prior plan as context, layers the user's note on top, and re-plans in place.
+// Only valid while the user is reviewing the plan (plan_ready).
+
+type RefinePlanRequest struct {
+	Note string `json:"note"`
+}
+
+func (h *TaskHandlers) RefinePlan(c *fiber.Ctx) error {
+	orgID := c.Locals("org_id").(string)
+	taskID := c.Params("taskID")
+	repoID := c.Params("repoID")
+	traceID := c.Locals("trace_id").(string)
+	ctx := c.Context()
+
+	var req RefinePlanRequest
+	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.Note) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "note is required"})
+	}
+
+	item, err := h.workItemRepo.GetByID(ctx, taskID, orgID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "task not found"})
+	}
+	// Tier 1 is plan-review refinement only: the plan must be awaiting the user's
+	// decision. Refining after approval/execution is Tier 2 (iterate on results).
+	if item.Status != models.WorkItemStatusPlanReady {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"error": "the plan can only be refined while it is awaiting review (plan_ready)",
+		})
+	}
+
+	// Prior plan gives the planner a starting point to adjust rather than discard.
+	var priorPlanBody json.RawMessage
+	if prior, err := h.workItemRepo.GetActivePlan(ctx, taskID); err == nil {
+		priorPlanBody = prior.Body
+	}
+
+	doneJob, err := h.jobRepo.GetLatestDoneForRepo(ctx, repoID)
+	if err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"error": "repository has not been indexed yet",
+		})
+	}
+
+	// Non-destructive: back to planning + pending_review, but keep any artifacts.
+	// (At plan_ready there are none, but ResetForReplan is the correct guarded
+	// transition and deliberately does NOT clear run artifacts.)
+	if err := h.workItemRepo.ResetForReplan(ctx, taskID, orgID); err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"error": fmt.Sprintf("cannot refine: %v", err),
+		})
+	}
+
+	h.logger.Infow("task_refine_triggered", "task_id", taskID, "trace_id", traceID)
+
+	go h.runPlanning(
+		context.Background(),
+		item.ID, doneJob.CommitSHA, "implementation", traceID,
+		priorPlanBody,
+		req.Note,
+		nil, // no history for plan refinement (uses refinement_note instead)
+	)
+
+	item.Status = models.WorkItemStatusPlanning
+	item.ApprovalStatus = "pending_review"
+	return c.JSON(fiber.Map{"task": item})
+}
+
+// ── POST /v1/repos/:repoID/tasks/:taskID/follow-up ────────────────────────────
+// Mission follow-up: sends a new user message in the same thread, resets the
+// work item to planning, and re-plans using accumulated chat history.
+
+type FollowUpRequest struct {
+	Message string `json:"message"`
+}
+
+func (h *TaskHandlers) FollowUp(c *fiber.Ctx) error {
+	orgID := c.Locals("org_id").(string)
+	taskID := c.Params("taskID")
+	repoID := c.Params("repoID")
+	traceID := c.Locals("trace_id").(string)
+	ctx := c.Context()
+
+	var req FollowUpRequest
+	if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.Message) == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "message is required"})
+	}
+
+	item, err := h.workItemRepo.GetByID(ctx, taskID, orgID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "task not found"})
+	}
+
+	// Follow-up is only allowed from terminal or plan_ready states.
+	allowed := map[string]bool{
+		models.WorkItemStatusDone:      true,
+		models.WorkItemStatusFailed:    true,
+		models.WorkItemStatusCancelled: true,
+		models.WorkItemStatusPlanReady: true,
+	}
+	if !allowed[item.Status] {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"error": "follow-up is only available when the mission is done, failed, cancelled, or plan_ready",
+		})
+	}
+
+	// Lazy backfill: if no messages exist yet, insert the original intent as turn 1.
+	existing, err := h.missionMsgRepo.ListByWorkItem(ctx, taskID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to load history"})
+	}
+	if len(existing) == 0 {
+		if _, err := h.missionMsgRepo.Append(ctx, taskID, "user", item.Intent, 1); err != nil {
+			h.logger.Warnw("follow_up_backfill_failed", "task_id", taskID, "error", err)
+		}
+	}
+
+	// Determine the next turn number and append the follow-up message.
+	latestTurn, err := h.missionMsgRepo.LatestTurnNumber(ctx, taskID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to read turn number"})
+	}
+	nextTurn := latestTurn + 1
+
+	msg, err := h.missionMsgRepo.Append(ctx, taskID, "user", strings.TrimSpace(req.Message), nextTurn)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to persist message"})
+	}
+
+	// Reset to planning state (preserves artifacts).
+	if err := h.workItemRepo.ResetForReplan(ctx, taskID, orgID); err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"error": fmt.Sprintf("cannot reset for follow-up: %v", err),
+		})
+	}
+
+	// Update the work item intent to the latest follow-up message so the agent
+	// plans for the NEW request, not the original one.
+	if err := h.workItemRepo.UpdateIntent(ctx, taskID, strings.TrimSpace(req.Message)); err != nil {
+		h.logger.Warnw("follow_up_update_intent_failed", "task_id", taskID, "error", err)
+	}
+
+	// Get the latest done ingestion job for commit SHA.
+	doneJob, err := h.jobRepo.GetLatestDoneForRepo(ctx, repoID)
+	if err != nil {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
+			"error": "repository has not been indexed yet",
+		})
+	}
+
+	// Get prior plan body if available.
+	var priorPlanBody json.RawMessage
+	if prior, err := h.workItemRepo.GetActivePlan(ctx, taskID); err == nil {
+		priorPlanBody = prior.Body
+	}
+
+	// Build history turns for the agent.
+	allMsgs, _ := h.missionMsgRepo.ListByWorkItem(ctx, taskID)
+	var history []ingestion.HistoryTurn
+	for _, m := range allMsgs {
+		history = append(history, ingestion.HistoryTurn{Role: m.Role, Content: m.Content})
+	}
+
+	h.logger.Infow("task_follow_up_triggered",
+		"task_id", taskID, "turn", nextTurn, "trace_id", traceID)
+
+	go h.runPlanning(
+		context.Background(),
+		item.ID, doneJob.CommitSHA, "implementation", traceID,
+		priorPlanBody,
+		"", // no single refinement note — full history is passed instead
+		history,
+	)
+
+	item.Status = models.WorkItemStatusPlanning
+	item.ApprovalStatus = "pending_review"
+	return c.JSON(fiber.Map{
+		"task":        item,
+		"turn_number": nextTurn,
+		"message":     msg,
+	})
+}
+
+// ── GET /v1/repos/:repoID/tasks/:taskID/messages ──────────────────────────────
+// Returns the full mission message history for a work item.
+
+func (h *TaskHandlers) ListMessages(c *fiber.Ctx) error {
+	orgID := c.Locals("org_id").(string)
+	taskID := c.Params("taskID")
+	ctx := c.Context()
+
+	// Verify the task exists and belongs to the org.
+	if _, err := h.workItemRepo.GetByID(ctx, taskID, orgID); err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "task not found"})
+	}
+
+	msgs, err := h.missionMsgRepo.ListByWorkItem(ctx, taskID)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to load messages"})
+	}
+	if msgs == nil {
+		msgs = []*models.MissionMessage{}
+	}
+	return c.JSON(fiber.Map{"messages": msgs})
 }
 
 // ── POST /v1/repos/:repoID/tasks/:taskID/cancel ───────────────────────────────
@@ -439,6 +656,8 @@ func (h *TaskHandlers) runPlanning(
 	ctx context.Context,
 	taskID, commitSHA, plannerHint, traceID string,
 	priorPlanBody json.RawMessage,
+	refinementNote string,
+	history []ingestion.HistoryTurn,
 ) {
 	log := h.logger.With("task_id", taskID, "trace_id", traceID)
 
@@ -460,10 +679,12 @@ func (h *TaskHandlers) runPlanning(
 		WorkItemID:    taskID,
 		RepoID:        item.RepoID,
 		CommitSHA:     commitSHA,
-		Intent:        item.Intent,
-		PlannerHint:   plannerHint,
-		PriorPlanBody: priorPlanBody,
-		RequestID:     fmt.Sprintf("plan-%s", taskID[:8]),
+		Intent:         item.Intent,
+		PlannerHint:    plannerHint,
+		PriorPlanBody:  priorPlanBody,
+		RefinementNote: refinementNote,
+		History:        history,
+		RequestID:      fmt.Sprintf("plan-%s", taskID[:8]),
 	}
 
 	planCtx, cancel := context.WithTimeout(ctx, planTimeout)

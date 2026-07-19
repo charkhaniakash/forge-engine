@@ -469,6 +469,14 @@ export function buildFileChanges(diffs: CodeDiff[]): FileChangeVM[] {
 
 // ── Conversation thread ────────────────────────────────────────────────────────
 
+export interface MissionMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  turn_number: number
+  created_at: string
+}
+
 export interface ConversationInputs {
   intent: string
   planning: PlanningSocketEvent[]
@@ -484,6 +492,8 @@ export interface ConversationInputs {
   publishingSession?: PublishingSession | null
   /** Which phase is currently streaming, if any — only its trailing work group renders live/expanded. */
   livePhase?: 'planning' | 'executing' | 'validation' | 'repair' | 'publishing'
+  /** User follow-up messages from the backend — used to segment the thread by turn. */
+  messages?: MissionMessage[]
 }
 
 /**
@@ -492,6 +502,10 @@ export interface ConversationInputs {
  * validation/repair/publish), in canonical — and therefore chronological —
  * phase order. Backend phase boundaries never surface as separate panels;
  * they're just where an artifact card gets inserted into one continuous feed.
+ *
+ * Turn segmentation: User follow-up messages are interleaved with the activity
+ * they triggered. The thread shape is: intent(turn1) → plan1 → exec1 → val1 →
+ * [user message turn2] → plan2 → exec2 → ...
  */
 export function buildConversation(inp: ConversationInputs): ConversationEntry[] {
   const all = buildActivity({
@@ -505,34 +519,85 @@ export function buildConversation(inp: ConversationInputs): ConversationEntry[] 
   const out: ConversationEntry[] = []
   if (inp.intent) out.push({ type: 'intent', text: inp.intent })
 
-  const pushPhaseWork = (phase: ActivityEvent['phase']) => {
-    const events = all.filter((e) => e.phase === phase)
-    if (events.length === 0) return
-    for (const entry of groupWork(events, inp.livePhase === phase)) {
-      out.push(
-        entry.type === 'group'
-          ? { type: 'work', group: entry.group, isLive: entry.isLive }
-          : { type: 'message', event: entry.event },
-      )
+  // Group user messages by turn number, sorted by turn
+  const userMessages = (inp.messages ?? [])
+    .filter((m) => m.role === 'user' && m.turn_number > 1)
+    .sort((a, b) => a.turn_number - b.turn_number)
+
+  // Assign turn numbers to activity events based on timestamps
+  // Events created AFTER the Nth user message's created_at belong to turn N+1
+  const eventsWithTurns = all.map((ev) => {
+    let turn = 1
+    for (const msg of userMessages) {
+      const msgTime = new Date(msg.created_at).getTime()
+      const evTime = ev.atMs ?? Date.now()
+      if (evTime > msgTime) {
+        turn = Math.max(turn, msg.turn_number)
+      }
+    }
+    return { ...ev, turn }
+  })
+
+  // Group events by turn
+  const eventsByTurn = new Map<number, ActivityEvent[]>()
+  for (const ev of eventsWithTurns) {
+    const turn = ev.turn
+    if (!eventsByTurn.has(turn)) eventsByTurn.set(turn, [])
+    eventsByTurn.get(turn)!.push(ev)
+  }
+
+  // Build the conversation turn by turn
+  const maxTurn = Math.max(...eventsByTurn.keys(), ...userMessages.map((m) => m.turn_number), 1)
+
+  for (let turn = 1; turn <= maxTurn; turn++) {
+    const turnEvents = eventsByTurn.get(turn) ?? []
+    const isCurrentTurn = turn === maxTurn
+
+    const pushPhaseWork = (phase: ActivityEvent['phase']) => {
+      const events = turnEvents.filter((e) => e.phase === phase)
+      if (events.length === 0) return
+      for (const entry of groupWork(events, inp.livePhase === phase)) {
+        out.push(
+          entry.type === 'group'
+            ? { type: 'work', group: entry.group, isLive: entry.isLive }
+            : { type: 'message', event: entry.event },
+        )
+      }
+    }
+
+    pushPhaseWork('planning')
+    // Show plan for the current turn if it exists (not just turn 1)
+    if (isCurrentTurn && inp.plan) out.push({ type: 'plan', plan: inp.plan })
+
+    pushPhaseWork('executing')
+    // Show file changes for the current turn
+    if (isCurrentTurn && inp.fileChanges.length > 0) out.push({ type: 'files', files: inp.fileChanges })
+
+    pushPhaseWork('validation')
+    // Show validation for the current turn
+    if (isCurrentTurn && inp.validationStages.length > 0) {
+      out.push({ type: 'validation', stages: inp.validationStages, overall: inp.validationOverall })
+    }
+
+    pushPhaseWork('repair')
+    // Show repair for the current turn
+    if (isCurrentTurn && inp.repairAttempts.length > 0) out.push({ type: 'repair', attempts: inp.repairAttempts })
+
+    pushPhaseWork('publishing')
+    // Show publishing for the current turn
+    if (isCurrentTurn && inp.publishingSession) out.push({ type: 'publish', session: inp.publishingSession })
+
+    // Insert user message for the next turn (if any)
+    const nextUserMsg = userMessages.find((m) => m.turn_number === turn + 1)
+    if (nextUserMsg) {
+      out.push({
+        type: 'user',
+        text: nextUserMsg.content,
+        turnNumber: nextUserMsg.turn_number,
+        createdAt: nextUserMsg.created_at,
+      })
     }
   }
-
-  pushPhaseWork('planning')
-  if (inp.plan) out.push({ type: 'plan', plan: inp.plan })
-
-  pushPhaseWork('executing')
-  if (inp.fileChanges.length > 0) out.push({ type: 'files', files: inp.fileChanges })
-
-  pushPhaseWork('validation')
-  if (inp.validationStages.length > 0) {
-    out.push({ type: 'validation', stages: inp.validationStages, overall: inp.validationOverall })
-  }
-
-  pushPhaseWork('repair')
-  if (inp.repairAttempts.length > 0) out.push({ type: 'repair', attempts: inp.repairAttempts })
-
-  pushPhaseWork('publishing')
-  if (inp.publishingSession) out.push({ type: 'publish', session: inp.publishingSession })
 
   return out
 }

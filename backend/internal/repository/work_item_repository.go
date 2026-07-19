@@ -295,6 +295,15 @@ func (r *WorkItemRepository) ResetForReplan(ctx context.Context, id, orgID strin
 	return nil
 }
 
+// UpdateIntent updates the work item's intent field. Used by follow-up to set
+// the latest user message as the active intent for planning.
+func (r *WorkItemRepository) UpdateIntent(ctx context.Context, id, intent string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items SET intent = $2, updated_at = NOW() WHERE id = $1
+	`, id, intent)
+	return err
+}
+
 // ClearRunArtifactsForReplan deletes all downstream artifacts from a previous
 // run of a work item so that a re-plan starts a genuinely fresh cycle
 // (planning → execution → validation → publish) with no stale data.

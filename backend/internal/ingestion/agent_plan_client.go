@@ -18,7 +18,15 @@ type PlanRequest struct {
 	Intent          string          `json:"intent"`
 	PlannerHint     string          `json:"planner_hint,omitempty"`     // optional; defaults to "implementation"
 	PriorPlanBody   json.RawMessage `json:"prior_plan_body,omitempty"`  // JSON of previous plan for re-plans (raw JSON, not base64)
+	RefinementNote  string          `json:"refinement_note,omitempty"`  // user follow-up to refine the prior plan (Tier 1)
+	History         []HistoryTurn   `json:"history,omitempty"`          // accumulated chat history for follow-ups
 	RequestID       string          `json:"request_id"`
+}
+
+// HistoryTurn is a single message in the mission chat history passed to the agent.
+type HistoryTurn struct {
+	Role    string `json:"role"`    // "user" | "assistant"
+	Content string `json:"content"`
 }
 
 // PlanStreamEvent is one NDJSON line received from the Agent's plan endpoint.

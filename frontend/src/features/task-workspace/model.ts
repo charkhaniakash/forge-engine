@@ -76,6 +76,7 @@ export type WorkEntry =
  */
 export type ConversationEntry =
   | { type: 'intent'; text: string }
+  | { type: 'user'; text: string; turnNumber: number; createdAt: string }
   | { type: 'work'; group: WorkGroup; isLive: boolean }
   | { type: 'message'; event: ActivityEvent }
   | { type: 'plan'; plan: Plan }

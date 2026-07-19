@@ -82,6 +82,7 @@ class PlanningRequest(BaseModel):
     intent: str
     planner_hint: str = "implementation"
     prior_plan_body: dict[str, Any] | None = None   # for re-plans
+    refinement_note: str | None = None              # user follow-up to refine the prior plan
     request_id: str
 
 

@@ -532,3 +532,17 @@ type RepairDiff struct {
 	LinesAdded   int    `json:"lines_added"`
 	LinesRemoved int    `json:"lines_removed"`
 }
+
+// ── Phase 16 — Mission follow-up history ──────────────────────────────────────
+
+// MissionMessage is a single message in a mission's follow-up chat thread.
+// role is "user" or "assistant". turn_number groups messages by conversation turn
+// (1 = original intent, 2 = first follow-up, etc.).
+type MissionMessage struct {
+	ID         string    `json:"id"`
+	WorkItemID string    `json:"work_item_id"`
+	Role       string    `json:"role"`        // "user" | "assistant"
+	Content    string    `json:"content"`
+	TurnNumber int       `json:"turn_number"`
+	CreatedAt  time.Time `json:"created_at"`
+}

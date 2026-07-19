@@ -60,6 +60,7 @@ export const baseApi = createApi({
     'WsGit',
     'Org',
     'OrgMember',
+    'MissionMessages',
   ],
   endpoints: () => ({}),
 })

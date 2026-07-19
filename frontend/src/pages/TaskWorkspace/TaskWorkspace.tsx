@@ -17,11 +17,14 @@ import { useToast } from '@/hooks/useToast'
 import {
   useApproveTaskMutation,
   useCancelTaskMutation,
+  useFollowUpMutation,
   useGetTaskQuery,
+  useListMissionMessagesQuery,
+  useRefinePlanMutation,
   useReplanTaskMutation,
 } from '@/services/api/taskApi'
+// Execution cancel is superseded by the cross-phase collaborate/stop.
 import {
-  useCancelExecutionMutation,
   useGetExecutionDiffsQuery,
   useGetExecutionQuery,
   useStartExecutionMutation,
@@ -31,6 +34,7 @@ import {
   useStartValidationMutation,
 } from '@/services/api/validationApi'
 import { useGetRepairSessionByTaskQuery } from '@/services/api/repairApi'
+import { useStopExecutionMutation } from '@/services/api/workspaceEditorApi'
 import {
   useGetWorkspaceQuery,
   useProvisionWorkspaceMutation,
@@ -215,6 +219,47 @@ export function TaskWorkspace() {
             : undefined
   const live = livePhase !== undefined
 
+  // ── Actions ──────────────────────────────────────────────────────────────
+  const [approve, { isLoading: approving }] = useApproveTaskMutation()
+  const [replan, { isLoading: replanning }] = useReplanTaskMutation()
+  const [refinePlan, { isLoading: refining }] = useRefinePlanMutation()
+  const [followUp, { isLoading: followingUp }] = useFollowUpMutation()
+  const { data: messagesData } = useListMissionMessagesQuery(
+    { repoId, taskId },
+    { skip: !repoId || !taskId },
+  )
+
+  // ── Turn-aware artifact gating ────────────────────────────────────────────
+  // After a follow-up message, artifacts (validation, repair, files, publish)
+  // from the *previous* turn must NOT appear in the current turn. We compare
+  // each artifact's created_at with the last user message's created_at.
+  // If no follow-ups exist, everything belongs to the current (only) turn.
+  const lastUserMsg = useMemo(() => {
+    const userMsgs = (messagesData?.messages ?? [])
+      .filter((m) => m.role === 'user' && m.turn_number > 1)
+      .sort((a, b) => a.turn_number - b.turn_number)
+    return userMsgs[userMsgs.length - 1]
+  }, [messagesData?.messages])
+
+  const lastUserMsgTime = lastUserMsg ? new Date(lastUserMsg.created_at).getTime() : 0
+
+  /** True if the artifact was created AFTER the last follow-up (i.e. belongs to the current turn). */
+  function belongsToCurrentTurn(createdAt: string | undefined): boolean {
+    if (!lastUserMsg) return true // no follow-ups → single turn
+    if (!createdAt) return false  // no timestamp → can't verify → hide
+    return new Date(createdAt).getTime() > lastUserMsgTime
+  }
+
+  const valBelongsToCurrent = belongsToCurrentTurn(valRun?.created_at)
+  const execBelongsToCurrent = belongsToCurrentTurn(execution?.started_at)
+  const repairBelongsToCurrent = repairSession?.created_at
+    ? belongsToCurrentTurn(repairSession.created_at)
+    : !lastUserMsg // no session + no follow-ups → ok; no session + follow-ups → hide
+  const publishBelongsToCurrent = publishSession?.created_at
+    ? belongsToCurrentTurn(publishSession.created_at)
+    : !lastUserMsg
+  const planBelongsToCurrent = belongsToCurrentTurn(plan?.created_at)
+
   const conversation = useMemo(
     () =>
       buildConversation({
@@ -224,27 +269,28 @@ export function TaskWorkspace() {
         validation: valEvents,
         repair: repairEvents,
         publishing: pubEvents,
-        plan,
-        fileChanges,
-        validationStages,
-        validationOverall: valRun?.overall_result,
-        repairAttempts,
-        publishingSession: publishSession,
+        plan: planBelongsToCurrent ? plan : null,
+        fileChanges: execBelongsToCurrent ? fileChanges : [],
+        validationStages: valBelongsToCurrent ? validationStages : [],
+        validationOverall: valBelongsToCurrent ? valRun?.overall_result : undefined,
+        repairAttempts: repairBelongsToCurrent ? repairAttempts : [],
+        publishingSession: publishBelongsToCurrent ? publishSession : null,
         livePhase,
+        messages: messagesData?.messages ?? [],
       }),
     [
       task?.intent, planEvents, execEvents, valEvents, repairEvents, pubEvents,
       plan, fileChanges, validationStages, valRun?.overall_result, repairAttempts,
-      publishSession, livePhase,
+      publishSession, livePhase, messagesData?.messages,
+      valBelongsToCurrent, execBelongsToCurrent, repairBelongsToCurrent, publishBelongsToCurrent,
     ],
   )
-
-  // ── Actions ──────────────────────────────────────────────────────────────
-  const [approve, { isLoading: approving }] = useApproveTaskMutation()
-  const [replan, { isLoading: replanning }] = useReplanTaskMutation()
+  // The cross-phase Stop: /collaborate/stop marks the execution cancelled AND
+  // cancels the pipeline context, which is the only thing that halts validation
+  // and repair (they don't watch the work-item status that cancelTask flips).
+  const [stopExecution, { isLoading: stopping }] = useStopExecutionMutation()
   const [cancel] = useCancelTaskMutation()
   const [startExec, { isLoading: starting }] = useStartExecutionMutation()
-  const [cancelExec] = useCancelExecutionMutation()
   const [startValidation, { isLoading: validating }] = useStartValidationMutation()
   const [provisionWorkspace, { isLoading: provisioning }] = useProvisionWorkspaceMutation()
   const [startPublish, { isLoading: publishStarting }] = useStartPublishMutation()
@@ -255,6 +301,47 @@ export function TaskWorkspace() {
   const [proceeded, setProceeded] = useState(false)
   // Re-plan is destructive (wipes the current run), so it goes through a confirm.
   const [replanConfirmOpen, setReplanConfirmOpen] = useState(false)
+
+  // Tier 1 follow-up: refine the plan while reviewing it. The submitted notes are
+  // shown as user bubbles for the session; the refined plan streams in below.
+  const [refineNote, setRefineNote] = useState('')
+  const [sentRefinements, setSentRefinements] = useState<string[]>([])
+
+  async function handleRefine() {
+    const note = refineNote.trim()
+    if (!note) return
+    setSentRefinements((prev) => [...prev, note])
+    setRefineNote('')
+    const ok = await run(
+      refinePlan({ repoId, taskId, note }).unwrap(),
+      'Refining the plan…',
+      'Could not refine the plan',
+    )
+    if (ok) {
+      refetchTask()
+    } else {
+      // Roll the optimistic bubble back so the user can retry.
+      setSentRefinements((prev) => prev.filter((n) => n !== note))
+      setRefineNote(note)
+    }
+  }
+
+  // After a mission ends, sending a follow-up stays on the same thread and
+  // re-plans using accumulated chat history — Claude-Code-style persistent chat.
+  async function handleFollowUp() {
+    const msg = refineNote.trim()
+    if (!msg) return
+    setSentRefinements((prev) => [...prev, msg])
+    setRefineNote('')
+    try {
+      await followUp({ repoId, taskId, message: msg }).unwrap()
+      refetchTask()
+    } catch {
+      setSentRefinements((prev) => prev.filter((n) => n !== msg))
+      setRefineNote(msg)
+      toast.error('Could not send follow-up')
+    }
+  }
 
   const dispatch = useAppDispatch()
 
@@ -384,12 +471,8 @@ export function TaskWorkspace() {
       </Button>
     )
   } else if (isExecuting) {
-    actionRow = (
-      <Button key="cancel" variant="danger" leadingIcon={<Icon name="x" size={15} />}
-        onClick={() => run(cancelExec({ repoId, taskId }).unwrap(), 'Cancelling…', 'Failed to cancel')}>
-        Cancel execution
-      </Button>
-    )
+    // Stop lives in the persistent composer now, so no separate cancel button here.
+    actionRow = null
   } else if (canValidate) {
     actionRow = (
       <Button key="validate" variant="primary" loading={validating} leadingIcon={<Icon name="check" size={15} />}
@@ -556,6 +639,113 @@ export function TaskWorkspace() {
     </div>
   )
 
+  // Persistent composer — always visible, like a coding assistant. Its behavior
+  // adapts to the mission phase:
+  //   • agent working   → Stop button (cancels the run)
+  //   • reviewing plan  → Send button refines the plan (Tier 1)
+  //   • otherwise       → input disabled with a contextual hint (Tier 2 will
+  //                       enable follow-ups after completion)
+  const canRefine = canApprove
+  const canStartNew = missionDone || missionFailed
+  const showStop = live
+  const composerBusy = refining || followingUp
+  // The input is typeable while reviewing a plan (refine) or once the mission has
+  // ended (start a new one). It's only disabled during the brief transient states
+  // (e.g. approved-and-provisioning) where neither action applies.
+  const inputEnabled = !showStop && (canRefine || canStartNew)
+
+  function submitComposer() {
+    if (canRefine) handleRefine()
+    else if (canStartNew) handleFollowUp()
+  }
+
+  async function handleStop() {
+    let ok = false
+    // 1) Halt whatever is actually running. Once a workspace exists
+    //    (execution/validation/repair), collaborate/stop cancels the execution
+    //    AND the pipeline context — the only thing that stops validation/repair.
+    if (workspace?.id) {
+      try {
+        await stopExecution(workspace.id).unwrap()
+        ok = true
+      } catch {
+        /* fall through to the mission-level cancel */
+      }
+    }
+    // 2) Move the mission itself to a terminal state so the header/hero stop
+    //    showing a live phase (collaborate/stop cancels the run, not the work
+    //    item). Ignored if it's already terminal.
+    try {
+      await cancel({ repoId, taskId }).unwrap()
+      ok = true
+    } catch {
+      /* already terminal — treat as stopped */
+    }
+    toast[ok ? 'success' : 'error'](ok ? 'Stopped' : 'Failed to stop')
+    refetchExec()
+    refetchVal()
+    refetchRepair()
+    refetchPublish()
+    refetchTask()
+  }
+
+  const composerPlaceholder = showStop
+    ? 'Forge is working… click Stop to cancel.'
+    : canRefine
+      ? 'Refine the plan — e.g. “also handle the empty-list case”. ⌘/Ctrl+Enter to send.'
+      : canStartNew
+        ? 'Send a follow-up — e.g. "now add error handling for edge cases". ⌘/Ctrl+Enter to send.'
+        : 'Follow-ups are available while a plan is under review.'
+
+  const composer = (
+    <div className={styles.composerBox}>
+      <textarea
+        className={styles.composerInput}
+        value={refineNote}
+        onChange={(e) => setRefineNote(e.target.value)}
+        placeholder={composerPlaceholder}
+        rows={2}
+        disabled={!inputEnabled || composerBusy}
+        onKeyDown={(e) => {
+          if (inputEnabled && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault()
+            submitComposer()
+          }
+        }}
+      />
+      {showStop ? (
+        <Button
+          variant="danger"
+          loading={stopping}
+          leadingIcon={<Icon name="stop" size={13} />}
+          onClick={handleStop}
+        >
+          Stop
+        </Button>
+      ) : canStartNew ? (
+        <Button
+          variant="primary"
+          loading={followingUp}
+          disabled={!refineNote.trim()}
+          leadingIcon={<Icon name="chat" size={14} />}
+          onClick={handleFollowUp}
+        >
+          Follow up
+        </Button>
+      ) : (
+        <Button
+          variant="secondary"
+          loading={refining}
+          disabled={!canRefine || !refineNote.trim()}
+          leadingIcon={<Icon name="chat" size={14} />}
+          onClick={handleRefine}
+        >
+          Refine plan
+        </Button>
+      )}
+    </div>
+  )
+
   return (
     <>
       <MissionThread
@@ -565,6 +755,17 @@ export function TaskWorkspace() {
         live={live}
         planActions={planActions}
         actionRow={actionRow}
+        trailingMessages={(() => {
+          // Only show optimistic sentRefinements that haven't been persisted yet
+          // Server-persisted messages now render inline via buildConversation
+          const serverMsgs = (messagesData?.messages ?? [])
+            .filter((m) => m.role === 'user' && m.turn_number > 1)
+            .map((m) => m.content)
+          const serverSet = new Set(serverMsgs)
+          const pending = sentRefinements.filter((r) => !serverSet.has(r))
+          return pending
+        })()}
+        composer={composer}
       />
       <ConfirmDialog
         open={replanConfirmOpen}

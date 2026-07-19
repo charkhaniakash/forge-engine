@@ -21,6 +21,10 @@ export interface MissionThreadProps {
   planActions?: ReactNode
   /** Rendered at the end of the thread — the one contextual next-step button. */
   actionRow?: ReactNode
+  /** User follow-up messages (e.g. plan refinements) shown as chat bubbles at the end. */
+  trailingMessages?: string[]
+  /** Docked input at the bottom of the page (e.g. the refine-plan composer). */
+  composer?: ReactNode
   emptyLabel?: string
 }
 
@@ -141,6 +145,8 @@ function nodeMeta(entry: ConversationEntry): { icon: IconName; tone: NodeTone } 
   switch (entry.type) {
     case 'intent':
       return { icon: 'chat', tone: 'accent' }
+    case 'user':
+      return { icon: 'chat', tone: 'accent' }
     case 'work':
       return { icon: entry.group.hasToolActivity ? 'tool' : 'sparkles', tone: 'neutral' }
     case 'message':
@@ -170,6 +176,8 @@ function renderEntry(entry: ConversationEntry, planActions?: ReactNode): ReactNo
   switch (entry.type) {
     case 'intent':
       return <div className={styles.intent}>{entry.text}</div>
+    case 'user':
+      return <div className={styles.userMessage}>{entry.text}</div>
     case 'work':
       return <ThoughtGroup group={entry.group} isLive={entry.isLive} />
     case 'message':
@@ -205,14 +213,14 @@ function entryKey(entry: ConversationEntry, i: number): string {
  * the current phase at a glance; below it, every step — thinking, tool use,
  * plan/files/validation/repair/publish outcomes — hangs off a connected spine.
  */
-export function MissionThread({ header, hero, entries, live, planActions, actionRow, emptyLabel = 'Waiting for the agent…' }: MissionThreadProps) {
+export function MissionThread({ header, hero, entries, live, planActions, actionRow, trailingMessages, composer, emptyLabel = 'Waiting for the agent…' }: MissionThreadProps) {
   const endRef = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (atBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' })
-  }, [entries.length])
+  }, [entries.length, trailingMessages?.length])
 
   function onScroll() {
     const el = scrollRef.current
@@ -260,10 +268,19 @@ export function MissionThread({ header, hero, entries, live, planActions, action
             )}
           </div>
 
+          {trailingMessages && trailingMessages.length > 0 && (
+            <div className={styles.userMessages}>
+              {trailingMessages.map((msg, i) => (
+                <div key={`user-msg-${i}`} className={styles.userMessage}>{msg}</div>
+              ))}
+            </div>
+          )}
+
           {actionRow && <div className={styles.actionRow}>{actionRow}</div>}
           <div ref={endRef} />
         </div>
       </div>
+      {composer && <div className={styles.composer}>{composer}</div>}
     </div>
   )
 }

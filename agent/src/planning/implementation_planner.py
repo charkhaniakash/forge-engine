@@ -141,7 +141,9 @@ class ImplementationPlanner:
         yield "Preparing code context for planning..."
 
         context_block = _build_context_block(context)
-        user_message = _build_user_message(req.intent, context_block, prior_plan)
+        user_message = _build_user_message(
+            req.intent, context_block, prior_plan, req.refinement_note
+        )
 
         yield "Generating implementation plan..."
 
@@ -270,6 +272,7 @@ def _build_user_message(
     intent: str,
     context_block: str,
     prior_plan: PlanBody | None,
+    refinement_note: str | None = None,
 ) -> str:
     parts = [f"Intent: {intent}"]
 
@@ -284,10 +287,22 @@ def _build_user_message(
         )
 
     if prior_plan is not None:
+        # When there's a refinement note the prior plan is a starting point to
+        # adjust, not something to discard — say so explicitly below.
+        label = (
+            "Previous plan (the user is reviewing it and asked for the changes below "
+            "— keep what still applies and revise accordingly):"
+            if refinement_note
+            else "Previous plan (rejected or edited by the user — use as context but improve upon it):"
+        )
+        parts.append("\n" + label + "\n\n" + json.dumps(prior_plan.model_dump(), indent=2))
+
+    if refinement_note:
         parts.append(
-            "\nPrevious plan (rejected or edited by the user — use as context "
-            "but improve upon it):\n\n"
-            + json.dumps(prior_plan.model_dump(), indent=2)
+            "\nThe user reviewed the previous plan and requested the following change. "
+            "Produce a revised plan that incorporates this feedback while preserving the "
+            "steps that are still correct:\n\n"
+            f'"{refinement_note.strip()}"'
         )
 
     parts.append("\nProduce the implementation plan as a JSON object.")

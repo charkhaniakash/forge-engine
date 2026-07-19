@@ -80,3 +80,12 @@ export interface Plan {
 export interface CreateTaskRequest {
   intent: string
 }
+
+export interface MissionMessage {
+  id: string
+  work_item_id: string
+  role: 'user' | 'assistant'
+  content: string
+  turn_number: number
+  created_at: string
+}

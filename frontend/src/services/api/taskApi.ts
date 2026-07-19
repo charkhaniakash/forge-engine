@@ -1,5 +1,5 @@
 import { baseApi } from './baseApi'
-import type { Plan, PlanBody, WorkItem } from '@/types'
+import type { Plan, PlanBody, WorkItem, MissionMessage } from '@/types'
 
 interface TaskDetail {
   task: WorkItem
@@ -97,6 +97,22 @@ export const taskApi = baseApi.injectEndpoints({
       ],
     }),
 
+    /** Tier 1 follow-up: refine the current (plan_ready) plan with an extra note. */
+    refinePlan: builder.mutation<
+      { task: WorkItem },
+      { repoId: string; taskId: string; note: string }
+    >({
+      query: ({ repoId, taskId, note }) => ({
+        url: `/repos/${repoId}/tasks/${taskId}/refine`,
+        method: 'POST',
+        body: { note },
+      }),
+      invalidatesTags: (_r, _e, { taskId }) => [
+        { type: 'Task', id: taskId },
+        { type: 'Plan', id: taskId },
+      ],
+    }),
+
     cancelTask: builder.mutation<
       { status: string },
       { repoId: string; taskId: string }
@@ -106,6 +122,33 @@ export const taskApi = baseApi.injectEndpoints({
         method: 'POST',
       }),
       invalidatesTags: (_r, _e, { taskId }) => [{ type: 'Task', id: taskId }],
+    }),
+
+    /** Mission follow-up: send a new message in the same thread to re-plan. */
+    followUp: builder.mutation<
+      { task: WorkItem; turn_number: number; message: MissionMessage },
+      { repoId: string; taskId: string; message: string }
+    >({
+      query: ({ repoId, taskId, message }) => ({
+        url: `/repos/${repoId}/tasks/${taskId}/follow-up`,
+        method: 'POST',
+        body: { message },
+      }),
+      invalidatesTags: (_r, _e, { taskId }) => [
+        { type: 'Task', id: taskId },
+        { type: 'MissionMessages', id: taskId },
+      ],
+    }),
+
+    /** Get the full mission message history for a work item. */
+    listMissionMessages: builder.query<
+      { messages: MissionMessage[] },
+      { repoId: string; taskId: string }
+    >({
+      query: ({ repoId, taskId }) => `/repos/${repoId}/tasks/${taskId}/messages`,
+      providesTags: (_r, _e, { taskId }) => [
+        { type: 'MissionMessages', id: taskId },
+      ],
     }),
   }),
 })
@@ -119,5 +162,8 @@ export const {
   useUpdatePlanMutation,
   useApproveTaskMutation,
   useReplanTaskMutation,
+  useRefinePlanMutation,
   useCancelTaskMutation,
+  useFollowUpMutation,
+  useListMissionMessagesQuery,
 } = taskApi

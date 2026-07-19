@@ -146,6 +146,19 @@ func (o *ValidationOrchestrator) Run(
 	}
 	log = log.With("validation_run_id", run.ID)
 
+	// Stop safety net: if the pipeline context is cancelled at ANY point after the
+	// run row exists, guarantee the run ends "cancelled". Many inner steps write
+	// with the (now-cancelled) ctx and fail silently — without this the run would
+	// be stuck "running" in the DB and the UI would never stop showing "Validating".
+	defer func() {
+		if ctx.Err() != nil {
+			markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_ = o.repo.MarkCancelled(markCtx, run.ID)
+			markCancel()
+			o.publish(run.ID, "validation_cancelled", map[string]interface{}{"reason": "context_cancelled"})
+		}
+	}()
+
 	// Bind runID→workspaceID for the EventBridge before publishing any events.
 	if o.onStartHook != nil {
 		o.onStartHook(run.ID, workspaceID)

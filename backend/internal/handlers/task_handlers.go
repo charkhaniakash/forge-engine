@@ -40,6 +40,12 @@ type TaskHandlers struct {
 	jwtSecret      string
 	logger         *zap.SugaredLogger
 
+	// autoRunHook, when set, is invoked (in a goroutine) once a task's plan is
+	// ready AND the task is flagged auto_run. It performs the server-side
+	// approve → provision → execute sequence. Wired in main.go, where the
+	// execution/workspace services live, to keep this package decoupled.
+	autoRunHook func(taskID string)
+
 	// wsHub maps workItemID → channel of serialised WS messages.
 	// Used to stream "thinking" events to the frontend during planning.
 	wsHub map[string]chan []byte
@@ -73,12 +79,19 @@ func NewTaskHandlers(
 	}
 }
 
+// SetAutoRunHook wires the server-side auto-run sequence (approve → provision →
+// execute), invoked when an auto_run task's plan becomes ready.
+func (h *TaskHandlers) SetAutoRunHook(hook func(taskID string)) {
+	h.autoRunHook = hook
+}
+
 // ── POST /v1/repos/:repoID/tasks ─────────────────────────────────────────────
 // Creates a work item and immediately starts planning.
 
 type CreateTaskRequest struct {
 	Intent      string `json:"intent"`
 	PlannerHint string `json:"planner_hint,omitempty"` // optional; defaults to "implementation"
+	AutoRun     bool   `json:"auto_run,omitempty"`     // "Plan off" — skip review, run when ready
 }
 
 func (h *TaskHandlers) CreateTask(c *fiber.Ctx) error {
@@ -108,8 +121,15 @@ func (h *TaskHandlers) CreateTask(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "failed to create task"})
 	}
 
+	// Persist auto-run intent (server is the source of truth, not the client).
+	if req.AutoRun {
+		if err := h.workItemRepo.SetAutoRun(ctx, item.ID, true); err != nil {
+			h.logger.Warnw("task_set_auto_run_failed", "task_id", item.ID, "error", err)
+		}
+	}
+
 	h.logger.Infow("task_created",
-		"task_id", item.ID, "repo_id", repoID, "trace_id", traceID)
+		"task_id", item.ID, "repo_id", repoID, "trace_id", traceID, "auto_run", req.AutoRun)
 
 	// 2. Transition to 'planning' synchronously before returning,
 	//    so the client immediately sees the right status.
@@ -190,7 +210,9 @@ func (h *TaskHandlers) GetTask(c *fiber.Ctx) error {
 	// Attach the active plan if one exists.
 	plan, _ := h.workItemRepo.GetActivePlan(ctx, taskID)
 
-	return c.JSON(fiber.Map{"task": item, "plan": plan})
+	autoRun, _ := h.workItemRepo.GetAutoRun(ctx, taskID)
+
+	return c.JSON(fiber.Map{"task": item, "plan": plan, "auto_run": autoRun})
 }
 
 // ── GET /v1/repos/:repoID/tasks/:taskID/plans ─────────────────────────────────
@@ -434,6 +456,7 @@ func (h *TaskHandlers) RefinePlan(c *fiber.Ctx) error {
 
 type FollowUpRequest struct {
 	Message string `json:"message"`
+	AutoRun bool   `json:"auto_run,omitempty"` // "Plan off" — run this follow-up without review
 }
 
 func (h *TaskHandlers) FollowUp(c *fiber.Ctx) error {
@@ -523,8 +546,13 @@ func (h *TaskHandlers) FollowUp(c *fiber.Ctx) error {
 		history = append(history, ingestion.HistoryTurn{Role: m.Role, Content: m.Content})
 	}
 
+	// Set this turn's auto-run intent (overwrites any prior turn's choice).
+	if err := h.workItemRepo.SetAutoRun(ctx, taskID, req.AutoRun); err != nil {
+		h.logger.Warnw("follow_up_set_auto_run_failed", "task_id", taskID, "error", err)
+	}
+
 	h.logger.Infow("task_follow_up_triggered",
-		"task_id", taskID, "turn", nextTurn, "trace_id", traceID)
+		"task_id", taskID, "turn", nextTurn, "trace_id", traceID, "auto_run", req.AutoRun)
 
 	go h.runPlanning(
 		context.Background(),
@@ -820,6 +848,15 @@ func (h *TaskHandlers) runPlanning(
 	// Status is now committed as plan_ready — safe to tell the client.
 	emitTerminal("plan_ready")
 	log.Infow("planning_complete")
+
+	// Auto-run ("Plan off"): skip the human review gate and run the pipeline
+	// server-side. Fully backend-driven — no client needs to be present.
+	if h.autoRunHook != nil {
+		if autoRun, err := h.workItemRepo.GetAutoRun(ctx, taskID); err == nil && autoRun {
+			log.Infow("auto_run_triggered", "task_id", taskID)
+			go h.autoRunHook(taskID)
+		}
+	}
 }
 
 // ── Hub helpers ───────────────────────────────────────────────────────────────

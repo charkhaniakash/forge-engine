@@ -365,6 +365,23 @@ func (r *WorkItemRepository) Cancel(ctx context.Context, id, orgID string) error
 	return nil
 }
 
+// SetAutoRun records whether a task should auto-run (skip the plan-review gate).
+// Kept as a dedicated column so the server — not the client — is the source of
+// truth for auto-run, and it survives refreshes / works headless.
+func (r *WorkItemRepository) SetAutoRun(ctx context.Context, id string, autoRun bool) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items SET auto_run = $2, updated_at = NOW() WHERE id = $1
+	`, id, autoRun)
+	return err
+}
+
+// GetAutoRun reports whether a task is flagged to auto-run.
+func (r *WorkItemRepository) GetAutoRun(ctx context.Context, id string) (bool, error) {
+	var autoRun bool
+	err := r.db.QueryRowContext(ctx, `SELECT auto_run FROM work_items WHERE id = $1`, id).Scan(&autoRun)
+	return autoRun, err
+}
+
 // ResetApprovalAfterEdit resets approval_status to pending_review after a user-edited plan.
 // Called whenever a new plan version is submitted via PUT .../plan.
 func (r *WorkItemRepository) ResetApprovalAfterEdit(ctx context.Context, id string) error {

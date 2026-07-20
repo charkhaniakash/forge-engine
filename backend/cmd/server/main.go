@@ -515,6 +515,15 @@ func main() {
 					jwtSecret, sugar,
 				)
 
+				// Server-side auto-run ("Plan off"): when a task's plan is ready and
+				// it's flagged auto_run, run approve → provision → execute without a
+				// human review gate — fully backend-driven, no client required.
+				autoRunner := handlers.NewAutoRunner(
+					workItemRepo, wsRepo, wsManager, githubRepoRepo,
+					githubInstallationRepo, ingestionJobRepo, execRepo, execOrchestrator, sugar,
+				)
+				taskHandlers.SetAutoRunHook(autoRunner.Run)
+
 				// Phase 10B: Wire all orchestrator publishers to forward events
 				// into the unified browser workspace gateway for real-time AI activity,
 				// timeline, and diagnostics feeds.

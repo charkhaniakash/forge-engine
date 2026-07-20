@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
@@ -44,7 +44,7 @@ import {
   useStartPublishMutation,
 } from '@/services/api/publishingApi'
 import { usePublishingStream } from '@/features/task-workspace/usePublishingStream'
-import { loadPlanMode, savePlanMode, markAutoRun, isAutoRun, clearAutoRun } from '@/features/task-workspace/planMode'
+import { loadPlanMode, savePlanMode } from '@/features/task-workspace/planMode'
 import { WORK_ITEM_STATUS } from '@/constants/status'
 import { ROUTES, routeTo } from '@/constants/routes'
 import styles from './TaskWorkspace.module.css'
@@ -333,9 +333,6 @@ export function TaskWorkspace() {
       }
     } catch {
       toast.error('Failed to start — check the console')
-      // Drop auto-run so the plan card + manual controls reappear for recovery
-      // instead of leaving the user stuck behind a hidden review gate.
-      clearAutoRun(taskId)
       refetchTask()
       refetchWorkspace()
     }
@@ -344,23 +341,10 @@ export function TaskWorkspace() {
   // Auto-run: when a task flagged "auto-run" reaches plan_ready, skip the review
   // gate and run it automatically. The localStorage flag is cleared the instant
   // it fires, and a ref guards against a double-trigger (StrictMode / refetch).
-  // A task in auto-run mode. The flag is PERSISTENT (kept across refresh) so the
-  // plan card stays hidden and the mission keeps auto-running on each cycle. It's
-  // cleared only when the user sends a follow-up with Plan turned back ON.
-  const taskAutoRun = taskId ? isAutoRun(taskId) : false
-
-  const autoRanRef = useRef(false)
-  useEffect(() => {
-    if (!task || !taskId) return
-    const pending = !['approved', 'auto_approved'].includes(task.approval_status)
-    if (task.status === 'plan_ready' && pending && isAutoRun(taskId) && !autoRanRef.current) {
-      autoRanRef.current = true // guard against a double-fire on the same cycle
-      void approveAndRun()
-    }
-    // A new planning cycle (e.g. a follow-up) re-arms auto-run for the next ready.
-    if (task.status === 'planning') autoRanRef.current = false
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [task?.status, task?.approval_status, taskId])
+  // Whether this task auto-runs — the server is the source of truth. The backend
+  // performs approve → provision → execute itself once the plan is ready; the
+  // frontend only reflects it (hide the plan card + review controls).
+  const taskAutoRun = taskData?.autoRun ?? false
 
   // Tier 1 follow-up: refine the plan while reviewing it. The submitted notes are
   // shown as user bubbles for the session; the refined plan streams in below.
@@ -393,11 +377,9 @@ export function TaskWorkspace() {
     if (!msg) return
     setSentRefinements((prev) => [...prev, msg])
     setRefineNote('')
-    // Plan OFF → this follow-up should auto-run once its plan is ready.
-    if (!planMode) markAutoRun(taskId)
-    else clearAutoRun(taskId)
     try {
-      await followUp({ repoId, taskId, message: msg }).unwrap()
+      // Plan OFF → the backend auto-runs this follow-up once its plan is ready.
+      await followUp({ repoId, taskId, message: msg, auto_run: !planMode }).unwrap()
       refetchTask()
     } catch {
       setSentRefinements((prev) => prev.filter((n) => n !== msg))

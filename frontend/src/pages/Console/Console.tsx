@@ -10,7 +10,7 @@ import {
 } from '@/services/api/repositoryApi'
 import { useCreateTaskMutation, useListMissionsQuery } from '@/services/api/taskApi'
 import { useCreateSessionMutation } from '@/services/api/qaApi'
-import { loadPlanMode, savePlanMode, markAutoRun } from '@/features/task-workspace/planMode'
+import { loadPlanMode, savePlanMode } from '@/features/task-workspace/planMode'
 import { useToast } from '@/hooks/useToast'
 import { useAuth } from '@/hooks/useAuth'
 import { WORK_ITEM_STATUS } from '@/constants/status'
@@ -80,9 +80,8 @@ export function Console() {
     }
     try {
       if (mode === 'agent') {
-        const task = await createTask({ repoId, intent }).unwrap()
-        // Plan OFF → auto-run this mission once its plan is ready.
-        if (!planMode) markAutoRun(task.id)
+        // Plan OFF → the backend auto-runs this mission once its plan is ready.
+        const task = await createTask({ repoId, intent, auto_run: !planMode }).unwrap()
         navigate(routeTo.mission(task.id) + `?repo=${repoId}`)
       } else {
         const session = await createSession(repoId).unwrap()

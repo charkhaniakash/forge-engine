@@ -106,19 +106,8 @@ func (h *ExecutionHandlers) StartExecution(c *fiber.Ctx) error {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{"error": "no active plan"})
 	}
 
-	// Build execution context.
-	execCtxModel := models.ExecutionContext{
-		WorkspaceID:   ws.ID,
-		PlanVersion:   plan.Version,
-		TraceID:       traceID,
-		OrgID:         orgID,
-		UserID:        item.UserID,
-		Model:         "gpt-4o",
-		Temperature:   0.1,
-		MaxTokens:     4096,
-		ExecutionMode: "autonomous",
-		AutonomyLevel: "full",
-	}
+	// Build execution context (shared with the auto-run path).
+	execCtxModel := newExecutionContext(ws.ID, plan.Version, traceID, orgID, item.UserID)
 	execCtxJSON, _ := json.Marshal(execCtxModel)
 
 	exec, err := h.execRepo.CreateExecution(ctx, taskID, ws.ID, plan.ID, json.RawMessage(execCtxJSON))

@@ -4,6 +4,8 @@ import type { Plan, PlanBody, WorkItem, MissionMessage } from '@/types'
 interface TaskDetail {
   task: WorkItem
   plan: Plan | null
+  /** Server-owned: this task auto-runs (skips the plan-review gate). */
+  autoRun: boolean
 }
 
 export const taskApi = baseApi.injectEndpoints({
@@ -29,9 +31,10 @@ export const taskApi = baseApi.injectEndpoints({
 
     getTask: builder.query<TaskDetail, { repoId: string; taskId: string }>({
       query: ({ repoId, taskId }) => `/repos/${repoId}/tasks/${taskId}`,
-      transformResponse: (res: { task: WorkItem; plan: Plan | null }) => ({
+      transformResponse: (res: { task: WorkItem; plan: Plan | null; auto_run?: boolean }) => ({
         task: res.task,
         plan: res.plan ?? null,
+        autoRun: res.auto_run ?? false,
       }),
       providesTags: (_r, _e, { taskId }) => [
         { type: 'Task', id: taskId },
@@ -47,7 +50,7 @@ export const taskApi = baseApi.injectEndpoints({
 
     createTask: builder.mutation<
       WorkItem,
-      { repoId: string; intent: string; planner_hint?: string }
+      { repoId: string; intent: string; planner_hint?: string; auto_run?: boolean }
     >({
       query: ({ repoId, ...body }) => ({
         url: `/repos/${repoId}/tasks`,
@@ -127,12 +130,12 @@ export const taskApi = baseApi.injectEndpoints({
     /** Mission follow-up: send a new message in the same thread to re-plan. */
     followUp: builder.mutation<
       { task: WorkItem; turn_number: number; message: MissionMessage },
-      { repoId: string; taskId: string; message: string }
+      { repoId: string; taskId: string; message: string; auto_run?: boolean }
     >({
-      query: ({ repoId, taskId, message }) => ({
+      query: ({ repoId, taskId, message, auto_run }) => ({
         url: `/repos/${repoId}/tasks/${taskId}/follow-up`,
         method: 'POST',
-        body: { message },
+        body: { message, auto_run },
       }),
       invalidatesTags: (_r, _e, { taskId }) => [
         { type: 'Task', id: taskId },

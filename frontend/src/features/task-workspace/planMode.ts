@@ -1,14 +1,13 @@
 /**
- * Plan mode — whether Forge stops at plan_ready for review, or auto-runs.
+ * Plan mode — a UI preference for the default state of the "Plan" toggle.
  *
  *   "Plan" ON  → review the plan before it runs (default).
- *   "Plan" OFF → auto-run: once the plan is ready, approve + provision + execute
- *                automatically, so the user isn't gated on a review each time.
+ *   "Plan" OFF → auto-run: skip the review gate and run when the plan is ready.
  *
- * The preference is global + persisted. The per-task flag records that a
- * specific task should auto-run when its plan becomes ready, and survives a
- * page refresh (the pipeline is client-orchestrated, so the mission page reads
- * this flag to decide whether to auto-approve+run on plan_ready).
+ * This only remembers the toggle's *default* across sessions. The actual auto-run
+ * decision is sent to the backend (createTask / follow-up `auto_run`) and stored
+ * there — the server is the source of truth and drives the whole sequence, so
+ * behavior never depends on client state.
  */
 const PLAN_MODE_KEY = 'forge_plan_mode'
 
@@ -23,32 +22,6 @@ export function loadPlanMode(): boolean {
 export function savePlanMode(on: boolean): void {
   try {
     localStorage.setItem(PLAN_MODE_KEY, on ? 'on' : 'off')
-  } catch {
-    /* ignore */
-  }
-}
-
-const autoRunKey = (taskId: string) => `forge_autorun_${taskId}`
-
-export function markAutoRun(taskId: string): void {
-  try {
-    localStorage.setItem(autoRunKey(taskId), '1')
-  } catch {
-    /* ignore */
-  }
-}
-
-export function isAutoRun(taskId: string): boolean {
-  try {
-    return localStorage.getItem(autoRunKey(taskId)) === '1'
-  } catch {
-    return false
-  }
-}
-
-export function clearAutoRun(taskId: string): void {
-  try {
-    localStorage.removeItem(autoRunKey(taskId))
   } catch {
     /* ignore */
   }

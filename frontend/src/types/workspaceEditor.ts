@@ -20,7 +20,7 @@ export interface WSEnvelope {
 
 /** Client → server message. */
 export interface WSClientMessage {
-  type: 'subscribe' | 'unsubscribe' | 'channel_msg' | 'reconnect' | 'ping'
+  type: 'subscribe' | 'unsubscribe' | 'channel_msg' | 'reconnect' | 'ping' | 'ack'
   channels?: string[]
   ch?: string
   ev?: string

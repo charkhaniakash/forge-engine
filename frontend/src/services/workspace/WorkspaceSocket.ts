@@ -37,6 +37,8 @@ export class WorkspaceSocketManager {
   private reconnectAttempts = 0
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private closedByUser = false
+  private ackTimer: ReturnType<typeof setInterval> | null = null
+  private ackDirty = false // true if lastSeq changed since last ack
 
   connect(workspaceId: string, token: string): void {
     this.token = token
@@ -138,6 +140,7 @@ export class WorkspaceSocketManager {
         this.rawSend({ type: 'subscribe', channels: [...this.subscribed] })
       }
       this.emitStatus('connected')
+      this.startAckTimer()
     }
 
     ws.onmessage = (e) => {
@@ -150,6 +153,7 @@ export class WorkspaceSocketManager {
       console.log('[WorkspaceSocket] Message received', { channel: env.ch, event: env.ev, seq: env.seq })
       if (typeof env.seq === 'number' && env.ch) {
         this.lastSeq.set(env.ch, env.seq)
+        this.ackDirty = true
       }
       if (env.ch === 'system' && env.ev === 'connected') {
         const p = env.payload as { session_id?: string } | undefined
@@ -176,6 +180,7 @@ export class WorkspaceSocketManager {
         readyState: ws.readyState,
       })
       this.ws = null
+      this.stopAckTimer()
       if (this.closedByUser) return
       this.emitStatus('disconnected')
       this.scheduleReconnect()
@@ -257,8 +262,30 @@ export class WorkspaceSocketManager {
     return this.sessionId
   }
 
+  /** Start periodic ack emission (every 5s while connected). */
+  private startAckTimer(): void {
+    this.stopAckTimer()
+    this.ackTimer = setInterval(() => this.flushAck(), 5000)
+  }
+
+  /** Stop the ack timer (on disconnect or explicit close). */
+  private stopAckTimer(): void {
+    if (this.ackTimer) {
+      clearInterval(this.ackTimer)
+      this.ackTimer = null
+    }
+  }
+
+  /** Send an ack message with the latest seq per channel if anything changed. */
+  private flushAck(): void {
+    if (!this.ackDirty || this.lastSeq.size === 0) return
+    this.ackDirty = false
+    this.rawSend({ type: 'ack', last_seq: Object.fromEntries(this.lastSeq) })
+  }
+
   disconnect(): void {
     this.closedByUser = true
+    this.stopAckTimer()
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer)
       this.reconnectTimer = null

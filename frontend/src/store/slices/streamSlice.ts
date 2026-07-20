@@ -36,11 +36,15 @@ export interface ValidationLiveEvent {
 interface ValidationStream {
   events: ValidationLiveEvent[]
   complete: boolean
+  /** Highest seq seen — used for dedup on replay + live overlap. */
+  lastSeq: number
 }
 
 interface ExecutionStream {
   events: ExecutionLiveEvent[]
   complete: boolean
+  /** Highest seq seen — used for dedup on replay + live overlap. */
+  lastSeq: number
 }
 
 interface QAStream {
@@ -217,14 +221,20 @@ const streamSlice = createSlice({
         const ev = event as ExecutionSocketEvent
         const bucket =
           state.execution[resourceId] ??
-          (state.execution[resourceId] = { events: [], complete: false })
+          (state.execution[resourceId] = { events: [], complete: false, lastSeq: 0 })
+        // Seq-based dedup: reject events we've already processed (replay + live overlap)
+        const seq = ev.seq ?? bucket.events.length
+        if (typeof ev.seq === 'number' && ev.seq <= bucket.lastSeq) {
+          return
+        }
         bucket.events.push({
-          seq: ev.seq ?? bucket.events.length,
+          seq,
           kind: ev.event,
           label: labelExecutionEvent(ev),
           raw: ev,
           receivedAt: Date.now(),
         })
+        if (seq > bucket.lastSeq) bucket.lastSeq = seq
         if (bucket.events.length > 500) bucket.events.shift()
         if (TERMINAL_EXEC.has(ev.event)) bucket.complete = true
         return
@@ -265,14 +275,20 @@ const streamSlice = createSlice({
         const ev = event as ValidationSocketEvent
         const bucket =
           state.validation[resourceId] ??
-          (state.validation[resourceId] = { events: [], complete: false })
+          (state.validation[resourceId] = { events: [], complete: false, lastSeq: 0 })
+        // Seq-based dedup: reject events we've already processed (replay + live overlap)
+        const seq = (typeof ev.seq === 'number' ? ev.seq : undefined) ?? bucket.events.length
+        if (typeof ev.seq === 'number' && ev.seq <= bucket.lastSeq) {
+          return
+        }
         bucket.events.push({
-          seq: (typeof ev.seq === 'number' ? ev.seq : undefined) ?? bucket.events.length,
+          seq,
           kind: ev.event,
           label: labelValidationEvent(ev),
           raw: ev,
           receivedAt: Date.now(),
         })
+        if (seq > bucket.lastSeq) bucket.lastSeq = seq
         if (bucket.events.length > 500) bucket.events.shift()
         if (TERMINAL_VALIDATION.has(ev.event)) bucket.complete = true
       }

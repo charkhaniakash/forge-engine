@@ -121,6 +121,31 @@
   cursor: pointer;
   max-width: 320px;
 }
+.planToggle {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  color: var(--text-tertiary);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-md);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.planToggle:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+}
+.planToggleOn {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
 .submit {
   display: inline-flex;
   align-items: center;

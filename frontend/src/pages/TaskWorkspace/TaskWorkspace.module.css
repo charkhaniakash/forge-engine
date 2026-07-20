@@ -32,6 +32,34 @@
   color: var(--text-tertiary);
 }
 
+/* Plan on/off toggle inside the composer */
+.planToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  height: 32px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-medium);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease), color var(--duration-fast) var(--ease);
+}
+.planToggle:hover {
+  color: var(--text-secondary);
+  border-color: var(--border-strong);
+}
+.planToggleOn {
+  background: var(--accent-subtle);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+
 /* Slim header — back link, task title, and a few meta chips. The full
    request and everything else live in the thread below, not here. */
 .header {

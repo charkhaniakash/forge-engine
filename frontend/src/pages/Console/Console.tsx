@@ -10,6 +10,7 @@ import {
 } from '@/services/api/repositoryApi'
 import { useCreateTaskMutation, useListMissionsQuery } from '@/services/api/taskApi'
 import { useCreateSessionMutation } from '@/services/api/qaApi'
+import { loadPlanMode, savePlanMode, markAutoRun } from '@/features/task-workspace/planMode'
 import { useToast } from '@/hooks/useToast'
 import { useAuth } from '@/hooks/useAuth'
 import { WORK_ITEM_STATUS } from '@/constants/status'
@@ -33,6 +34,14 @@ export function Console() {
   const [mode, setMode] = useState<Mode>('agent')
   const [repoId, setRepoId] = useState(searchParams.get('repo') ?? '')
   const [prompt, setPrompt] = useState('')
+  const [planMode, setPlanMode] = useState<boolean>(() => loadPlanMode())
+  const togglePlanMode = () => {
+    setPlanMode((prev) => {
+      const next = !prev
+      savePlanMode(next)
+      return next
+    })
+  }
 
   const { data: repos = [] } = useListReposQuery()
   const { data: missions = [] } = useListMissionsQuery()
@@ -72,6 +81,8 @@ export function Console() {
     try {
       if (mode === 'agent') {
         const task = await createTask({ repoId, intent }).unwrap()
+        // Plan OFF → auto-run this mission once its plan is ready.
+        if (!planMode) markAutoRun(task.id)
         navigate(routeTo.mission(task.id) + `?repo=${repoId}`)
       } else {
         const session = await createSession(repoId).unwrap()
@@ -147,13 +158,26 @@ export function Console() {
                 ))}
               </select>
             </label>
+            {mode === 'agent' && (
+              <button
+                type="button"
+                className={`${styles.planToggle} ${planMode ? styles.planToggleOn : ''}`}
+                onClick={togglePlanMode}
+                title={planMode
+                  ? 'Plan first — review the plan before it runs'
+                  : 'Auto-run — plan and execute without a review step'}
+                aria-pressed={planMode}
+              >
+                <Icon name={planMode ? 'check' : 'play'} size={13} /> Plan
+              </button>
+            )}
             <button
               type="submit"
               className={styles.submit}
               disabled={busy || !prompt.trim() || !repoId || !indexed}
             >
               {busy ? <Spinner size={15} color="#fff" /> : <Icon name="chevronRight" size={16} />}
-              {mode === 'agent' ? 'Start mission' : 'Ask'}
+              {mode === 'agent' ? (planMode ? 'Start mission' : 'Run mission') : 'Ask'}
             </button>
           </div>
 

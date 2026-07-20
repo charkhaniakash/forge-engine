@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
@@ -44,6 +44,7 @@ import {
   useStartPublishMutation,
 } from '@/services/api/publishingApi'
 import { usePublishingStream } from '@/features/task-workspace/usePublishingStream'
+import { loadPlanMode, savePlanMode, markAutoRun, isAutoRun, clearAutoRun } from '@/features/task-workspace/planMode'
 import { WORK_ITEM_STATUS } from '@/constants/status'
 import { ROUTES, routeTo } from '@/constants/routes'
 import styles from './TaskWorkspace.module.css'
@@ -58,9 +59,12 @@ export function TaskWorkspace() {
   const toast = useToast()
 
   // ── Data ────────────────────────────────────────────────────────────────
+  // Poll like the sibling snapshots: the WS 'plan_ready' event alone can race the
+  // DB write / late socket connect, leaving task.status stale — which the auto-run
+  // gate depends on. Polling guarantees the frontend observes plan_ready promptly.
   const { data: taskData, isLoading, refetch: refetchTask } = useGetTaskQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId },
+    { skip: !repoId || !taskId, pollingInterval: 3000 },
   )
   const task = taskData?.task
   const plan = taskData?.plan
@@ -302,6 +306,62 @@ export function TaskWorkspace() {
   // Re-plan is destructive (wipes the current run), so it goes through a confirm.
   const [replanConfirmOpen, setReplanConfirmOpen] = useState(false)
 
+  // Plan mode (persisted, global). OFF → auto-run when the plan is ready.
+  const [planMode, setPlanMode] = useState<boolean>(() => loadPlanMode())
+  const togglePlanMode = () => {
+    setPlanMode((prev) => {
+      const next = !prev
+      savePlanMode(next)
+      return next
+    })
+  }
+
+  // Approve the ready plan and run it end-to-end (provision workspace → execute).
+  // Shared by the manual "Approve & run" button and the auto-run path.
+  async function approveAndRun() {
+    try {
+      await approve({ repoId, taskId }).unwrap()
+      toast.success('Plan approved — provisioning workspace…')
+      const ws = await provisionWorkspace({ repoId, taskId }).unwrap()
+      refetchWorkspace()
+      refetchTask()
+      if (ws?.status === 'ready') {
+        toast.success('Workspace ready — starting execution…')
+        await startExec({ repoId, taskId }).unwrap()
+        refetchExec()
+        refetchTask()
+      }
+    } catch {
+      toast.error('Failed to start — check the console')
+      // Drop auto-run so the plan card + manual controls reappear for recovery
+      // instead of leaving the user stuck behind a hidden review gate.
+      clearAutoRun(taskId)
+      refetchTask()
+      refetchWorkspace()
+    }
+  }
+
+  // Auto-run: when a task flagged "auto-run" reaches plan_ready, skip the review
+  // gate and run it automatically. The localStorage flag is cleared the instant
+  // it fires, and a ref guards against a double-trigger (StrictMode / refetch).
+  // A task in auto-run mode. The flag is PERSISTENT (kept across refresh) so the
+  // plan card stays hidden and the mission keeps auto-running on each cycle. It's
+  // cleared only when the user sends a follow-up with Plan turned back ON.
+  const taskAutoRun = taskId ? isAutoRun(taskId) : false
+
+  const autoRanRef = useRef(false)
+  useEffect(() => {
+    if (!task || !taskId) return
+    const pending = !['approved', 'auto_approved'].includes(task.approval_status)
+    if (task.status === 'plan_ready' && pending && isAutoRun(taskId) && !autoRanRef.current) {
+      autoRanRef.current = true // guard against a double-fire on the same cycle
+      void approveAndRun()
+    }
+    // A new planning cycle (e.g. a follow-up) re-arms auto-run for the next ready.
+    if (task.status === 'planning') autoRanRef.current = false
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task?.status, task?.approval_status, taskId])
+
   // Tier 1 follow-up: refine the plan while reviewing it. The submitted notes are
   // shown as user bubbles for the session; the refined plan streams in below.
   const [refineNote, setRefineNote] = useState('')
@@ -333,6 +393,9 @@ export function TaskWorkspace() {
     if (!msg) return
     setSentRefinements((prev) => [...prev, msg])
     setRefineNote('')
+    // Plan OFF → this follow-up should auto-run once its plan is ready.
+    if (!planMode) markAutoRun(taskId)
+    else clearAutoRun(taskId)
     try {
       await followUp({ repoId, taskId, message: msg }).unwrap()
       refetchTask()
@@ -424,7 +487,7 @@ export function TaskWorkspace() {
 
   // Plan approve/reject/replan renders directly on the plan card — that's
   // where the decision belongs, not in a page-level header.
-  const planActions = canApprove ? (
+  const planActions = canApprove && !taskAutoRun ? (
     <>
       <Button key="replan" variant="ghost" loading={replanning}
         onClick={() => setReplanConfirmOpen(true)}>
@@ -435,25 +498,7 @@ export function TaskWorkspace() {
         Reject
       </Button>
       <Button key="approve" variant="primary" loading={approving || provisioning || starting} leadingIcon={<Icon name="check" size={15} />}
-        onClick={async () => {
-          try {
-            await approve({ repoId, taskId }).unwrap()
-            toast.success('Plan approved — provisioning workspace…')
-            const ws = await provisionWorkspace({ repoId, taskId }).unwrap()
-            refetchWorkspace()
-            refetchTask()
-            if (ws?.status === 'ready') {
-              toast.success('Workspace ready — starting execution…')
-              await startExec({ repoId, taskId }).unwrap()
-              refetchExec()
-              refetchTask()
-            }
-          } catch {
-            toast.error('Failed to start — check the console')
-            refetchTask()
-            refetchWorkspace()
-          }
-        }}>
+        onClick={approveAndRun}>
         Approve &amp; run
       </Button>
     </>
@@ -694,7 +739,9 @@ export function TaskWorkspace() {
     : canRefine
       ? 'Refine the plan — e.g. “also handle the empty-list case”. ⌘/Ctrl+Enter to send.'
       : canStartNew
-        ? 'Send a follow-up — e.g. "now add error handling for edge cases". ⌘/Ctrl+Enter to send.'
+        ? (planMode
+            ? 'Send a follow-up — Forge will plan it for your review. ⌘/Ctrl+Enter.'
+            : 'Send a follow-up — Forge will plan and run it automatically. ⌘/Ctrl+Enter.')
         : 'Follow-ups are available while a plan is under review.'
 
   const composer = (
@@ -723,15 +770,29 @@ export function TaskWorkspace() {
           Stop
         </Button>
       ) : canStartNew ? (
-        <Button
-          variant="primary"
-          loading={followingUp}
-          disabled={!refineNote.trim()}
-          leadingIcon={<Icon name="chat" size={14} />}
-          onClick={handleFollowUp}
-        >
-          Follow up
-        </Button>
+        <>
+          <button
+            type="button"
+            className={`${styles.planToggle} ${planMode ? styles.planToggleOn : ''}`}
+            onClick={togglePlanMode}
+            title={planMode
+              ? 'Plan first — review the plan before it runs'
+              : 'Auto-run — plan and execute without a review step'}
+            aria-pressed={planMode}
+          >
+            <Icon name={planMode ? 'check' : 'play'} size={12} />
+            Plan
+          </button>
+          <Button
+            variant="primary"
+            loading={followingUp}
+            disabled={!refineNote.trim()}
+            leadingIcon={<Icon name={planMode ? 'chat' : 'play'} size={14} />}
+            onClick={handleFollowUp}
+          >
+            {planMode ? 'Follow up' : 'Run'}
+          </Button>
+        </>
       ) : (
         <Button
           variant="secondary"
@@ -751,7 +812,9 @@ export function TaskWorkspace() {
       <MissionThread
         header={header}
         hero={hero}
-        entries={conversation.filter((e) => e.type !== 'intent')}
+        entries={conversation.filter(
+          (e) => e.type !== 'intent' && !(taskAutoRun && e.type === 'plan'),
+        )}
         live={live}
         planActions={planActions}
         actionRow={actionRow}

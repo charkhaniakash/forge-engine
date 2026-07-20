@@ -1,12 +1,13 @@
 .row {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--space-2);
-  padding: 3px var(--space-2);
+  padding: 4px var(--space-2);
   border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
+  font-family: var(--font-sans);
   font-size: var(--text-sm);
-  line-height: 1.5;
+  line-height: 1.4;
+  transition: background var(--duration-fast) var(--ease);
 }
 .row:hover {
   background: var(--surface-2);
@@ -63,7 +64,9 @@
 
 .outcome {
   flex-shrink: 0;
-  font-weight: var(--font-bold);
+  display: flex;
+  align-items: center;
+  color: var(--success);
 }
 .ok {
   color: var(--success);
@@ -71,14 +74,64 @@
 .fail {
   color: var(--danger);
 }
-.spinner {
+.spinnerWrap {
   flex-shrink: 0;
-  width: 11px;
-  height: 11px;
+  display: flex;
+  align-items: center;
+}
+.spinner {
+  width: 12px;
+  height: 12px;
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: var(--radius-full);
   display: inline-block;
   animation: forge-spin 0.7s linear infinite;
-  align-self: center;
+}
+
+/* ── Compact Devin-style step ──────────────────────────────────────────── */
+.compactRow {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: 3px 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+}
+.compactIcon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+.markerCompact {
+  font-size: 11px;
+  line-height: 1;
+}
+.compactBody {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.compactTitle {
+  color: var(--text-primary);
+  word-break: break-word;
+  font-size: var(--text-sm);
+}
+.compactDetail {
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  word-break: break-all;
+}
+
+/* Tone for compact steps */
+.row[data-kind='reasoning'] .compactTitle {
+  color: var(--text-secondary);
+  font-style: italic;
 }

@@ -83,6 +83,32 @@ func (r *ExecutionRepository) GetLatestForWorkItem(ctx context.Context, workItem
 	return scanExecution(row)
 }
 
+// ListByWorkItem returns ALL executions for a work item, newest first.
+// Used by the frontend to reconstruct multi-turn conversation history on page refresh.
+func (r *ExecutionRepository) ListByWorkItem(ctx context.Context, workItemID string) ([]*models.TaskExecution, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, work_item_id, workspace_id, plan_id, status,
+		       current_step_stable_id, execution_context,
+		       started_at, completed_at, error, created_at, updated_at
+		FROM task_executions
+		WHERE work_item_id = $1
+		ORDER BY created_at DESC
+	`, workItemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var execs []*models.TaskExecution
+	for rows.Next() {
+		e, err := scanExecutionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		execs = append(execs, e)
+	}
+	return execs, rows.Err()
+}
+
 // MarkRunning transitions pending → running.
 func (r *ExecutionRepository) MarkRunning(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `
@@ -471,6 +497,37 @@ func scanExecution(row *sql.Row) (*models.TaskExecution, error) {
 	var execCtx []byte
 
 	err := row.Scan(
+		&e.ID, &e.WorkItemID, &e.WorkspaceID, &e.PlanID, &e.Status,
+		&currentStep, &execCtx, &startedAt, &completedAt, &errStr,
+		&e.CreatedAt, &e.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if currentStep.Valid {
+		e.CurrentStepStableID = &currentStep.String
+	}
+	if errStr.Valid {
+		e.Error = &errStr.String
+	}
+	if startedAt.Valid {
+		e.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		e.CompletedAt = &completedAt.Time
+	}
+	e.ExecutionContext = json.RawMessage(execCtx)
+	return &e, nil
+}
+
+func scanExecutionRow(rows *sql.Rows) (*models.TaskExecution, error) {
+	var e models.TaskExecution
+	var currentStep sql.NullString
+	var startedAt, completedAt sql.NullTime
+	var errStr sql.NullString
+	var execCtx []byte
+
+	err := rows.Scan(
 		&e.ID, &e.WorkItemID, &e.WorkspaceID, &e.PlanID, &e.Status,
 		&currentStep, &execCtx, &startedAt, &completedAt, &errStr,
 		&e.CreatedAt, &e.UpdatedAt,

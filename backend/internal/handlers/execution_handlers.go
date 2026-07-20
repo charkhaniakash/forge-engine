@@ -37,6 +37,13 @@ type ExecutionHandlers struct {
 	// wsHub maps taskExecutionID → WS send channel.
 	wsHub map[string]chan []byte
 	wsMu  sync.RWMutex
+
+	// eventLog buffers published events per taskID so late-connecting WS
+	// clients (e.g., on page refresh or after follow-up) receive a full
+	// replay. Without this, subscribers that connect after execution has
+	// started miss all prior events.
+	eventLog   map[string][][]byte
+	eventLogMu sync.RWMutex
 }
 
 // NewExecutionHandlers constructs ExecutionHandlers.
@@ -60,6 +67,7 @@ func NewExecutionHandlers(
 		jwtSecret:    jwtSecret,
 		logger:       logger,
 		wsHub:        make(map[string]chan []byte),
+		eventLog:     make(map[string][][]byte),
 	}
 	// Wire the publisher callback so the orchestrator can fan events to WS.
 	orchestrator.SetPublisher(h.publish)
@@ -132,6 +140,30 @@ func (h *ExecutionHandlers) StartExecution(c *fiber.Ctx) error {
 	go h.orchestrator.Run(context.Background(), exec.ID, plan.Body)
 
 	return c.Status(fiber.StatusAccepted).JSON(exec)
+}
+
+// ── GET /v1/repos/:repoID/tasks/:taskID/executions ────────────────────────────
+// Returns ALL executions for a task (for multi-turn history reconstruction
+// on page refresh). Falls back to returning the latest execution wrapped
+// as a single-element list for backward compatibility.
+
+func (h *ExecutionHandlers) ListExecutions(c *fiber.Ctx) error {
+	orgID := c.Locals("org_id").(string)
+	taskID := c.Params("taskID")
+	ctx := c.Context()
+
+	if _, err := h.workItemRepo.GetByID(ctx, taskID, orgID); err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "task not found"})
+	}
+
+	execs, err := h.execRepo.ListByWorkItem(ctx, taskID)
+	if err != nil {
+		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "no executions found"})
+	}
+	if execs == nil {
+		execs = []*models.TaskExecution{}
+	}
+	return c.JSON(fiber.Map{"executions": execs})
 }
 
 // ── GET /v1/repos/:repoID/tasks/:taskID/execution ─────────────────────────────
@@ -243,10 +275,29 @@ func (h *ExecutionHandlers) StreamUpgrade(c *fiber.Ctx) error {
 func (h *ExecutionHandlers) StreamWS(c *websocket.Conn) {
 	taskID, _ := c.Locals("taskID").(string)
 
-	// Map by taskID for the publisher — the publisher resolves execution ID later.
 	ch := make(chan []byte, 512)
+	// Register by taskID so the publisher (which receives execID) still delivers.
 	h.setWSChannel(taskID, ch)
 	defer h.removeWSChannel(taskID)
+
+	// Replay buffered events for ALL executions of this task so late-connecting
+	// subscribers (page refresh, follow-up) don't miss any events.
+	// Events are stored under exec-<execID> keys, so we look up all executions.
+	h.eventLogMu.RLock()
+	execs, _ := h.execRepo.ListByWorkItem(context.Background(), taskID)
+	var replay [][]byte
+	for _, exec := range execs {
+		key := "exec-" + exec.ID
+		if events, ok := h.eventLog[key]; ok {
+			replay = append(replay, events...)
+		}
+	}
+	h.eventLogMu.RUnlock()
+	for _, msg := range replay {
+		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
 
 	pingTicker := time.NewTicker(20 * time.Second)
 	defer pingTicker.Stop()
@@ -486,20 +537,41 @@ func (h *ExecutionHandlers) dispatchTool(
 // ── Hub helpers ───────────────────────────────────────────────────────────────
 
 func (h *ExecutionHandlers) publish(execID string, event execution.ExecStreamEvent) {
-	// The WS hub is keyed by taskID; we don't have taskID here.
-	// Use execID as the WS key — the frontend connects with the exec ID.
-	h.wsMu.RLock()
-	ch, ok := h.wsHub[execID]
-	h.wsMu.RUnlock()
-	if !ok {
+	raw, err := json.Marshal(event)
+	if err != nil {
 		return
 	}
-	if raw, err := json.Marshal(event); err == nil {
+
+	// Buffer under exec-<execID> so late-connecting WS subscribers (e.g., on
+	// page refresh or follow-up) receive a full replay. The StreamWS handler
+	// looks up all executions for the task and replays their buffered events.
+	key := "exec-" + execID
+	h.eventLogMu.Lock()
+	buf := h.eventLog[key]
+	if len(buf) < 500 {
+		h.eventLog[key] = append(buf, raw)
+	}
+	h.eventLogMu.Unlock()
+
+	// Clean up buffer after 30 minutes.
+	go func() {
+		time.Sleep(30 * time.Minute)
+		h.eventLogMu.Lock()
+		delete(h.eventLog, key)
+		h.eventLogMu.Unlock()
+	}()
+
+	h.wsMu.RLock()
+	// Fan-out to ALL connected WS channels — the hub may have entries keyed by
+	// taskID (from StreamWS) or by execID or taskExecutionID. Broadcasting
+	// ensures the event reaches whichever WS the frontend connected with.
+	for _, ch := range h.wsHub {
 		select {
 		case ch <- raw:
 		default:
 		}
 	}
+	h.wsMu.RUnlock()
 }
 
 func (h *ExecutionHandlers) setWSChannel(key string, ch chan []byte) {

@@ -9,6 +9,7 @@ import {
   buildFileChanges,
   buildRepairAttempts,
   buildValidationStages,
+  type TurnArtifacts,
 } from '@/features/task-workspace/normalize'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { taskStreamsReset, clearPublishingEvents, clearRepairEvents } from '@/store/slices/streamSlice'
@@ -50,6 +51,24 @@ import { ROUTES, routeTo } from '@/constants/routes'
 import styles from './TaskWorkspace.module.css'
 
 const EXEC_LIVE = new Set(['pending', 'running'])
+const STORAGE_PREFIX = 'forge-turn-artifacts'
+
+function loadStoredArtifacts(taskId: string): Record<number, TurnArtifacts> {
+  try {
+    const raw = localStorage.getItem(`${STORAGE_PREFIX}-${taskId}`)
+    return raw ? JSON.parse(raw) : {}
+  } catch { return {} }
+}
+
+function saveStoredArtifacts(taskId: string, artifacts: Record<number, TurnArtifacts>) {
+  try {
+    const keys = Object.keys(artifacts).map(Number).sort((a, b) => a - b)
+    const toKeep: Record<number, TurnArtifacts> = {}
+    const pruneFrom = keys.length > 10 ? keys.length - 10 : 0
+    for (let i = pruneFrom; i < keys.length; i++) toKeep[keys[i]] = artifacts[keys[i]]
+    localStorage.setItem(`${STORAGE_PREFIX}-${taskId}`, JSON.stringify(toKeep))
+  } catch { /* silently fail */ }
+}
 
 export function TaskWorkspace() {
   const { id: taskId = '' } = useParams()
@@ -71,7 +90,7 @@ export function TaskWorkspace() {
 
   const { data: execSnap, refetch: refetchExec } = useGetExecutionQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId },
+    { skip: !repoId || !taskId, pollingInterval: 3000 },
   )
   const execution = execSnap?.execution
   const taskExecutionId = execution?.id ?? ''
@@ -111,8 +130,43 @@ export function TaskWorkspace() {
     ['completed', 'failed', 'cancelled'].includes(publishSession.status)
   const publishActive = publishSession != null && !publishTerminal
 
-  const isPlanning = task?.status === 'planning' || task?.status === 'draft' || task?.status === 'plan_ready'
-  const isPlanningLive = task?.status === 'planning' || task?.status === 'draft'
+  // Optimistic live state — set to true immediately when a follow-up is sent,
+  // so the UI shows "Forge is thinking..." before the poll picks up the new
+  // task status. Cleared once a real backend-detected phase is confirmed.
+  const [pendingFollowUp, setPendingFollowUp] = useState(false)
+
+  const isPlanning = task?.status === 'planning' || task?.status === 'draft' || task?.status === 'plan_ready' || pendingFollowUp
+  const isPlanningLive = (task?.status === 'planning' || task?.status === 'draft') || pendingFollowUp
+
+  // backendLive is true when REAL backend data confirms an active phase —
+  // independent of the optimistic pendingFollowUp flag. This avoids the
+  // circular dependency where live (via pendingFollowUp) would immediately
+  // clear pendingFollowUp before the poll returns.
+  const backendLive = (task?.status === 'planning' || task?.status === 'draft') ||
+    execLive || valLiveState || repairSession?.status === 'running' || publishActive
+  useEffect(() => {
+    if (backendLive) setPendingFollowUp(false)
+  }, [backendLive])
+
+  // Only one phase streams at a time. Declared before socket hooks so `live`
+  // is available for the execution socket's enabled prop (not in TDZ).
+  const livePhase = isPlanningLive
+    ? 'planning'
+    : execLive
+      ? 'executing'
+      : valLiveState
+        ? 'validation'
+        : repairSession?.status === 'running'
+          ? 'repair'
+          : publishActive
+            ? 'publishing'
+            : undefined
+  const live = livePhase !== undefined || pendingFollowUp
+
+  // Task is in an active (non-terminal) lifecycle phase. Keeps sockets
+  // connected through phase transitions (e.g., planning→execution during
+  // auto-run) with no gap.
+  const taskActive = task?.status != null && !['done', 'failed', 'cancelled'].includes(task.status)
 
   // ── Live subscriptions ──────────────────────────────────────────────────
   useSocketChannel({
@@ -125,7 +179,13 @@ export function TaskWorkspace() {
     channel: 'execution',
     resourceId: taskId,
     path: `/repos/${repoId}/tasks/${taskId}/execution/stream`,
-    enabled: Boolean(repoId && taskId) && execLive,
+    // Connect the execution socket throughout the task's active lifecycle —
+    // even across gaps between phases (planning→execution during auto-run).
+    // The `taskActive` flag keeps the socket alive while the task is in a
+    // non-terminal state, so the transition from planning→execution has no
+    // disconnect window. Backend event buffering (30min) ensures any events
+    // generated before the socket connected are replayed on connect.
+    enabled: Boolean(repoId && taskId) && (execLive || live || taskActive),
   })
   useSocketChannel({
     channel: 'validation',
@@ -208,21 +268,6 @@ export function TaskWorkspace() {
   )
   const fileChanges = useMemo(() => buildFileChanges(diffs), [diffs])
 
-  // Only one phase streams at a time — its trailing work group stays expanded
-  // in the thread; everything else defaults collapsed.
-  const livePhase = isPlanningLive
-    ? 'planning'
-    : execLive
-      ? 'executing'
-      : valLiveState
-        ? 'validation'
-        : repairSession?.status === 'running'
-          ? 'repair'
-          : publishActive
-            ? 'publishing'
-            : undefined
-  const live = livePhase !== undefined
-
   // ── Actions ──────────────────────────────────────────────────────────────
   const [approve, { isLoading: approving }] = useApproveTaskMutation()
   const [replan, { isLoading: replanning }] = useReplanTaskMutation()
@@ -233,36 +278,87 @@ export function TaskWorkspace() {
     { skip: !repoId || !taskId },
   )
 
-  // ── Turn-aware artifact gating ────────────────────────────────────────────
-  // After a follow-up message, artifacts (validation, repair, files, publish)
-  // from the *previous* turn must NOT appear in the current turn. We compare
-  // each artifact's created_at with the last user message's created_at.
-  // If no follow-ups exist, everything belongs to the current (only) turn.
-  const lastUserMsg = useMemo(() => {
-    const userMsgs = (messagesData?.messages ?? [])
-      .filter((m) => m.role === 'user' && m.turn_number > 1)
-      .sort((a, b) => a.turn_number - b.turn_number)
-    return userMsgs[userMsgs.length - 1]
+  // ── Per-turn artifact cache ───────────────────────────────────────────────
+  // Persisted to localStorage so the full conversation history survives page
+  // refresh. Cleared only when the user re-plans or the backend resets.
+  const [turnArtifacts, setTurnArtifacts] = useState<Record<number, TurnArtifacts>>(
+    () => loadStoredArtifacts(taskId),
+  )
+  const currentTurn = useMemo(() => {
+    const maxTurn = (messagesData?.messages ?? []).reduce(
+      (mx, m) => Math.max(mx, m.turn_number),
+      1,
+    )
+    return maxTurn
   }, [messagesData?.messages])
 
-  const lastUserMsgTime = lastUserMsg ? new Date(lastUserMsg.created_at).getTime() : 0
+  // Compute the timestamp of the first user message for each turn, so we can
+  // determine which turn an artifact belongs to by its created_at.
+  const turnBoundaryCache = useMemo(() => {
+    const map: Record<number, number> = {}
+    const msgs = messagesData?.messages ?? []
+    // Turn 1 has no preceding user message — everything before the first
+    // follow-up belongs to turn 1, so boundary is 0.
+    map[1] = 0
+    for (const m of msgs) {
+      if (m.role === 'user' && m.turn_number > 1) {
+        const t = new Date(m.created_at).getTime()
+        // Track the EARLIEST user message for this turn (the one that started it)
+        if (!map[m.turn_number] || t < map[m.turn_number]) {
+          map[m.turn_number] = t
+        }
+      }
+    }
+    return map
+  }, [messagesData?.messages])
 
-  /** True if the artifact was created AFTER the last follow-up (i.e. belongs to the current turn). */
-  function belongsToCurrentTurn(createdAt: string | undefined): boolean {
-    if (!lastUserMsg) return true // no follow-ups → single turn
-    if (!createdAt) return false  // no timestamp → can't verify → hide
-    return new Date(createdAt).getTime() > lastUserMsgTime
-  }
+  // Snapshot current artifacts whenever they change, keyed by the current turn.
+  // Persists to localStorage so the full conversation survives page refresh.
+  useEffect(() => {
+    setTurnArtifacts((prev) => {
+      const boundary = turnBoundaryCache[currentTurn] ?? 0
+      const snapshot = { ...(prev[currentTurn] ?? { fileChanges: [], validationStages: [], repairAttempts: [], publishingSession: null }) }
 
-  const valBelongsToCurrent = belongsToCurrentTurn(valRun?.created_at)
-  const execBelongsToCurrent = belongsToCurrentTurn(execution?.started_at)
-  const repairBelongsToCurrent = repairSession?.created_at
-    ? belongsToCurrentTurn(repairSession.created_at)
-    : !lastUserMsg // no session + no follow-ups → ok; no session + follow-ups → hide
-  const publishBelongsToCurrent = publishSession?.created_at
-    ? belongsToCurrentTurn(publishSession.created_at)
-    : !lastUserMsg
-  const planBelongsToCurrent = belongsToCurrentTurn(plan?.created_at)
+      // Plan: only cache if it was created after this turn started
+      if (plan) {
+        const planTime = plan.created_at ? new Date(plan.created_at).getTime() : 0
+        if (planTime >= boundary) snapshot.plan = plan
+      }
+      // File changes: only cache if execution started after this turn
+      // Fallback: if execution is actively running, assume data belongs to current turn
+      if (fileChanges.length > 0) {
+        const execTime = execution?.started_at ? new Date(execution.started_at).getTime() : 0
+        if (execTime >= boundary || (execLive && execTime === 0)) snapshot.fileChanges = fileChanges
+      }
+      // Validation: only cache if validation run started after this turn
+      // Fallback: if validation is actively streaming, assume data belongs to current turn
+      if (validationStages.length > 0) {
+        const valTime = valRun?.created_at ? new Date(valRun.created_at).getTime() : 0
+        if (valTime >= boundary || (valLiveState && valTime === 0)) {
+          snapshot.validationStages = validationStages
+          snapshot.validationOverall = valRun?.overall_result
+        }
+      }
+      // Repair: only cache if repair session started after this turn
+      // Fallback: if repair is actively running, assume data belongs to current turn
+      if (repairAttempts.length > 0) {
+        const repairTime = repairSession?.created_at ? new Date(repairSession.created_at).getTime() : 0
+        const repairLive = repairSession?.status === 'running'
+        if (repairTime >= boundary || (repairLive && repairTime === 0)) snapshot.repairAttempts = repairAttempts
+      }
+      // Publishing: only cache if publish session started after this turn
+      // Fallback: if publishing is actively running, assume data belongs to current turn
+      if (publishSession) {
+        const pubTime = publishSession.created_at ? new Date(publishSession.created_at).getTime() : 0
+        const pubLive = publishActive
+        if (pubTime >= boundary || (pubLive && pubTime === 0)) snapshot.publishingSession = publishSession
+      }
+
+      const next = { ...prev, [currentTurn]: snapshot }
+      saveStoredArtifacts(taskId, next)
+      return next
+    })
+  }, [currentTurn, turnBoundaryCache, plan, fileChanges, validationStages, valRun?.overall_result, repairAttempts, publishSession, execution?.started_at, valRun?.created_at, repairSession?.created_at, publishSession?.created_at, taskId])
 
   const conversation = useMemo(
     () =>
@@ -273,20 +369,13 @@ export function TaskWorkspace() {
         validation: valEvents,
         repair: repairEvents,
         publishing: pubEvents,
-        plan: planBelongsToCurrent ? plan : null,
-        fileChanges: execBelongsToCurrent ? fileChanges : [],
-        validationStages: valBelongsToCurrent ? validationStages : [],
-        validationOverall: valBelongsToCurrent ? valRun?.overall_result : undefined,
-        repairAttempts: repairBelongsToCurrent ? repairAttempts : [],
-        publishingSession: publishBelongsToCurrent ? publishSession : null,
+        turnArtifacts,
         livePhase,
         messages: messagesData?.messages ?? [],
       }),
     [
       task?.intent, planEvents, execEvents, valEvents, repairEvents, pubEvents,
-      plan, fileChanges, validationStages, valRun?.overall_result, repairAttempts,
-      publishSession, livePhase, messagesData?.messages,
-      valBelongsToCurrent, execBelongsToCurrent, repairBelongsToCurrent, publishBelongsToCurrent,
+      turnArtifacts, livePhase, messagesData?.messages,
     ],
   )
   // The cross-phase Stop: /collaborate/stop marks the execution cancelled AND
@@ -377,13 +466,14 @@ export function TaskWorkspace() {
     if (!msg) return
     setSentRefinements((prev) => [...prev, msg])
     setRefineNote('')
+    setPendingFollowUp(true)
     try {
-      // Plan OFF → the backend auto-runs this follow-up once its plan is ready.
       await followUp({ repoId, taskId, message: msg, auto_run: !planMode }).unwrap()
       refetchTask()
     } catch {
       setSentRefinements((prev) => prev.filter((n) => n !== msg))
       setRefineNote(msg)
+      setPendingFollowUp(false)
       toast.error('Could not send follow-up')
     }
   }
@@ -392,8 +482,8 @@ export function TaskWorkspace() {
 
   // Re-plan = start a completely fresh cycle. The backend wipes the previous
   // run's artifacts (execution/diffs/validation/repair/publishing); here we
-  // clear the client-side event streams and refetch so the thread doesn't show
-  // any of the old run while the new plan is generated.
+  // clear the client-side event streams and localStorage cache so the thread
+  // doesn't show any of the old run while the new plan is generated.
   async function handleReplan() {
     setProceeded(false)
     const ok = await run(
@@ -403,6 +493,8 @@ export function TaskWorkspace() {
     )
     setReplanConfirmOpen(false)
     if (ok === false) return
+    setTurnArtifacts({})
+    localStorage.removeItem(`${STORAGE_PREFIX}-${taskId}`)
     if (taskId) dispatch(taskStreamsReset(taskId))
     if (publishSession?.id) dispatch(clearPublishingEvents(publishSession.id))
     if (repairSession?.id) dispatch(clearRepairEvents(repairSession.id))

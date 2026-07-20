@@ -477,6 +477,17 @@ export interface MissionMessage {
   created_at: string
 }
 
+/** Per-turn artifact snapshot — enables preserving old turns' artifacts even after
+ *  follow-ups have replaced them in the latest API response. */
+export interface TurnArtifacts {
+  plan?: Plan | null
+  fileChanges: FileChangeVM[]
+  validationStages: ValidationStageVM[]
+  validationOverall?: string
+  repairAttempts: RepairAttemptVM[]
+  publishingSession?: PublishingSession | null
+}
+
 export interface ConversationInputs {
   intent: string
   planning: PlanningSocketEvent[]
@@ -484,12 +495,9 @@ export interface ConversationInputs {
   validation: ValidationLiveEvent[]
   repair: RepairSocketEvent[]
   publishing: PublishingSocketEvent[]
-  plan?: Plan | null
-  fileChanges: FileChangeVM[]
-  validationStages: ValidationStageVM[]
-  validationOverall?: string
-  repairAttempts: RepairAttemptVM[]
-  publishingSession?: PublishingSession | null
+  /** Per-turn artifact cache — keyed by turn number. Shows artifact cards for all
+   *  turns, not just the latest. */
+  turnArtifacts?: Record<number, TurnArtifacts>
   /** Which phase is currently streaming, if any — only its trailing work group renders live/expanded. */
   livePhase?: 'planning' | 'executing' | 'validation' | 'repair' | 'publishing'
   /** User follow-up messages from the backend — used to segment the thread by turn. */
@@ -506,6 +514,9 @@ export interface ConversationInputs {
  * Turn segmentation: User follow-up messages are interleaved with the activity
  * they triggered. The thread shape is: intent(turn1) → plan1 → exec1 → val1 →
  * [user message turn2] → plan2 → exec2 → ...
+ *
+ * Artifact cards are rendered for EVERY turn via the `turnArtifacts` cache,
+ * not just the current/latest turn.
  */
 export function buildConversation(inp: ConversationInputs): ConversationEntry[] {
   const all = buildActivity({
@@ -552,11 +563,12 @@ export function buildConversation(inp: ConversationInputs): ConversationEntry[] 
   for (let turn = 1; turn <= maxTurn; turn++) {
     const turnEvents = eventsByTurn.get(turn) ?? []
     const isCurrentTurn = turn === maxTurn
+    const artifacts = inp.turnArtifacts?.[turn]
 
     const pushPhaseWork = (phase: ActivityEvent['phase']) => {
       const events = turnEvents.filter((e) => e.phase === phase)
       if (events.length === 0) return
-      for (const entry of groupWork(events, inp.livePhase === phase)) {
+      for (const entry of groupWork(events, inp.livePhase === phase && isCurrentTurn)) {
         out.push(
           entry.type === 'group'
             ? { type: 'work', group: entry.group, isLive: entry.isLive }
@@ -566,26 +578,30 @@ export function buildConversation(inp: ConversationInputs): ConversationEntry[] 
     }
 
     pushPhaseWork('planning')
-    // Show plan for the current turn if it exists (not just turn 1)
-    if (isCurrentTurn && inp.plan) out.push({ type: 'plan', plan: inp.plan })
+    // Show plan for this turn from the turn artifacts cache
+    if (artifacts?.plan) out.push({ type: 'plan', plan: artifacts.plan })
 
     pushPhaseWork('executing')
-    // Show file changes for the current turn
-    if (isCurrentTurn && inp.fileChanges.length > 0) out.push({ type: 'files', files: inp.fileChanges })
+    // Show file changes for this turn from the turn artifacts cache
+    if (artifacts?.fileChanges && artifacts.fileChanges.length > 0) {
+      out.push({ type: 'files', files: artifacts.fileChanges })
+    }
 
     pushPhaseWork('validation')
-    // Show validation for the current turn
-    if (isCurrentTurn && inp.validationStages.length > 0) {
-      out.push({ type: 'validation', stages: inp.validationStages, overall: inp.validationOverall })
+    // Show validation for this turn from the turn artifacts cache
+    if (artifacts?.validationStages && artifacts.validationStages.length > 0) {
+      out.push({ type: 'validation', stages: artifacts.validationStages, overall: artifacts.validationOverall })
     }
 
     pushPhaseWork('repair')
-    // Show repair for the current turn
-    if (isCurrentTurn && inp.repairAttempts.length > 0) out.push({ type: 'repair', attempts: inp.repairAttempts })
+    // Show repair for this turn from the turn artifacts cache
+    if (artifacts?.repairAttempts && artifacts.repairAttempts.length > 0) {
+      out.push({ type: 'repair', attempts: artifacts.repairAttempts })
+    }
 
     pushPhaseWork('publishing')
-    // Show publishing for the current turn
-    if (isCurrentTurn && inp.publishingSession) out.push({ type: 'publish', session: inp.publishingSession })
+    // Show publishing for this turn from the turn artifacts cache
+    if (artifacts?.publishingSession) out.push({ type: 'publish', session: artifacts.publishingSession })
 
     // Insert user message for the next turn (if any)
     const nextUserMsg = userMessages.find((m) => m.turn_number === turn + 1)

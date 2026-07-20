@@ -195,7 +195,8 @@ func (h *TaskHandlers) ListMissions(c *fiber.Ctx) error {
 }
 
 // ── GET /v1/repos/:repoID/tasks/:taskID ──────────────────────────────────────
-// Returns a work item with its active plan.
+// Returns a work item with its active plan and ALL historical plans (for multi-turn
+// conversation history reconstruction on page refresh).
 
 func (h *TaskHandlers) GetTask(c *fiber.Ctx) error {
 	orgID := c.Locals("org_id").(string)
@@ -210,9 +211,17 @@ func (h *TaskHandlers) GetTask(c *fiber.Ctx) error {
 	// Attach the active plan if one exists.
 	plan, _ := h.workItemRepo.GetActivePlan(ctx, taskID)
 
+	// Return ALL plan versions so the frontend can reconstruct per-turn history
+	// on page refresh. The frontend uses created_at + turn boundaries to assign
+	// each plan to the correct conversation turn.
+	plans, _ := h.workItemRepo.ListPlans(ctx, taskID)
+	if plans == nil {
+		plans = []*models.Plan{}
+	}
+
 	autoRun, _ := h.workItemRepo.GetAutoRun(ctx, taskID)
 
-	return c.JSON(fiber.Map{"task": item, "plan": plan, "auto_run": autoRun})
+	return c.JSON(fiber.Map{"task": item, "plan": plan, "plans": plans, "auto_run": autoRun})
 }
 
 // ── GET /v1/repos/:repoID/tasks/:taskID/plans ─────────────────────────────────
@@ -736,9 +745,10 @@ func (h *TaskHandlers) runPlanning(
 		}
 		h.planEventLogMu.Unlock()
 
-		// Clean up the buffer after 2 minutes — planning is done.
+		// Clean up the buffer after 30 minutes — enough time for page refreshes
+		// and late-connecting WebSocket clients after a follow-up.
 		go func() {
-			time.Sleep(2 * time.Minute)
+			time.Sleep(30 * time.Minute)
 			h.planEventLogMu.Lock()
 			delete(h.planEventLog, taskID)
 			h.planEventLogMu.Unlock()

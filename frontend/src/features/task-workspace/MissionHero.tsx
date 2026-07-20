@@ -9,60 +9,44 @@ export interface MissionHeroProps {
   title: string
   /** Supporting line under the title. */
   subtitle?: string
-  /** 0..1 pipeline progress. When live this fills the ring; on terminal states use 1. */
+  /** 0..1 pipeline progress. */
   progress: number
-  /** Pulsing ring + "LIVE" chip while a phase is streaming. */
+  /** Pulsing dot while a phase is streaming. */
   live?: boolean
   tone?: HeroTone
-  /** Small icon in the centre of the ring (defaults per tone). */
+  /** Small icon. */
   icon?: IconName
   /** Right-aligned meta chips (status badge, PR link…). */
   right?: React.ReactNode
 }
 
-const R = 26
-const C = 2 * Math.PI * R
-
 /**
- * The status "hero" that opens the mission surface — a circular progress ring
- * with the current phase title, mirroring the reference agent view. Honest:
- * the ring tracks the mission's real position in the pipeline, not a fabricated
- * ETA.
+ * Devin-style spec/plan card: a clean, minimal card at the top showing the
+ * current task description and status. No progress ring — just the task intent
+ * with a status badge and live indicator.
  */
-export function MissionHero({ title, subtitle, progress, live = false, tone = 'neutral', icon, right }: MissionHeroProps) {
-  const pct = Math.max(0, Math.min(1, progress))
-  const dash = C * (1 - pct)
-  const centerIcon: IconName =
-    icon ?? (tone === 'success' ? 'check' : tone === 'danger' ? 'alert' : 'sparkles')
-
+export function MissionHero({ title, subtitle, progress, live = false, tone = 'neutral', right }: MissionHeroProps) {
   return (
     <div className={`${styles.hero} ${styles[`tone_${tone}`]}`}>
-      <div className={`${styles.ringWrap} ${live ? styles.ringLive : ''}`}>
-        <svg viewBox="0 0 60 60" className={styles.ring} aria-hidden="true">
-          <circle cx="30" cy="30" r={R} className={styles.track} />
-          <circle
-            cx="30"
-            cy="30"
-            r={R}
-            className={styles.progress}
-            strokeDasharray={C}
-            strokeDashoffset={dash}
-            transform="rotate(-90 30 30)"
-          />
-        </svg>
-        <span className={styles.ringLabel}>
-          {live ? <Icon name={centerIcon} size={18} /> : `${Math.round(pct * 100)}%`}
-        </span>
+      <div className={styles.left}>
+        <div className={styles.avatar}>
+          <Icon name="sparkles" size={16} />
+        </div>
       </div>
-
       <div className={styles.body}>
         <div className={styles.titleRow}>
-          {live && <span className={styles.pulse} />}
+          {live && <span className={styles.liveDot} />}
           <span className={styles.title}>{title}</span>
         </div>
-        {subtitle && <p className={styles.subtitle}>{subtitle}</p>}
+        {subtitle && (
+          <p className={styles.subtitle}>{subtitle}</p>
+        )}
+        {progress > 0 && progress < 1 && (
+          <div className={styles.progressBar}>
+            <div className={styles.progressFill} style={{ width: `${Math.round(progress * 100)}%` }} />
+          </div>
+        )}
       </div>
-
       {right && <div className={styles.right}>{right}</div>}
     </div>
   )

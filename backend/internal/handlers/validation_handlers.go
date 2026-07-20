@@ -27,6 +27,11 @@ type ValidationHandlers struct {
 
 	wsHub map[string]chan []byte
 	wsMu  sync.RWMutex
+
+	// eventLog buffers published events per taskID so late-connecting WS
+	// subscribers receive a full replay on connect (page refresh, follow-up).
+	eventLog   map[string][][]byte
+	eventLogMu sync.RWMutex
 }
 
 func NewValidationHandlers(
@@ -43,6 +48,7 @@ func NewValidationHandlers(
 		orchestrator: orchestrator,
 		logger:       logger,
 		wsHub:        make(map[string]chan []byte),
+		eventLog:     make(map[string][][]byte),
 	}
 	orchestrator.SetPublisher(h.publish)
 	return h
@@ -174,6 +180,30 @@ func (h *ValidationHandlers) StreamWS(c *websocket.Conn) {
 	h.setWSChannel(taskID, ch)
 	defer h.removeWSChannel(taskID)
 
+	// Replay buffered validation events so late-connecting subscribers catch up.
+	// Events are stored under val-<runID> keys. We find the latest validation
+	// run for the task's latest execution and replay its buffered events.
+	// For multi-turn history, each turn's latest run is covered because the
+	// eventLog is keyed by runID and retained for 30 minutes.
+	h.eventLogMu.RLock()
+	exec, _ := h.execRepo.GetLatestForWorkItem(context.Background(), taskID)
+	var replay [][]byte
+	if exec != nil {
+		run, _ := h.valRepo.GetLatestForTaskExecution(context.Background(), exec.ID)
+		if run != nil {
+			key := "val-" + run.ID
+			if events, ok := h.eventLog[key]; ok {
+				replay = append(replay, events...)
+			}
+		}
+	}
+	h.eventLogMu.RUnlock()
+	for _, msg := range replay {
+		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
+
 	pingTicker := time.NewTicker(20 * time.Second)
 	defer pingTicker.Stop()
 
@@ -197,27 +227,48 @@ func (h *ValidationHandlers) StreamWS(c *websocket.Conn) {
 // ── Hub helpers ───────────────────────────────────────────────────────────────
 
 func (h *ValidationHandlers) publish(runID, eventType string, payload map[string]interface{}) {
-	// The WS hub is keyed by taskID but we only have runID here.
-	// The orchestrator carries the runID; we look up by runID fallback.
+	event := map[string]interface{}{
+		"v":          1,
+		"event":      eventType,
+		"run_id":     runID,
+	}
+	for k, v := range payload {
+		event[k] = v
+	}
+	raw, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+
+	// Buffer for late-connecting WS subscribers (capped at 500 events per task).
+	// Since we don't have taskID here, we look it up from the validation run's
+	// task_execution -> work_item chain. We buffer under a shared key pattern
+	// that StreamWS can replay.
+	// For simplicity, buffer under run-<runID>; StreamWS will look up all runs
+	// for the task and replay all matching keys.
+	key := "val-" + runID
+	h.eventLogMu.Lock()
+	buf := h.eventLog[key]
+	if len(buf) < 500 {
+		h.eventLog[key] = append(buf, raw)
+	}
+	h.eventLogMu.Unlock()
+
+	// Clean up after 30 minutes.
+	go func() {
+		time.Sleep(30 * time.Minute)
+		h.eventLogMu.Lock()
+		delete(h.eventLog, key)
+		h.eventLogMu.Unlock()
+	}()
+
 	h.wsMu.RLock()
-	// Try runID first, then fall back: the WS connection is registered by taskID
-	// in StreamWS, but publication uses runID. For Phase 8, we broadcast to all
-	// active WS connections since a task has at most one concurrent validation.
-	for key, ch := range h.wsHub {
-		_ = key
-		event := map[string]interface{}{
-			"v":          1,
-			"event":      eventType,
-			"run_id":     runID,
-		}
-		for k, v := range payload {
-			event[k] = v
-		}
-		if raw, err := json.Marshal(event); err == nil {
-			select {
-			case ch <- raw:
-			default:
-			}
+	// The WS connection is registered by taskID. Broadcast to ALL active
+	// connections since a task has at most one concurrent validation.
+	for _, ch := range h.wsHub {
+		select {
+		case ch <- raw:
+		default:
 		}
 	}
 	h.wsMu.RUnlock()

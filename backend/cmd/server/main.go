@@ -696,6 +696,8 @@ func main() {
 		// Phase 7 — Task execution lifecycle
 		app.Post("/v1/repos/:repoID/tasks/:taskID/execute",
 			middleware.RequireAuth(sugar), executionHandlers.StartExecution)
+		app.Get("/v1/repos/:repoID/tasks/:taskID/executions",
+			middleware.RequireAuth(sugar), executionHandlers.ListExecutions)
 		app.Get("/v1/repos/:repoID/tasks/:taskID/execution",
 			middleware.RequireAuth(sugar), executionHandlers.GetExecution)
 		app.Get("/v1/repos/:repoID/tasks/:taskID/execution/events",

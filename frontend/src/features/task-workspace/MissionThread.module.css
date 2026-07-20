@@ -14,27 +14,160 @@
   overflow-y: auto;
 }
 .thread {
-  max-width: 820px;
+  max-width: 780px;
   margin: 0 auto;
-  padding: var(--space-6) var(--space-6) var(--space-16);
+  padding: var(--space-4) var(--space-6) var(--space-16);
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
+  gap: var(--space-4);
 }
 .heroSlot {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: var(--space-4) 0 var(--space-2);
-  margin-top: calc(-1 * var(--space-6));
+  padding: var(--space-3) 0 var(--space-2);
+  margin-top: calc(-1 * var(--space-4));
   background: var(--surface-base);
 }
 .empty {
   color: var(--text-tertiary);
-  padding: var(--space-4) 0;
+  padding: var(--space-6) 0;
+  text-align: center;
+  font-size: var(--text-sm);
 }
 
-/* ── Opening request bubble ─────────────────────────────────────────────── */
+/* ── Feed (no timeline spine, clean Devin-style chat) ──────────────────── */
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+/* ── User chat bubble (Devin-style: right-aligned) ─────────────────────── */
+.userMessageRow {
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--space-1) 0;
+  animation: forge-fade-in var(--duration-normal) var(--ease);
+}
+.userBubble {
+  max-width: 75%;
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-xl);
+  border-bottom-right-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow var(--duration-fast) var(--ease);
+  animation: forge-fade-in var(--duration-normal) var(--ease);
+}
+.userBubble:hover {
+  box-shadow: var(--shadow-md);
+}
+.userBubbleText {
+  color: var(--text-primary);
+  font-size: var(--text-base);
+  white-space: pre-wrap;
+  line-height: var(--leading-normal);
+}
+.userBubbleMeta {
+  margin-top: var(--space-2);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+/* ── AI response section (Devin-style: forge avatar + content) ─────────── */
+.aiResponse {
+  display: flex;
+  gap: var(--space-3);
+  animation: forge-fade-in var(--duration-normal) var(--ease);
+}
+.aiAvatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-full);
+  background: var(--surface-2);
+  border: 1px solid var(--border-default);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+  margin-top: 2px;
+}
+.aiAvatarSmall {
+  flex-shrink: 0;
+  width: 28px;
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+.dotNode {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--text-tertiary);
+  display: inline-block;
+}
+.aiContent {
+  flex: 1;
+  min-width: 0;
+}
+.aiContentCompact {
+  flex: 1;
+  min-width: 0;
+  padding-top: 2px;
+}
+
+/* ── "Forge is thinking..." (Devin-style typing indicator) ────────────── */
+.thinkingRow {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+  animation: forge-fade-in var(--duration-normal) var(--ease);
+}
+.thinkingDot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  display: inline-block;
+  animation: thinking-pulse 1.4s ease-in-out infinite;
+}
+@keyframes thinking-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.8); }
+}
+.thinkingText {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-top: 4px;
+}
+.thinkingLabel {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+  font-style: italic;
+}
+.thinkingDots {
+  display: inline-flex;
+  gap: 1px;
+}
+.dot1, .dot2, .dot3 {
+  font-size: var(--text-lg);
+  color: var(--text-tertiary);
+  line-height: 1;
+  animation: dot-bounce 1.4s ease-in-out infinite;
+}
+.dot2 { animation-delay: 0.2s; }
+.dot3 { animation-delay: 0.4s; }
+@keyframes dot-bounce {
+  0%, 80%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-3px); }
+}
+
+/* ── Intent bubble (opening request) ──────────────────────────────────── */
 .intent {
   background: var(--surface-1);
   border: 1px solid var(--border-subtle);
@@ -46,76 +179,42 @@
   line-height: var(--leading-normal);
 }
 
-/* ── Timeline spine ─────────────────────────────────────────────────────── */
-.timeline {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.row {
-  display: flex;
-  gap: var(--space-3);
-  position: relative;
-}
-.gutter {
-  position: relative;
-  flex: 0 0 30px;
-  display: flex;
-  justify-content: center;
-}
-/* connector line running through the column */
-.gutter::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  width: 2px;
-  transform: translateX(-50%);
-  background: var(--border-default);
-}
-.row:first-child .gutter::before { top: 15px; }
-.row:last-child .gutter::before { bottom: calc(100% - 15px); }
-
-.node {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
-  margin-top: 0;
-  border-radius: var(--radius-full);
-  background: var(--surface-2);
+/* ── Devin-style plan card ────────────────────────────────────────────── */
+.devinCard {
   border: 1px solid var(--border-default);
-  color: var(--text-tertiary);
-  flex-shrink: 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-sm);
 }
-.node_accent { color: var(--accent); border-color: var(--accent-border); background: var(--accent-subtle); }
-.node_success { color: var(--success); border-color: rgba(63, 185, 80, 0.4); background: var(--success-subtle); }
-.node_warning { color: var(--warning); border-color: rgba(210, 153, 34, 0.4); background: var(--warning-subtle); }
-.node_danger { color: var(--danger); border-color: rgba(248, 81, 73, 0.4); background: var(--danger-subtle); }
-.node_neutral { color: var(--text-secondary); }
+.devinCardHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.devinCardIcon {
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+}
+.devinCardTitle {
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+.devinCardBody {
+  padding: var(--space-3) var(--space-4);
+}
 
-.nodeLive {
-  animation: node-live 1.4s ease infinite;
-}
-@keyframes node-live {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); }
-  50% { box-shadow: 0 0 0 5px transparent; }
-}
-
-.content {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding-top: 3px;
-}
-
-/* ── Plan / publish inner bits ──────────────────────────────────────────── */
+/* ── Plan inner bits ──────────────────────────────────────────────────── */
 .planSummary {
   color: var(--text-secondary);
   margin: 0 0 var(--space-3);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
 }
 .planSteps {
   display: flex;
@@ -128,6 +227,7 @@
   margin-top: var(--space-4);
 }
 
+/* ── Publish inner bits ────────────────────────────────────────────────── */
 .pubRow {
   display: flex;
   align-items: center;
@@ -152,22 +252,36 @@
   font-size: var(--text-sm);
 }
 
-/* ── Live "working…" ────────────────────────────────────────────────────── */
-.working {
+/* ── Turn separator (between follow-ups) ────────────────────────────────── */
+.turnSep {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
+  padding: var(--space-4) 0 var(--space-2);
+  margin-top: var(--space-4);
+}
+.turnSepLine {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(
+    to right,
+    transparent,
+    var(--border-default) 20%,
+    var(--border-default) 80%,
+    transparent
+  );
+}
+.turnSepLabel {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
   color: var(--text-tertiary);
-  font-style: italic;
-}
-.cursor {
-  color: var(--accent);
-  animation: forge-blink 1s step-end infinite;
-}
-@keyframes forge-blink {
-  50% {
-    opacity: 0;
-  }
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 2px var(--space-3);
+  background: var(--surface-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
 }
 
 /* ── Docked next-step action bar ────────────────────────────────────────── */
@@ -182,24 +296,17 @@
   border-radius: var(--radius-lg);
 }
 
-/* ── User follow-up bubbles (plan refinements) ──────────────────────────── */
-.userMessages {
+/* ── Trailing optimistic messages ──────────────────────────────────────── */
+.trailingMessages {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   margin-top: var(--space-2);
+  align-items: flex-end;
 }
-.userMessage {
-  align-self: flex-end;
-  max-width: 80%;
-  background: var(--accent-subtle);
-  border: 1px solid var(--accent-border);
-  color: var(--text-primary);
-  border-radius: var(--radius-lg);
-  padding: var(--space-2) var(--space-3);
-  font-size: var(--text-base);
-  white-space: pre-wrap;
-  line-height: var(--leading-normal);
+.trailingMessages .userBubble {
+  border-style: dashed;
+  opacity: 0.85;
 }
 
 /* ── Docked composer (follow-up input) ──────────────────────────────────── */
@@ -210,6 +317,6 @@
   padding: var(--space-3) var(--space-6);
 }
 .composer > * {
-  max-width: 820px;
+  max-width: 780px;
   margin: 0 auto;
 }

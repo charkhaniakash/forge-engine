@@ -1,16 +1,17 @@
 .hero {
   display: flex;
-  align-items: center;
-  gap: var(--space-4);
+  align-items: flex-start;
+  gap: var(--space-3);
   padding: var(--space-4) var(--space-5);
-  background: linear-gradient(180deg, var(--surface-2), var(--surface-1));
+  background: var(--surface-1);
   border: 1px solid var(--border-default);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
+  transition: border-color var(--duration-normal) var(--ease),
+    box-shadow var(--duration-normal) var(--ease);
 }
 .tone_active {
   border-color: var(--accent-border);
-  background: linear-gradient(180deg, var(--accent-subtle), var(--surface-1));
 }
 .tone_success {
   border-color: rgba(63, 185, 80, 0.35);
@@ -19,54 +20,23 @@
   border-color: rgba(248, 81, 73, 0.35);
 }
 
-/* ── Progress ring ──────────────────────────────────────────────────────── */
-.ringWrap {
-  position: relative;
-  width: 60px;
-  height: 60px;
+/* ── Left avatar / icon ────────────────────────────────────────────────── */
+.left {
   flex-shrink: 0;
 }
-.ring {
-  width: 60px;
-  height: 60px;
-}
-.track {
-  fill: none;
-  stroke: var(--border-default);
-  stroke-width: 4;
-}
-.progress {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 4;
-  stroke-linecap: round;
-  transition: stroke-dashoffset var(--duration-normal) var(--ease);
-}
-.tone_success .progress { stroke: var(--success); }
-.tone_danger .progress { stroke: var(--danger); }
-
-.ringLabel {
-  position: absolute;
-  inset: 0;
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-full);
+  background: var(--accent-subtle);
+  border: 1px solid var(--accent-border);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: var(--text-md);
-  font-weight: var(--font-semibold);
-  color: var(--text-primary);
-}
-.tone_active .ringLabel { color: var(--accent); }
-.tone_success .ringLabel { color: var(--success); }
-.tone_danger .ringLabel { color: var(--danger); }
-
-.ringLive .progress {
-  animation: hero-ring-pulse 1.8s ease-in-out infinite;
-}
-@keyframes hero-ring-pulse {
-  50% { opacity: 0.5; }
+  color: var(--accent);
 }
 
-/* ── Body ───────────────────────────────────────────────────────────────── */
+/* ── Body ────────────────────────────────────────────────────────────────── */
 .body {
   flex: 1 1 auto;
   min-width: 0;
@@ -75,38 +45,60 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  margin-bottom: var(--space-1);
 }
 .title {
-  font-size: var(--text-lg);
+  font-size: var(--text-base);
   font-weight: var(--font-semibold);
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pulse {
-  width: 8px;
-  height: 8px;
+.liveDot {
+  width: 7px;
+  height: 7px;
   border-radius: var(--radius-full);
   background: var(--accent);
   flex-shrink: 0;
   animation: hero-dot 1.2s ease infinite;
 }
-.tone_active .pulse { background: var(--accent); }
 @keyframes hero-dot {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); }
-  50% { box-shadow: 0 0 0 5px transparent; opacity: 0.6; }
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); opacity: 1; }
+  50% { box-shadow: 0 0 0 5px transparent; opacity: 0.5; }
 }
 .subtitle {
-  margin: var(--space-1) 0 0;
+  margin: 0;
   font-size: var(--text-sm);
   color: var(--text-secondary);
   line-height: var(--leading-normal);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
+
+/* ── Thin progress bar ─────────────────────────────────────────────────── */
+.progressBar {
+  margin-top: var(--space-2);
+  height: 3px;
+  background: var(--border-subtle);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+.progressFill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: var(--radius-full);
+  transition: width var(--duration-normal) var(--ease);
+}
+.tone_success .progressFill { background: var(--success); }
+.tone_danger .progressFill { background: var(--danger); }
 
 .right {
   display: flex;
   align-items: center;
   gap: var(--space-3);
   flex-shrink: 0;
+  margin-top: 2px;
 }

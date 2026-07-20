@@ -46,6 +46,11 @@ type TaskHandlers struct {
 	// execution/workspace services live, to keep this package decoupled.
 	autoRunHook func(taskID string)
 
+	// planningEventHook, when set, forwards every planning stream event to the
+	// EventBridge for durable persistence. Used during follow-ups when a workspace
+	// already exists. Nil during initial planning (no workspace yet).
+	planningEventHook PlanningEventHook
+
 	// wsHub maps workItemID → channel of serialised WS messages.
 	// Used to stream "thinking" events to the frontend during planning.
 	wsHub map[string]chan []byte
@@ -83,6 +88,18 @@ func NewTaskHandlers(
 // execute), invoked when an auto_run task's plan becomes ready.
 func (h *TaskHandlers) SetAutoRunHook(hook func(taskID string)) {
 	h.autoRunHook = hook
+}
+
+// PlanningEventHook is called for every planning stream event. The hook receives
+// the taskID and the raw JSON event. Used by main.go to forward planning events
+// into the EventBridge/EventStore when a workspace exists for this task.
+type PlanningEventHook func(taskID string, eventJSON []byte)
+
+// SetPlanningEventHook wires a callback invoked for every planning event.
+// This enables Phase 11 persistence of planning events into stream_events when
+// a workspace already exists (follow-up scenarios).
+func (h *TaskHandlers) SetPlanningEventHook(hook PlanningEventHook) {
+	h.planningEventHook = hook
 }
 
 // ── POST /v1/repos/:repoID/tasks ─────────────────────────────────────────────
@@ -784,6 +801,11 @@ func (h *TaskHandlers) runPlanning(
 				h.planEventLog[taskID] = append(buf, raw)
 			}
 			h.planEventLogMu.Unlock()
+
+			// Phase 11: forward to EventBridge for durable persistence (when workspace exists).
+			if h.planningEventHook != nil {
+				h.planningEventHook(taskID, raw)
+			}
 
 			wsCh := h.getWSChannel(taskID)
 			if wsCh != nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/auth"
 	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
+	"github.com/charkhaniakash/forge-engine/backend/internal/streaming"
 )
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -61,7 +62,7 @@ type Envelope struct {
 
 // ClientMessage is a message sent from the browser to the server.
 type ClientMessage struct {
-	Type     string          `json:"type"` // subscribe | unsubscribe | channel_msg | reconnect | ping
+	Type     string          `json:"type"` // subscribe | unsubscribe | channel_msg | reconnect | ping | ack
 	Channels []string        `json:"channels,omitempty"`
 	Ch       string          `json:"ch,omitempty"`
 	Ev       string          `json:"ev,omitempty"`
@@ -99,9 +100,11 @@ type Gateway struct {
 	sessions        map[string]*BrowserSession // sessionID → session
 	workspaces      map[string][]string        // workspaceID → []sessionID
 	globalSeq       atomic.Int64
-	replayBuf       map[string][]Envelope      // workspaceID → recent events
+	replayBuf       map[string][]Envelope      // workspaceID → recent events (legacy, Phase 11B removes)
 	mu              sync.RWMutex
 	replayMu        sync.RWMutex
+	replayEngine    *streaming.ReplayEngine    // Phase 11: durable replay (nil = use legacy replayBuf)
+	ackManager      *streaming.AckManager      // Phase 11: delivery tracking (nil = disabled)
 	termService     *TerminalService
 	fsService       *FilesystemService
 	watchers        map[string]context.CancelFunc // workspaceID → watcher cancel
@@ -148,6 +151,18 @@ func (g *Gateway) SetFilesystemService(fs *FilesystemService) {
 // SetContextRegistry wires the pipeline context registry for cancellation propagation.
 func (g *Gateway) SetContextRegistry(cr *pipeline.ContextRegistry) {
 	g.contextRegistry = cr
+}
+
+// SetReplayEngine wires the Phase 11 durable replay engine.
+// When set, replay operations use the EventStore-backed engine instead of the
+// legacy in-memory replayBuf. Both paths coexist during migration.
+func (g *Gateway) SetReplayEngine(re *streaming.ReplayEngine) {
+	g.replayEngine = re
+}
+
+// SetAckManager wires the Phase 11 acknowledgement manager for delivery tracking.
+func (g *Gateway) SetAckManager(am *streaming.AckManager) {
+	g.ackManager = am
 }
 
 // ── HTTP Handlers ────────────────────────────────────────────────────────────
@@ -414,6 +429,17 @@ func (g *Gateway) readPump(conn *websocket.Conn, session *BrowserSession) {
 				Ts:      time.Now().UnixMilli(),
 			})
 
+		case "ack":
+			// Client acknowledges receipt of events up to last_seq per channel.
+			// Used for gap detection and efficient reconnect replay.
+			if g.ackManager != nil && clientMsg.LastSeq != nil {
+				for ch, seq := range clientMsg.LastSeq {
+					session.LastSeq[ch] = seq
+				}
+				// AckManager is not yet wired to SessionManager in this phase;
+				// store ack state on the session directly for reconnect use.
+			}
+
 		case "channel_msg":
 			g.handleChannelMessage(session, clientMsg)
 		}
@@ -426,6 +452,20 @@ func (g *Gateway) readPump(conn *websocket.Conn, session *BrowserSession) {
 // session, in order. Used for a fresh client's one-time catch-up so it sees the
 // current state without needing a prior session/last_seq.
 func (g *Gateway) replayForChannels(session *BrowserSession, channels []string) {
+	// Phase 11: delegate to ReplayEngine if available (durable, DB-backed)
+	if g.replayEngine != nil {
+		subs := make(map[string]bool, len(channels))
+		for _, ch := range channels {
+			subs[ch] = true
+		}
+		target := streaming.NewChannelTarget(session.SendCh, subs)
+		if err := g.replayEngine.ReplayFull(context.Background(), session.WorkspaceID, target); err != nil {
+			g.logger.Warnw("replay_engine_full_failed", "session_id", session.ID, "error", err)
+		}
+		return
+	}
+
+	// Legacy path: in-memory replayBuf
 	if len(channels) == 0 {
 		return
 	}
@@ -449,6 +489,23 @@ func (g *Gateway) handleReconnect(session *BrowserSession, lastSeqs map[string]i
 	// replaying again.
 	session.synced = true
 
+	// Phase 11: delegate to ReplayEngine if available (durable, DB-backed)
+	if g.replayEngine != nil {
+		target := streaming.NewChannelTarget(session.SendCh, session.Subscriptions)
+		if err := g.replayEngine.Replay(context.Background(), session.WorkspaceID, lastSeqs, target); err != nil {
+			g.logger.Warnw("replay_engine_reconnect_failed", "session_id", session.ID, "error", err)
+		}
+		g.sendToSession(session, Envelope{
+			Channel: ChSystem,
+			Event:   "reconnected",
+			Seq:     g.nextSeq(),
+			Ts:      time.Now().UnixMilli(),
+			Payload: map[string]interface{}{"session_id": session.ID},
+		})
+		return
+	}
+
+	// Legacy path: in-memory replayBuf
 	g.replayMu.RLock()
 	buf := g.replayBuf[session.WorkspaceID]
 	g.replayMu.RUnlock()

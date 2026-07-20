@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -28,6 +29,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/ratelimit"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repair"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
+	"github.com/charkhaniakash/forge-engine/backend/internal/streaming"
 	"github.com/charkhaniakash/forge-engine/backend/internal/validation"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
@@ -321,6 +323,29 @@ func main() {
 				// AI activity in real-time.
 				eventBridge := browserworkspace.NewEventBridge(bwGateway, sugar)
 				eventBridge.SetFilesystemService(bwFsService)
+
+				// Phase 11: Wire the durable Event Store into the event bridge.
+				// Events are persisted to stream_events before being broadcast to
+				// connected browsers. The ReplayBuffer serves as the hot cache.
+				streamEventStore := streaming.NewEventStore(dbConn, sugar)
+				streamReplayBuf := streaming.NewReplayBuffer(streaming.DefaultBufferCapacity)
+				streamReplayEngine := streaming.NewReplayEngine(streamReplayBuf, streamEventStore, sugar)
+				streamEventStore.SetOnPersist(func(workspaceID string, env streaming.Envelope) {
+					// 1. Update in-memory replay buffer
+					streamReplayBuf.Append(workspaceID, env)
+					// 2. Broadcast to connected WebSocket sessions (existing gateway fan-out)
+					bwGateway.Publish(workspaceID, env.Channel, env.Event, env.Payload)
+				})
+				eventBridge.SetEventStore(streamEventStore)
+				bwGateway.SetReplayEngine(streamReplayEngine)
+
+				// Phase 11C: Ack manager for delivery tracking and gap detection.
+				streamAckManager := streaming.NewAckManager(sugar, nil) // metrics wired later
+				bwGateway.SetAckManager(streamAckManager)
+
+				// Start the TTL cleanup worker (deletes stream events older than 14 days)
+				go streaming.StartCleanupWorker(context.Background(), streamEventStore, streaming.DefaultRetention, sugar)
+
 				_ = eventBridge // used below when wiring execution publisher
 
 				// Wire automatic validation + repair trigger into the execution orchestrator.
@@ -523,6 +548,29 @@ func main() {
 					githubInstallationRepo, ingestionJobRepo, execRepo, execOrchestrator, sugar,
 				)
 				taskHandlers.SetAutoRunHook(autoRunner.Run)
+
+				// Phase 11: Forward planning events to EventStore for durable persistence.
+				// When a workspace exists for the task (follow-up scenarios), events
+				// are persisted to stream_events for replay survivability.
+				taskHandlers.SetPlanningEventHook(func(taskID string, eventJSON []byte) {
+					// Resolve workspace for this task (best-effort — may not exist for initial planning)
+					ws, err := wsRepo.GetByWorkItemID(context.Background(), taskID)
+					if err != nil || ws == nil {
+						return // No workspace yet — skip durable persistence, planEventLog handles it
+					}
+					var parsed map[string]interface{}
+					if json.Unmarshal(eventJSON, &parsed) != nil {
+						return
+					}
+					evType, _ := parsed["event"].(string)
+					if evType == "" {
+						evType = "thinking"
+					}
+					// Persist through EventStore (planning channel, planning phase)
+					_, _ = streamEventStore.Append(
+						context.Background(), ws.ID, "planning", evType, parsed, "planning", nil,
+					)
+				})
 
 				// Phase 10B: Wire all orchestrator publishers to forward events
 				// into the unified browser workspace gateway for real-time AI activity,
@@ -797,6 +845,13 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+
+	// ── Admin / Operational endpoints ─────────────────────────────────────────
+	// Phase 11: streaming platform stats (no auth for internal use / k8s probes)
+	app.Get("/admin/streaming/stats", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"status": "ok", "message": "streaming admin not fully wired yet"})
+	})
+
 	sugar.Infof("Backend listening on :%s", port)
 	if err := app.Listen(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)

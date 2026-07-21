@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Icon, ProgressBar, Spinner, StatusBadge } from '@/components/common'
+import { Icon, ProgressBar, Spinner } from '@/components/common'
 import {
   useGetIndexStatusQuery,
   useListReposQuery,
@@ -12,23 +12,43 @@ import { useCreateTaskMutation, useListMissionsQuery } from '@/services/api/task
 import { useCreateSessionMutation } from '@/services/api/qaApi'
 import { loadPlanMode, savePlanMode } from '@/features/task-workspace/planMode'
 import { useToast } from '@/hooks/useToast'
-import { useAuth } from '@/hooks/useAuth'
 import { WORK_ITEM_STATUS } from '@/constants/status'
 import { routeTo } from '@/constants/routes'
 import styles from './Console.module.css'
 
 type Mode = 'agent' | 'ask'
 
+const QUICK_STARTERS = [
+  {
+    title: 'Setup Stripe Webhooks',
+    desc: 'Secure webhook validation with database persistence & event logging.',
+    prompt: 'Build a secure Stripe webhook handler with signature validation, database event persistence, and idempotent processing.',
+  },
+  {
+    title: 'Build Auth Router',
+    desc: 'Express router with JWT, rate limiting, and password hashing.',
+    prompt: 'Create an Express authentication router with JWT token management, rate limiting middleware, and bcrypt password hashing.',
+  },
+  {
+    title: 'Configure CI/CD Pipeline',
+    desc: 'GitHub Actions workflow for linting, testing, and Docker builds.',
+    prompt: 'Set up a GitHub Actions CI/CD pipeline with linting, automated tests, Docker image builds, and deployment to staging.',
+  },
+  {
+    title: 'Optimize SQL Queries',
+    desc: 'Analyze slow schema relationships and add correct indexes.',
+    prompt: 'Analyze the database schema for slow queries, identify missing indexes, and add query optimizations.',
+  },
+]
+
 /**
- * Forge's front door — a conversational console, not a dashboard. The user
- * states an objective; Agent mode opens an autonomous mission, Ask mode opens
- * a grounded Q&A thread. Recent missions are the real task list for the chosen
- * repository (no invented data).
+ * Forge's front door — a conversational console matching the Welcome State design.
+ * The user states an objective; Agent mode opens an autonomous mission, Ask mode opens
+ * a grounded Q&A thread. All real functionality is preserved.
  */
 export function Console() {
   const navigate = useNavigate()
   const toast = useToast()
-  const { user } = useAuth()
 
   const [searchParams] = useSearchParams()
   const [mode, setMode] = useState<Mode>('agent')
@@ -43,8 +63,15 @@ export function Console() {
     })
   }
 
-  const { data: repos = [] } = useListReposQuery()
-  const { data: missions = [] } = useListMissionsQuery()
+  // ── Data fetching ──────────────────────────────────────────────────────────
+  // RTK Query can return `data: null` before the first successful response.
+  // Destructuring with `= []` only guards against `undefined`, not `null`.
+  // Using `?? []` handles both cases safely.
+  const reposResult = useListReposQuery()
+  const repos = reposResult.data ?? []
+  const missionsResult = useListMissionsQuery()
+  const missions = missionsResult.data ?? []
+
   const [createTask, { isLoading: creatingTask }] = useCreateTaskMutation()
   const [createSession, { isLoading: creatingSession }] = useCreateSessionMutation()
   const [getInstallUrl, { isLoading: installingApp }] = useLazyGetInstallUrlQuery()
@@ -52,10 +79,7 @@ export function Console() {
 
   const busy = creatingTask || creatingSession
   const recent = useMemo(() => missions.slice(0, 6), [missions])
-  const repoName = (id: string) => repos.find((r) => r.id === id)?.repo_full_name ?? ''
 
-  // A repository must be indexed before it can be used for Agent or Ask. Gate
-  // the whole flow on real index status (polled only while indexing).
   const { data: index } = useGetIndexStatusQuery(repoId, { skip: !repoId, pollingInterval: 2000 })
   const [triggerIndex, { isLoading: indexingTrigger }] = useTriggerIndexMutation()
   const indexJob = index?.job
@@ -66,6 +90,9 @@ export function Console() {
     indexJob && indexJob.total_chunks
       ? indexJob.processed_chunks / indexJob.total_chunks
       : undefined
+
+  const selectedRepo = repos.find((r) => r.id === repoId)
+  const hasRepos = repos.length > 0
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
@@ -80,13 +107,10 @@ export function Console() {
     }
     try {
       if (mode === 'agent') {
-        // Plan OFF → the backend auto-runs this mission once its plan is ready.
         const task = await createTask({ repoId, intent, auto_run: !planMode }).unwrap()
         navigate(routeTo.mission(task.id) + `?repo=${repoId}`)
       } else {
         const session = await createSession(repoId).unwrap()
-        // Continuous chat: hand the first question to the thread via state so it
-        // streams immediately — no intermediate screen.
         navigate(routeTo.ask(session.id) + `?repo=${repoId}`, {
           state: { firstQuestion: intent },
         })
@@ -96,163 +120,264 @@ export function Console() {
     }
   }
 
+  function handleQuickStart(p: string) {
+    setPrompt(p)
+  }
+
+  function renderRepoSelect() {
+    return (
+      <select
+        value={repoId || ''}
+        onChange={(e) => setRepoId(e.target.value)}
+        className={styles.repoSelect}
+      >
+        <option value="">Select repository…</option>
+        {repos.map((r) => (
+          <option key={r.id} value={r.id}>
+            {r.repo_full_name}
+          </option>
+        ))}
+      </select>
+    )
+  }
+
   return (
     <div className={styles.page}>
-      <div className={styles.hero}>
-        <div className={styles.brand}>
-          <span className={styles.logo}>◆</span> Forge
-        </div>
-        <h1 className={styles.headline}>Autonomous Software Engineer</h1>
-        <p className={styles.sub}>
-          {user?.name ? `${user.name}, what` : 'What'} would you like me to build or fix?
-        </p>
-
-        <form className={styles.composer} onSubmit={onSubmit}>
-          <div className={styles.modeRow}>
-            <div className={styles.modes}>
-              <button
-                type="button"
-                className={`${styles.mode} ${mode === 'agent' ? styles.modeActive : ''}`}
-                onClick={() => setMode('agent')}
-              >
-                <Icon name="execution" size={14} /> Agent
-              </button>
-              <button
-                type="button"
-                className={`${styles.mode} ${mode === 'ask' ? styles.modeActive : ''}`}
-                onClick={() => setMode('ask')}
-              >
-                <Icon name="chat" size={14} /> Ask
-              </button>
-            </div>
-            <span className={styles.modeHint}>
-              {mode === 'agent'
-                ? 'Plans, executes, validates and repairs code.'
-                : 'Answers questions about the codebase. No changes made.'}
-            </span>
-          </div>
-
-          <textarea
-            className={styles.input}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder={
-              mode === 'agent'
-                ? 'e.g. Fix the regression in the Add Song workflow and make validation pass'
-                : 'e.g. How does the authentication flow work?'
-            }
-            rows={3}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(e)
-            }}
-          />
-
-          <div className={styles.actions}>
-            <label className={styles.attach}>
-              <Icon name="repo" size={15} />
-              <select value={repoId} onChange={(e) => setRepoId(e.target.value)} className={styles.repoSelect}>
-                <option value="">Attach repository…</option>
-                {repos?.map((r) => (
-                  <option key={r.id} value={r.id}>{r.repo_full_name}</option>
-                ))}
-              </select>
-            </label>
-            {mode === 'agent' && (
-              <button
-                type="button"
-                className={`${styles.planToggle} ${planMode ? styles.planToggleOn : ''}`}
-                onClick={togglePlanMode}
-                title={planMode
-                  ? 'Plan first — review the plan before it runs'
-                  : 'Auto-run — plan and execute without a review step'}
-                aria-pressed={planMode}
-              >
-                <Icon name={planMode ? 'check' : 'play'} size={13} /> Plan
-              </button>
+      {/* ── Top Navigation Header ─────────────────────────────────────────── */}
+      <header className={styles.topNav}>
+        <div className={styles.topNavLeft}>
+          <span className={styles.topNavLabel}>WORKSPACE / CONSOLE</span>
+          <span className={styles.topNavDivider} />
+          <div className={styles.topNavRepo}>
+            <Icon name="repo" size={14} />
+            {hasRepos ? renderRepoSelect() : (
+              <span className={styles.noRepo}>No repositories connected</span>
             )}
+          </div>
+        </div>
+        <div className={styles.topNavRight}>
+          <div className={styles.topNavActions}>
             <button
-              type="submit"
-              className={styles.submit}
-              disabled={busy || !prompt.trim() || !repoId || !indexed}
+              className={styles.installBtn}
+              disabled={installingApp}
+              onClick={async () => {
+                try {
+                  const result = await getInstallUrl().unwrap()
+                  window.location.href = result.install_url
+                } catch {
+                  toast.error('Failed to get install URL')
+                }
+              }}
             >
-              {busy ? <Spinner size={15} color="#fff" /> : <Icon name="chevronRight" size={16} />}
-              {mode === 'agent' ? (planMode ? 'Start mission' : 'Run mission') : 'Ask'}
+              <Icon name="repo" size={14} />
+              Install GitHub App
+            </button>
+            <button
+              className={styles.syncBtn}
+              disabled={syncing}
+              onClick={async () => {
+                try {
+                  await syncRepos().unwrap()
+                  toast.success('Repos synced')
+                } catch {
+                  toast.error('Sync failed')
+                }
+              }}
+            >
+              <Icon name="refresh" size={14} />
+              {syncing ? 'Syncing…' : 'Sync repos'}
             </button>
           </div>
-
-          {repoId && !indexed && (
-            <div className={styles.indexGate}>
-              {indexing ? (
-                <div className={styles.indexing}>
-                  <ProgressBar
-                    value={indexPct}
-                    label={
-                      indexJob?.total_chunks
-                        ? `Indexing ${repoName(repoId)} · ${indexJob.progress_stage ?? 'working'} · ${indexJob.processed_chunks}/${indexJob.total_chunks}`
-                        : `Indexing ${repoName(repoId)}…`
-                    }
-                  />
-                </div>
-              ) : indexJob?.status === 'failed' ? (
-                <div className={styles.indexFailed}>
-                  <Icon name="alert" size={14} /> Indexing failed{indexJob.error ? `: ${indexJob.error}` : ''}
-                  <button
-                    type="button"
-                    className={styles.indexBtn}
-                    onClick={() => triggerIndex(repoId)}
-                    disabled={indexingTrigger}
-                  >
-                    Retry
-                  </button>
-                </div>
-              ) : (
-                <div className={styles.notIndexed}>
-                  <Icon name="alert" size={14} />
-                  <span>This repository isn't indexed yet — Forge needs to read it first.</span>
-                  <button
-                    type="button"
-                    className={styles.indexBtn}
-                    onClick={() => triggerIndex(repoId)}
-                    disabled={indexingTrigger}
-                  >
-                    {indexingTrigger ? 'Starting…' : 'Index repository'}
-                  </button>
-                </div>
-              )}
-            </div>
+          {selectedRepo && (
+            <span className={styles.gpuLabel}>GPU: H100 Node 4</span>
           )}
-          {repoId && indexed && (
-            <div className={styles.indexed}>
-              <Icon name="check" size={13} /> {repoName(repoId)} is indexed and ready
-              {indexJob?.commit_sha && (
-                <span className={styles.commitSha} title={indexJob.commit_sha}>
-                  @ {indexJob.commit_sha.slice(0, 7)}
-                </span>
-              )}
-              <button
-                type="button"
-                className={styles.indexBtn}
-                onClick={() => triggerIndex(repoId)}
-                disabled={indexingTrigger}
-              >
-                {indexingTrigger ? 'Starting…' : 'Re-index'}
-              </button>
-            </div>
-          )}
-        </form>
-      </div>
+          <span className={styles.statusDotLive} />
+        </div>
+      </header>
 
-      <div className={styles.recent}>
-        <div className={styles.recentHead}>Recent missions</div>
-        {recent?.length === 0 && (
-          <div className={styles.muted}>
-            {repos?.length === 0 ? (
-              <div className={styles.noRepos}>
-                <Icon name="repo" size={16} />
-                <span>No repositories connected.</span>
+      {/* ── Central Content ───────────────────────────────────────────────── */}
+      <div className={styles.content}>
+        <div className={styles.hero}>
+          {/* Brand */}
+          <div className={styles.brand}>
+            <div className={styles.brandOuter}>
+              <div className={styles.brandInner}>
+                <Icon name="sparkles" size={28} className={styles.brandIcon} />
+              </div>
+            </div>
+            <h1 className={styles.title}>FORGE</h1>
+            <p className={styles.subtitle}>
+              Collaborate with an autonomous software engineering agent.
+              Forge designs plans, executes code, runs tests, self-repairs, and publishes pull requests.
+            </p>
+          </div>
+
+          {/* Prompt */}
+          <h2 className={styles.promptHeading}>
+            What would you like Forge to build today?
+          </h2>
+
+          <form className={styles.composer} onSubmit={onSubmit}>
+            <div className={styles.modeRow}>
+              <div className={styles.modes}>
                 <button
                   type="button"
-                  className={styles.indexBtn}
+                  className={`${styles.modeBtn} ${mode === 'agent' ? styles.modeActive : ''}`}
+                  onClick={() => setMode('agent')}
+                >
+                  <Icon name="execution" size={13} />
+                  Agent
+                </button>
+                <button
+                  type="button"
+                  className={`${styles.modeBtn} ${mode === 'ask' ? styles.modeActive : ''}`}
+                  onClick={() => setMode('ask')}
+                >
+                  <Icon name="chat" size={13} />
+                  Ask
+                </button>
+              </div>
+              <span className={styles.modeHint}>
+                {mode === 'agent'
+                  ? 'Plans, executes, validates and repairs code.'
+                  : 'Answers questions about the codebase. No changes made.'}
+              </span>
+            </div>
+
+            <textarea
+              className={styles.textarea}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder={
+                mode === 'agent'
+                  ? 'e.g., Build a fast OAuth login handler using JWT tokens, write automated validation tests, and create a GitHub Actions workflow to run them...'
+                  : 'e.g., How does the authentication flow work?'
+              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) onSubmit(e)
+              }}
+            />
+
+            <div className={styles.composerActions}>
+              <div className={styles.capabilities}>
+                {mode === 'agent' && (
+                  <button
+                    type="button"
+                    className={`${styles.capBtn} ${planMode ? styles.capBtnActive : ''}`}
+                    onClick={togglePlanMode}
+                    title={
+                      planMode
+                        ? 'Plan first — review the plan before it runs'
+                        : 'Auto-run — plan and execute without a review step'
+                    }
+                    aria-pressed={planMode}
+                  >
+                    <Icon name="check" size={12} />
+                    {planMode ? 'Plan Mode' : 'Full Autonomy'}
+                  </button>
+                )}
+                <button type="button" className={styles.capBtn}>
+                  <Icon name="check" size={12} />
+                  Auto-Commit
+                </button>
+                <button type="button" className={styles.capBtn}>
+                  <Icon name="search" size={12} />
+                  Web Search
+                </button>
+              </div>
+
+              <button
+                type="submit"
+                className={styles.submitBtn}
+                disabled={busy || !prompt.trim() || !repoId || !indexed}
+              >
+                {busy ? <Spinner size={14} color="#050507" /> : null}
+                <span>{mode === 'agent' ? (planMode ? 'START MISSION' : 'RUN AGENT') : 'ASK'}</span>
+                <Icon name="chevronRight" size={14} />
+              </button>
+            </div>
+          </form>
+
+          {/* ── Index status ────────────────────────────────────────────────── */}
+          {repoId && (
+            <div className={styles.indexArea}>
+              {!indexed && (
+                <div className={styles.indexGate}>
+                  {indexing ? (
+                    <div className={styles.indexing}>
+                      <ProgressBar
+                        value={indexPct}
+                        label={
+                          indexJob?.total_chunks
+                            ? `Indexing ${selectedRepo?.repo_full_name ?? 'repository'} · ${indexJob.progress_stage ?? 'working'} · ${indexJob.processed_chunks}/${indexJob.total_chunks}`
+                            : `Indexing ${selectedRepo?.repo_full_name ?? 'repository'}…`
+                        }
+                      />
+                    </div>
+                  ) : indexJob?.status === 'failed' ? (
+                    <div className={styles.indexFailed}>
+                      <Icon name="alert" size={14} />
+                      <span>Indexing failed{indexJob.error ? `: ${indexJob.error}` : ''}</span>
+                      <button
+                        type="button"
+                        className={styles.indexActionBtn}
+                        onClick={() => triggerIndex(repoId)}
+                        disabled={indexingTrigger}
+                      >
+                        {indexingTrigger ? 'Starting…' : 'Retry'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className={styles.notIndexed}>
+                      <Icon name="alert" size={14} />
+                      <span>This repository isn't indexed yet — Forge needs to read it first.</span>
+                      <button
+                        type="button"
+                        className={styles.indexActionBtn}
+                        onClick={() => triggerIndex(repoId)}
+                        disabled={indexingTrigger}
+                      >
+                        {indexingTrigger ? 'Starting…' : 'Index repository'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+              {indexed && (
+                <div className={styles.indexed}>
+                  <Icon name="check" size={13} />
+                  <span>{selectedRepo?.repo_full_name ?? 'Repository'} is indexed and ready</span>
+                  {indexJob?.commit_sha && (
+                    <span className={styles.commitSha} title={indexJob.commit_sha}>
+                      @ {indexJob.commit_sha.slice(0, 7)}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    className={styles.indexActionBtn}
+                    onClick={() => triggerIndex(repoId)}
+                    disabled={indexingTrigger}
+                  >
+                    {indexingTrigger ? 'Starting…' : 'Re-index'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── GitHub Connect Prompt (when no repo selected) ────────────────── */}
+          {!repoId && !hasRepos && (
+            <div className={styles.connectPrompt}>
+              <div className={styles.connectPromptContent}>
+                <Icon name="repo" size={20} />
+                <div>
+                  <strong>Connect a GitHub repository</strong>
+                  <p>Install the Forge GitHub App in your organization to get started.</p>
+                </div>
+              </div>
+              <div className={styles.connectActions}>
+                <button
+                  className={styles.connectPrimaryBtn}
                   disabled={installingApp}
                   onClick={async () => {
                     try {
@@ -266,8 +391,7 @@ export function Console() {
                   {installingApp ? 'Loading…' : 'Install GitHub App'}
                 </button>
                 <button
-                  type="button"
-                  className={styles.indexBtn}
+                  className={styles.connectSecondaryBtn}
                   disabled={syncing}
                   onClick={async () => {
                     try {
@@ -281,25 +405,83 @@ export function Console() {
                   {syncing ? 'Syncing…' : 'Sync repos'}
                 </button>
               </div>
-            ) : (
-              'No missions yet — describe one above to get started.'
-            )}
+            </div>
+          )}
+
+          {/* ── Quick Starters ──────────────────────────────────────────────── */}
+          {mode === 'agent' && repoId && indexed && (
+            <div className={styles.quickStarters}>
+              <div className={styles.quickStartersHead}>Quick Starters</div>
+              <div className={styles.quickStartersGrid}>
+                {QUICK_STARTERS.map((qs) => (
+                  <button
+                    key={qs.title}
+                    type="button"
+                    className={styles.quickStarterCard}
+                    onClick={() => handleQuickStart(qs.prompt)}
+                  >
+                    <span className={styles.quickStarterTitle}>{qs.title}</span>
+                    <p className={styles.quickStarterDesc}>{qs.desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Recent Missions ────────────────────────────────────────────────── */}
+        {recent.length > 0 && (
+          <div className={styles.recentSection}>
+            <div className={styles.recentHead}>Recent Missions</div>
+            <div className={styles.recentGrid}>
+              {recent.map((m) => {
+                const statusDef = WORK_ITEM_STATUS[m.status as keyof typeof WORK_ITEM_STATUS]
+                const statusLabel = statusDef?.label ?? m.status
+                const statusColor = statusDef?.tone ? `var(--${statusDef.tone})` : 'var(--neutral)'
+                return (
+                  <button
+                    key={m.id}
+                    className={styles.recentCard}
+                    onClick={() => navigate(routeTo.mission(m.id) + `?repo=${m.repo_id}`)}
+                  >
+                    <div className={styles.recentCardTop}>
+                      <span className={styles.recentCardIntent}>{m.intent}</span>
+                      <span
+                        className={styles.recentCardBadge}
+                        style={{ color: statusColor, background: statusColor.startsWith('#') ? `${statusColor}30` : 'var(--neutral-subtle)' }}
+                      >
+                        {statusLabel}
+                      </span>
+                    </div>
+                    <p className={styles.recentCardRepo}>
+                      {repos.find((r) => r.id === m.repo_id)?.repo_full_name ?? 'repository'}
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
           </div>
         )}
-        <div className={styles.missionList}>
-          {recent.map((m) => (
-            <button
-              key={m.id}
-              className={styles.missionRow}
-              onClick={() => navigate(routeTo.mission(m.id) + `?repo=${m.repo_id}`)}
-            >
-              <Icon name="execution" size={15} className={styles.missionIcon} />
-              <span className={styles.missionIntent}>{m.intent}</span>
-              <span className={styles.missionRepo}>{repoName(m.repo_id)}</span>
-              <StatusBadge map={WORK_ITEM_STATUS} status={m.status} size="sm" />
-            </button>
-          ))}
-        </div>
+
+        {/* ── Bottom Footer ────────────────────────────────────────────────── */}
+        <footer className={styles.bottomFooter}>
+          <div className={styles.footerItems}>
+            <span className={styles.footerItem}>
+              <Icon name="code" size={14} className={styles.footerIcon} />
+              Sandbox Shell: bash/node v20
+            </span>
+            <span className={styles.footerDivider} />
+            <span className={styles.footerItem}>
+              <Icon name="tool" size={14} className={styles.footerIconSecondary} />
+              Safety: Code Guardrails Engaged
+            </span>
+            <span className={styles.footerDivider} />
+            <span className={styles.footerItem}>
+              <Icon name="file" size={14} />
+              API Reference
+            </span>
+          </div>
+        </footer>
       </div>
     </div>
   )

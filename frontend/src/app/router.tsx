@@ -1,24 +1,17 @@
 /* eslint-disable react-refresh/only-export-components */
-import { lazy } from 'react'
 import { createBrowserRouter, Navigate } from 'react-router-dom'
 import { AppLayout } from '@/layouts/AppLayout/AppLayout'
 import { AuthLayout } from '@/layouts/AuthLayout/AuthLayout'
 import { ROUTES } from '@/constants/routes'
-
-// Auth
-const Login = lazy(() => import('@/pages/Login/Login'))
-const Signup = lazy(() => import('@/pages/Signup/Signup'))
-const GitHubInstallCallback = lazy(
-  () => import('@/pages/GitHubInstallCallback/GitHubInstallCallback'),
-)
-
-// Core Mission-centric surfaces
-const Console = lazy(() => import('@/pages/Console/Console'))
-const Mission = lazy(() => import('@/pages/TaskWorkspace/TaskWorkspace'))
-const AskThread = lazy(() => import('@/pages/Ask/AskThread'))
-const Repositories = lazy(() => import('@/pages/Repositories/Repositories'))
-const Settings = lazy(() => import('@/pages/Settings/Settings'))
-const Workspace = lazy(() => import('@/pages/Workspace/Workspace'))
+import GitHubInstallCallback from '@/pages/GitHubInstallCallback/GitHubInstallCallback'
+import Login from '@/pages/Login/Login'
+import Signup from '@/pages/Signup/Signup'
+import Console from '@/pages/Console/Console'
+import TaskWorkspace from '@/pages/TaskWorkspace/TaskWorkspace'
+import AskThread from '@/pages/Ask/AskThread'
+import Repositories from '@/pages/Repositories/Repositories'
+import Settings from '@/pages/Settings/Settings'
+import Workspace from '@/pages/Workspace/Workspace'
 
 export const router = createBrowserRouter([
   {
@@ -36,7 +29,7 @@ export const router = createBrowserRouter([
     element: <AppLayout />,
     children: [
       { index: true, element: <Console /> },
-      { path: ROUTES.mission, element: <Mission /> },
+      { path: ROUTES.mission, element: <TaskWorkspace /> },
       { path: ROUTES.ask, element: <AskThread /> },
       { path: ROUTES.repositories, element: <Repositories /> },
       { path: ROUTES.settings, element: <Settings /> },

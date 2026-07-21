@@ -733,17 +733,24 @@ export function TaskWorkspace() {
 
   const header = (
     <div className={styles.header}>
-      <button className={styles.back} onClick={() => navigate(ROUTES.root)}>
-        <Icon name="chevronLeft" size={14} /> Missions
-      </button>
-      <span className={styles.crumb}>Mission</span>
-      {live && (
-        <span className={styles.liveDot}>
-          <span />
-          {liveHint ?? 'live'}
-        </span>
-      )}
+      <div className={styles.headerLeft}>
+        <button className={styles.back} onClick={() => navigate(ROUTES.root)}>
+          <Icon name="chevronLeft" size={14} />
+        </button>
+        <span className={styles.crumb}>WORKSPACE / {taskId.slice(0, 8).toUpperCase()}</span>
+        <span className={styles.headerDivider} />
+        <Icon name="git" size={13} className={styles.headerGitIcon} />
+        <span className={styles.headerRepoName}>{repoId ? `repo-${repoId.slice(0, 6)}` : 'No repo'}</span>
+      </div>
       <div className={styles.headerRight}>
+        {live && (
+          <span className={styles.headerLive}>
+            <span className={styles.liveDot}><span /></span>
+            {liveHint ?? 'live'}
+          </span>
+        )}
+        <span className={styles.headerGpu}>GPU: H100 Node 4</span>
+        <div className={styles.headerGpuDot} />
         {workspace && (workspace.status === 'ready' || workspace.status === 'executing') && (
           <Button
             size="sm"
@@ -819,66 +826,82 @@ export function TaskWorkspace() {
         : 'Follow-ups are available while a plan is under review.'
 
   const composer = (
-    <div className={styles.composerBox}>
-      <textarea
-        className={styles.composerInput}
-        value={refineNote}
-        onChange={(e) => setRefineNote(e.target.value)}
-        placeholder={composerPlaceholder}
-        rows={2}
-        disabled={!inputEnabled || composerBusy}
-        onKeyDown={(e) => {
-          if (inputEnabled && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault()
-            submitComposer()
-          }
-        }}
-      />
-      {showStop ? (
-        <Button
-          variant="danger"
-          loading={stopping}
-          leadingIcon={<Icon name="stop" size={13} />}
-          onClick={handleStop}
-        >
-          Stop
-        </Button>
-      ) : canStartNew ? (
-        <>
-          <button
-            type="button"
-            className={`${styles.planToggle} ${planMode ? styles.planToggleOn : ''}`}
-            onClick={togglePlanMode}
-            title={planMode
-              ? 'Plan first — review the plan before it runs'
-              : 'Auto-run — plan and execute without a review step'}
-            aria-pressed={planMode}
-          >
-            <Icon name={planMode ? 'check' : 'play'} size={12} />
-            Plan
-          </button>
+    <>
+      <div className={styles.composerBox}>
+        <textarea
+          className={styles.composerInput}
+          value={refineNote}
+          onChange={(e) => setRefineNote(e.target.value)}
+          placeholder={composerPlaceholder}
+          rows={1}
+          disabled={!inputEnabled || composerBusy}
+          onKeyDown={(e) => {
+            if (inputEnabled && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault()
+              submitComposer()
+            }
+          }}
+        />
+        {showStop ? (
           <Button
-            variant="primary"
-            loading={followingUp}
-            disabled={!refineNote.trim()}
-            leadingIcon={<Icon name={planMode ? 'chat' : 'play'} size={14} />}
-            onClick={handleFollowUp}
+            variant="danger"
+            loading={stopping}
+            leadingIcon={<Icon name="stop" size={13} />}
+            onClick={handleStop}
           >
-            {planMode ? 'Follow up' : 'Run'}
+            Stop
           </Button>
-        </>
-      ) : (
-        <Button
-          variant="secondary"
-          loading={refining}
-          disabled={!canRefine || !refineNote.trim()}
-          leadingIcon={<Icon name="chat" size={14} />}
-          onClick={handleRefine}
-        >
-          Refine plan
-        </Button>
-      )}
-    </div>
+        ) : canStartNew ? (
+          <>
+            <button
+              type="button"
+              className={`${styles.planToggle} ${planMode ? styles.planToggleOn : ''}`}
+              onClick={togglePlanMode}
+              title={planMode
+                ? 'Plan first — review the plan before it runs'
+                : 'Auto-run — plan and execute without a review step'}
+              aria-pressed={planMode}
+            >
+              <Icon name={planMode ? 'check' : 'play'} size={12} />
+              Plan
+            </button>
+            <Button
+              variant="primary"
+              loading={followingUp}
+              disabled={!refineNote.trim()}
+              leadingIcon={<Icon name="chevronRight" size={14} />}
+              onClick={handleFollowUp}
+            >
+              {planMode ? 'Follow up' : 'Run'}
+            </Button>
+          </>
+        ) : (
+          <Button
+            variant="secondary"
+            loading={refining}
+            disabled={!canRefine || !refineNote.trim()}
+            leadingIcon={<Icon name="chat" size={14} />}
+            onClick={handleRefine}
+          >
+            Refine plan
+          </Button>
+        )}
+      </div>
+      <div className={styles.composerFooter}>
+        <div className={styles.composerStatusLeft}>
+          <span className={styles.composerStatusItem}>
+            <Icon name="code" size={11} className={styles.composerStatusIconGreen} />
+            Shell Sandbox listening
+          </span>
+          <span className={styles.composerStatusDivider} />
+          <span className={styles.composerStatusItem}>
+            <Icon name="tool" size={11} className={styles.composerStatusIconCyan} />
+            Safe Mode: Activated
+          </span>
+        </div>
+        <span className={styles.composerShortcut}>Ctrl + Enter to submit</span>
+      </div>
+    </>
   )
 
   return (

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -642,11 +643,55 @@ func (m *WorkspaceManager) ProvisionValidationContainer(
 
 // ExecInValidationContainer runs a command inside an ephemeral validation container
 // by its Docker container ID. This bypasses the workspaces table entirely.
+// validationExecGraceSeconds is the extra time the OUTER (driver-level) deadline
+// gets over the in-container `timeout`, so the container kills the process first
+// and we observe its real exit code (124/137) instead of a driver-side deadline.
+const validationExecGraceSeconds = 15
+
+// nonInteractiveExecEnv are baseline env vars applied to every validation
+// command so tools run in one-shot CI mode and never wait on a TTY/prompt.
+// This is the source-level fix for watch-mode runners (react-scripts, jest,
+// vitest, …) hanging until timeout, independent of the command being run.
+func nonInteractiveExecEnv() map[string]string {
+	return map[string]string{
+		"CI":                  "true", // jest/vitest/react-scripts → single run, no watch
+		"FORCE_COLOR":         "0",    // clean, parseable output
+		"NODE_ENV":            "test",
+		"npm_config_yes":      "true", // npx never prompts to install
+		"GIT_TERMINAL_PROMPT": "0",    // git never blocks on credentials
+		"DEBIAN_FRONTEND":     "noninteractive",
+	}
+}
+
+// ExecInValidationContainer runs a validation command with correct, non-interactive
+// process semantics:
+//   - injects a CI/non-interactive environment (callers may override any key),
+//   - enforces the timeout IN-CONTAINER via coreutils `timeout` (Docker has no
+//     "kill exec" API, so a hung/watch process is otherwise unkillable), and
+//   - keeps the driver-level deadline as an outer safety net (grace beyond the
+//     in-container timeout) so the container terminates the process first.
 func (m *WorkspaceManager) ExecInValidationContainer(
 	ctx context.Context,
 	containerID string,
 	req ExecRequest,
 ) (<-chan ExecutionEvent, error) {
+	// Layer the non-interactive baseline under any caller-provided env.
+	env := nonInteractiveExecEnv()
+	for k, v := range req.Env {
+		env[k] = v
+	}
+	req.Env = env
+
+	// Wrap the command so the container hard-kills it on timeout:
+	//   timeout -k 5 <N> <cmd...>
+	// coreutils exits 124 when it sends TERM (timeout) and 137 (128+9) if the
+	// KILL grace elapses — runStage treats both as a timeout. The sandbox images
+	// are ubuntu-based, so GNU `timeout` is always present.
+	if n := req.TimeoutSeconds; n > 0 && len(req.Command) > 0 && req.Command[0] != "timeout" {
+		req.Command = append([]string{"timeout", "-k", "5", strconv.Itoa(n)}, req.Command...)
+		req.TimeoutSeconds = n + validationExecGraceSeconds
+	}
+
 	return m.driver.Execute(ctx, containerID, req)
 }
 

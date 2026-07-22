@@ -44,6 +44,7 @@ services:
     environment:
       BACKEND_PORT: 8080
       AGENT_URL: http://agent:8000
+      VALIDATION_PLANNER: "on" 
       DATABASE_URL: postgresql://forge:forge@postgres:5432/forge?sslmode=disable
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: debug

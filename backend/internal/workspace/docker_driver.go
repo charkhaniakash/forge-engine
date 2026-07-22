@@ -282,10 +282,13 @@ func (d *DockerSandboxDriver) Execute(ctx context.Context, containerID string, r
 		case <-readDone:
 		case <-execCtx.Done():
 			timedOut = execCtx.Err() == context.DeadlineExceeded
-			// Kill the exec process.
-			killCtx, killCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer killCancel()
-			_ = d.client.ContainerExecStart(killCtx, execID.ID, types.ExecStartCheck{})
+			// NOTE: Docker exposes no API to signal/kill a running exec, so there
+			// is nothing to call here (the previous ContainerExecStart was a
+			// no-op). Validation commands are wrapped with an in-container
+			// `timeout` that actually terminates the process tree; this
+			// driver-level deadline is only an outer safety net, and the ephemeral
+			// validation container is destroyed after the run, reaping anything
+			// left behind.
 		}
 
 		// Retrieve exit code.

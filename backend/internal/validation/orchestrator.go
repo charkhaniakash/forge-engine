@@ -12,6 +12,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
+	"github.com/charkhaniakash/forge-engine/backend/internal/validation/engine"
 	"github.com/charkhaniakash/forge-engine/backend/internal/validation/environment"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
@@ -139,6 +140,31 @@ func (o *ValidationOrchestrator) Run(
 		return nil, fmt.Errorf("no validation profile found for %s", detection.ProfileID)
 	}
 
+	// Repository-driven engine (live wiring). When enabled, build the plan for the
+	// detected language and — if it has runnable stages — DRIVE execution with the
+	// engine + 7-state classifier instead of the static profile. The legacy
+	// profile still supplies the sandbox image + toolchain check. Falls back to
+	// the legacy stage loop when the flag is off or the plan is empty.
+	usingEngine := false
+	var enginePlan engine.ValidationPlan
+	if plannerEnabled() {
+		fs := engine.NewRepoFS(&wsFileSource{wsManager: o.wsManager, workspaceID: workspaceID})
+		enginePlan = engine.PlanForLanguage(ctx, fs, engine.DefaultRegistry(), detection.Language)
+		if planHasRunnable(enginePlan) {
+			usingEngine = true
+			log.Infow("validation_engine_active",
+				"language", detection.Language,
+				"plan", enginePlan.Summary(),
+				"proposed_manifest", engine.ProposeManifest(enginePlan),
+			)
+		}
+	}
+	if !usingEngine {
+		// Shadow mode: log the plan we WOULD run beside the legacy choice, without
+		// executing it, so we can keep comparing on real repos.
+		go runShadowPlan(o.wsManager, workspaceID, detection.Language, detection.ProfileID, log)
+	}
+
 	// 3. Create run row before provisioning the container (captures detection result).
 	run, err := o.repo.CreateRun(ctx, taskExecutionID, workspaceID, detection, runType)
 	if err != nil {
@@ -240,94 +266,102 @@ func (o *ValidationOrchestrator) Run(
 
 	// 5. Run stages in sequence inside the validation container.
 	buildPassed := true
-	installPassed := true // track install separately to skip downstream stages
+	installPassed := true          // track install separately to skip downstream stages
 	hasEnvironmentFailure := false // tracks if any stage was diagnosed as environment failure
-	for _, stageCfg := range profile.Stages {
-		// Skip stages if install failed (cascading failure prevention)
-		if !installPassed && !stageCfg.RunOnInstallFail {
-			stage, _ := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, nil)
-			if stage != nil {
-				_ = o.repo.SkipStage(ctx, stage.ID)
-			}
-			o.publish(run.ID, "stage_skipped", map[string]interface{}{
-				"stage":  stageCfg.Name,
-				"reason": "install_failed",
-			})
-			continue
-		}
-		// Skip stages if build failed (existing logic)
-		if !buildPassed && !stageCfg.RunOnBuildFail {
-			stage, _ := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, nil)
-			if stage != nil {
-				_ = o.repo.SkipStage(ctx, stage.ID)
-			}
-			o.publish(run.ID, "stage_skipped", map[string]interface{}{
-				"stage":  stageCfg.Name,
-				"reason": "build_failed",
-			})
-			continue
-		}
 
-		stagePassed, isEnvFailure, err := o.runStage(ctx, run, profile, stageCfg, validationContainerID, log)
-		if err != nil {
-			log.Errorw("stage_run_error", "stage", stageCfg.Name, "error", err)
-		}
-		if isEnvFailure {
-			hasEnvironmentFailure = true
-		}
-		if stageCfg.Name == "install" && !stagePassed {
-			installPassed = false
-		}
-		if stageCfg.Name == "build" && !stagePassed {
-			buildPassed = false
-		}
-
-		// Check pause/cancel between stages (Requirements 3.1, 3.2, 3.3)
-		if pauseChecker != nil && execID != "" {
-			if pauseChecker.IsCancelled(ctx, execID) {
-				log.Infow("validation_cancelled_between_stages", "after_stage", stageCfg.Name)
-				_ = o.repo.MarkCancelled(ctx, run.ID)
-				o.publish(run.ID, "validation_cancelled", map[string]interface{}{
-					"after_stage": stageCfg.Name,
-					"reason":      "cancelled_by_user",
+	if usingEngine {
+		// Repository-driven execution + 7-state classification. Persists stages in
+		// the same shape the legacy loop does, so the result assembly below is
+		// identical.
+		installPassed, buildPassed, hasEnvironmentFailure = o.runEngineStages(ctx, run, enginePlan, validationContainerID, log)
+	} else {
+		for _, stageCfg := range profile.Stages {
+			// Skip stages if install failed (cascading failure prevention)
+			if !installPassed && !stageCfg.RunOnInstallFail {
+				stage, _ := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, nil)
+				if stage != nil {
+					_ = o.repo.SkipStage(ctx, stage.ID)
+				}
+				o.publish(run.ID, "stage_skipped", map[string]interface{}{
+					"stage":  stageCfg.Name,
+					"reason": "install_failed",
 				})
-				return run, fmt.Errorf("execution cancelled by user")
+				continue
 			}
-			if pauseChecker.IsPaused(ctx, execID) {
-				log.Infow("validation_paused_between_stages", "after_stage", stageCfg.Name)
-				o.publish(run.ID, "validation_paused", map[string]interface{}{
-					"after_stage": stageCfg.Name,
+			// Skip stages if build failed (existing logic)
+			if !buildPassed && !stageCfg.RunOnBuildFail {
+				stage, _ := o.repo.CreateStage(ctx, run.ID, stageCfg.Name, stageCfg.SequenceNumber, nil)
+				if stage != nil {
+					_ = o.repo.SkipStage(ctx, stage.ID)
+				}
+				o.publish(run.ID, "stage_skipped", map[string]interface{}{
+					"stage":  stageCfg.Name,
+					"reason": "build_failed",
 				})
-				if cancelled := pauseChecker.WaitForResume(ctx, execID); cancelled {
-					log.Infow("validation_cancelled_while_paused", "after_stage", stageCfg.Name)
+				continue
+			}
+
+			stagePassed, isEnvFailure, err := o.runStage(ctx, run, profile, stageCfg, validationContainerID, log)
+			if err != nil {
+				log.Errorw("stage_run_error", "stage", stageCfg.Name, "error", err)
+			}
+			if isEnvFailure {
+				hasEnvironmentFailure = true
+			}
+			if stageCfg.Name == "install" && !stagePassed {
+				installPassed = false
+			}
+			if stageCfg.Name == "build" && !stagePassed {
+				buildPassed = false
+			}
+
+			// Check pause/cancel between stages (Requirements 3.1, 3.2, 3.3)
+			if pauseChecker != nil && execID != "" {
+				if pauseChecker.IsCancelled(ctx, execID) {
+					log.Infow("validation_cancelled_between_stages", "after_stage", stageCfg.Name)
 					_ = o.repo.MarkCancelled(ctx, run.ID)
 					o.publish(run.ID, "validation_cancelled", map[string]interface{}{
 						"after_stage": stageCfg.Name,
-						"reason":      "cancelled_while_paused",
+						"reason":      "cancelled_by_user",
 					})
-					return run, fmt.Errorf("execution cancelled while paused")
+					return run, fmt.Errorf("execution cancelled by user")
 				}
-				log.Infow("validation_resumed", "after_stage", stageCfg.Name)
-				o.publish(run.ID, "validation_resumed", map[string]interface{}{
+				if pauseChecker.IsPaused(ctx, execID) {
+					log.Infow("validation_paused_between_stages", "after_stage", stageCfg.Name)
+					o.publish(run.ID, "validation_paused", map[string]interface{}{
+						"after_stage": stageCfg.Name,
+					})
+					if cancelled := pauseChecker.WaitForResume(ctx, execID); cancelled {
+						log.Infow("validation_cancelled_while_paused", "after_stage", stageCfg.Name)
+						_ = o.repo.MarkCancelled(ctx, run.ID)
+						o.publish(run.ID, "validation_cancelled", map[string]interface{}{
+							"after_stage": stageCfg.Name,
+							"reason":      "cancelled_while_paused",
+						})
+						return run, fmt.Errorf("execution cancelled while paused")
+					}
+					log.Infow("validation_resumed", "after_stage", stageCfg.Name)
+					o.publish(run.ID, "validation_resumed", map[string]interface{}{
+						"after_stage": stageCfg.Name,
+					})
+				}
+			}
+
+			// Check context cancellation (from ContextRegistry Stop propagation)
+			if ctx.Err() != nil {
+				log.Infow("validation_context_cancelled", "after_stage", stageCfg.Name)
+				// Use a fresh context for DB write since the original ctx is cancelled.
+				markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				_ = o.repo.MarkCancelled(markCtx, run.ID)
+				markCancel()
+				o.publish(run.ID, "validation_cancelled", map[string]interface{}{
 					"after_stage": stageCfg.Name,
+					"reason":      "context_cancelled",
 				})
+				return run, fmt.Errorf("execution cancelled (context): %w", ctx.Err())
 			}
 		}
-
-		// Check context cancellation (from ContextRegistry Stop propagation)
-		if ctx.Err() != nil {
-			log.Infow("validation_context_cancelled", "after_stage", stageCfg.Name)
-			// Use a fresh context for DB write since the original ctx is cancelled.
-			markCtx, markCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			_ = o.repo.MarkCancelled(markCtx, run.ID)
-			markCancel()
-			o.publish(run.ID, "validation_cancelled", map[string]interface{}{
-				"after_stage": stageCfg.Name,
-				"reason":      "context_cancelled",
-			})
-			return run, fmt.Errorf("execution cancelled (context): %w", ctx.Err())
-		}
-	}
+	} // end legacy stage loop (else branch)
 
 	// 6. Assemble the full result and compute the overall classification.
 	fullRun, err := o.repo.GetRunWithFullResult(ctx, run.ID)
@@ -503,6 +537,13 @@ func (o *ValidationOrchestrator) runStage(
 		}
 		cancel()
 
+		// The in-container `timeout` wrapper returns 124 when it terminates a
+		// command that exceeded its budget (e.g. a watch-mode runner). Treat that
+		// as a timeout, not an arbitrary non-zero exit.
+		if exitCode == 124 {
+			timedOut = true
+		}
+
 		if exitCode == 127 {
 			if stageCfg.Optional {
 				_ = o.repo.SkipStage(ctx, stage.ID)
@@ -642,13 +683,13 @@ func (o *ValidationOrchestrator) runStage(
 					log.Warnw("insert_diagnostics_failed", "error", insertErr)
 				}
 				o.publish(run.ID, "stage_diagnostics", map[string]interface{}{
-						"stage":          stageCfg.Name,
-						"count":          len(parseResp.Diagnostics),
-						"errors":         parseResp.ErrorCount,
-						"warnings":       parseResp.WarningCount,
-						"failure_origin": parseResp.FailureOrigin,
-						"items":          parseResp.Diagnostics,
-					})
+					"stage":          stageCfg.Name,
+					"count":          len(parseResp.Diagnostics),
+					"errors":         parseResp.ErrorCount,
+					"warnings":       parseResp.WarningCount,
+					"failure_origin": parseResp.FailureOrigin,
+					"items":          parseResp.Diagnostics,
+				})
 			}
 		}
 	} else if exitCode == 127 {

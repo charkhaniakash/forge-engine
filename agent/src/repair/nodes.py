@@ -568,6 +568,24 @@ async def cannot_repair(state: dict) -> dict:
     }
 
 
+def _strip_workspace_prefix(path: str) -> str:
+    """Normalize an edit path to be RELATIVE to the workspace root.
+
+    The LLM occasionally emits an absolute "/workspace/..." path despite the
+    prompt. The backend's WriteFile prepends "/workspace/" itself, so an absolute
+    path would double into "/workspace/workspace/..." and the write would fail.
+    The read/gather path already strips this; do the same for fix edits so the
+    bad path never reaches the backend (defense-in-depth alongside the backend's
+    own containerPath guard).
+    """
+    if not isinstance(path, str):
+        return path
+    for prefix in ("/workspace/", "/workspace"):
+        if path.startswith(prefix):
+            return path[len(prefix):].lstrip("/")
+    return path
+
+
 # ── Node: generate_fix ────────────────────────────────────────────────────────
 
 async def generate_fix(state: dict) -> dict:
@@ -613,9 +631,12 @@ async def generate_fix(state: dict) -> dict:
     edits = result.get("edits", [])
     explanation = result.get("explanation", "")
 
-    # Validate edits — must have path and content
+    # Validate edits — must have path and content — and normalize each path to be
+    # workspace-relative so apply_fix, receive_fix_result, and modified_files all
+    # carry clean paths and the write never double-prefixes /workspace.
     valid_edits = [
-        e for e in edits
+        {**e, "path": _strip_workspace_prefix(e["path"])}
+        for e in edits
         if isinstance(e, dict) and e.get("path") and e.get("content") is not None
     ]
 

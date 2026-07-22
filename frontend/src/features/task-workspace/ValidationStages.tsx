@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Icon } from '@/components/common'
-import type { ValidationStageVM, PhaseState } from './model'
+import type { ValidationStageVM } from './model'
 import styles from './ValidationStages.module.css'
 
 export interface ValidationStagesProps {
@@ -9,12 +9,51 @@ export interface ValidationStagesProps {
   title?: string
 }
 
-const ICON: Record<PhaseState, { name: 'check' | 'x' | 'clock' | 'dot'; cls: string }> = {
-  passed: { name: 'check', cls: 'ok' },
-  failed: { name: 'x', cls: 'fail' },
-  active: { name: 'clock', cls: 'active' },
-  pending: { name: 'dot', cls: 'pending' },
-  skipped: { name: 'dot', cls: 'pending' },
+const OUTCOME_META: Record<string, { icon: 'check' | 'x' | 'clock' | 'dot' | 'alert'; cls: string; label: string }> = {
+  passed:              { icon: 'check', cls: 'ok',       label: 'Passed' },
+  failed:              { icon: 'x',     cls: 'fail',     label: 'Failed' },
+  no_tests:            { icon: 'dot',   cls: 'info',     label: 'No tests' },
+  infrastructure_error: { icon: 'alert', cls: 'warning',  label: 'Infra error' },
+}
+
+/**
+ * Determine the display badge for a stage, driven by `outcome` when present
+ * and falling back to the legacy `state` + `exitCode` heuristics.
+ */
+function stageBadge(stage: ValidationStageVM): { icon: 'check' | 'x' | 'clock' | 'dot' | 'alert'; cls: string; label: string } {
+  // 1. Richer outcome from the backend — take precedence
+  if (stage.outcome && OUTCOME_META[stage.outcome]) {
+    return OUTCOME_META[stage.outcome]
+  }
+  // 2. Skipped stages: check if misconfigured
+  if (stage.state === 'skipped' && stage.reason?.startsWith('misconfigured:')) {
+    return { icon: 'alert', cls: 'warning', label: 'Misconfigured' }
+  }
+  if (stage.state === 'skipped') {
+    return { icon: 'dot', cls: 'neutral', label: 'Skipped' }
+  }
+  // 3. Legacy path — no `outcome` field
+  switch (stage.state) {
+    case 'passed':
+      return { icon: 'check', cls: 'ok', label: 'Passed' }
+    case 'failed':
+      return { icon: 'x', cls: 'fail', label: 'Failed' }
+    case 'active':
+      return { icon: 'clock', cls: 'active', label: 'Running' }
+    case 'pending':
+      return { icon: 'dot', cls: 'neutral', label: 'Pending' }
+    default:
+      return { icon: 'dot', cls: 'neutral', label: '' }
+  }
+}
+
+/** Strip the "skipped: " / "misconfigured: " prefix for display. */
+function displayReason(reason: string): string {
+  const prefixes = ['misconfigured: ', 'skipped: ']
+  for (const p of prefixes) {
+    if (reason.startsWith(p)) return reason.slice(p.length)
+  }
+  return reason
 }
 
 function fmtDuration(ms?: number): string {
@@ -36,22 +75,27 @@ export function ValidationStages({ stages, title = 'Validation' }: ValidationSta
       <div className={styles.header}>{title}</div>
       <div className={styles.stages}>
         {stages.map((stage) => {
-          const meta = ICON[stage.state]
+          const badge = stageBadge(stage)
           const expanded = open === stage.name
+          const showReason =
+            (stage.state === 'skipped' || stage.outcome === 'no_tests' || stage.outcome === 'infrastructure_error') &&
+            stage.reason
+
           return (
             <div key={stage.name} className={styles.stage} data-state={stage.state}>
               <button
                 className={styles.stageHead}
                 onClick={() => setOpen(expanded ? null : stage.name)}
               >
-                <span className={`${styles.badge} ${styles[meta.cls]}`}>
+                <span className={`${styles.badge} ${styles[badge.cls]}`}>
                   {stage.state === 'active' ? (
                     <span className={styles.spinner} />
                   ) : (
-                    <Icon name={meta.name} size={12} />
+                    <Icon name={badge.icon} size={12} />
                   )}
                 </span>
                 <span className={styles.stageName}>{stage.name}</span>
+                <span className={`${styles.outcomeLabel} ${styles[badge.cls]}`}>{badge.label}</span>
                 {stage.exitCode != null && stage.exitCode !== 0 && (
                   <span className={styles.exit}>exit {stage.exitCode}</span>
                 )}
@@ -64,6 +108,13 @@ export function ValidationStages({ stages, title = 'Validation' }: ValidationSta
                   />
                 )}
               </button>
+
+              {showReason && (
+                <div className={styles.reasonText}>
+                  {displayReason(stage.reason!)}
+                </div>
+              )}
+
               {expanded && stage.log.length > 0 && (
                 <pre className={styles.log}>{stage.log.join('\n')}</pre>
               )}

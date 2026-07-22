@@ -2,6 +2,7 @@ package repair
 
 import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/validation"
 )
 
 // RepairDecision indicates whether autonomous repair is permitted for a
@@ -39,7 +40,7 @@ func (p *RepairPolicy) Evaluate(run *models.ValidationRun) RepairDecision {
 	// Gate 2: must have at least one auto_fixable diagnostic
 	var repairable []*models.ValidationDiagnostic
 	for _, d := range run.Diagnostics {
-		if d.RepairCategory != nil && *d.RepairCategory == "auto_fixable" {
+		if d.RepairCategory != nil && *d.RepairCategory == validation.RepairCatAutoFixable {
 			repairable = append(repairable, d)
 		}
 	}

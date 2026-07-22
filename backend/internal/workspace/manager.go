@@ -21,8 +21,9 @@ import (
 // event to execution_logs. No other component calls the SandboxDriver directly.
 //
 // Boundary rule (from Section 2 of Requirement.md):
-//   The Agent never calls this. It will only issue ToolCallRequest messages
-//   in Phase 7+, which the ExecutionService will route here.
+//
+//	The Agent never calls this. It will only issue ToolCallRequest messages
+//	in Phase 7+, which the ExecutionService will route here.
 type WorkspaceManager struct {
 	driver     SandboxDriver
 	wsRepo     *repository.WorkspaceRepository
@@ -293,8 +294,8 @@ func (m *WorkspaceManager) Exec(
 type SearchResult struct {
 	FilePath string `json:"file_path"` // relative to /workspace
 	Line     int    `json:"line"`
-	Column   int    `json:"column"`    // 0 if not provided by implementation
-	Preview  string `json:"preview"`   // the matching line content
+	Column   int    `json:"column"`  // 0 if not provided by implementation
+	Preview  string `json:"preview"` // the matching line content
 }
 
 // DirEntry is one entry returned by ListDir.
@@ -310,7 +311,7 @@ type DirEntry struct {
 type StatResult struct {
 	Path    string `json:"path"`
 	Exists  bool   `json:"exists"`
-	Type    string `json:"type"`     // "file" | "dir" | "symlink" | ""
+	Type    string `json:"type"` // "file" | "dir" | "symlink" | ""
 	Size    int64  `json:"size"`
 	ModTime string `json:"mod_time"`
 }
@@ -331,7 +332,7 @@ func (m *WorkspaceManager) SearchSymbol(
 	}
 	absDir := workspaceMountPath
 	if dir != "" && dir != "." {
-		absDir = workspaceMountPath + "/" + strings.TrimPrefix(dir, "/")
+		absDir = containerPath(dir)
 	}
 
 	// grep -n: include line numbers. -r: recursive. -H: always print filename.
@@ -378,12 +379,32 @@ func (m *WorkspaceManager) SearchSymbol(
 // ── File operations (Phase 7) ─────────────────────────────────────────────────
 
 // ReadFile reads a file from the workspace at the given relative path.
+// containerPath resolves a caller-supplied path to its absolute location inside
+// the workspace container. Callers SHOULD pass repo-relative paths, but tools
+// and LLMs sometimes hand us an already-absolute "/workspace/..." path. This
+// strips the mount prefix when (and only when) it's genuinely the container
+// root, so we never double it into "/workspace/workspace/...". A relative
+// subdirectory literally named "workspace/foo" (no leading slash) is preserved.
+func containerPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == workspaceMountPath {
+		p = ""
+	} else if strings.HasPrefix(p, workspaceMountPath+"/") {
+		p = strings.TrimPrefix(p, workspaceMountPath+"/")
+	}
+	p = strings.TrimPrefix(p, "/")
+	if p == "" {
+		return workspaceMountPath
+	}
+	return workspaceMountPath + "/" + p
+}
+
 func (m *WorkspaceManager) ReadFile(ctx context.Context, workspaceID, path string) ([]byte, error) {
 	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
 	if err != nil || ws.ContainerID == nil {
 		return nil, fmt.Errorf("workspace not ready: %w", err)
 	}
-	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	absPath := containerPath(path)
 	return m.driver.ReadFile(ctx, *ws.ContainerID, absPath)
 }
 
@@ -395,7 +416,7 @@ func (m *WorkspaceManager) WriteFile(ctx context.Context, workspaceID, path stri
 	if err != nil || ws.ContainerID == nil {
 		return fmt.Errorf("workspace not ready: %w", err)
 	}
-	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	absPath := containerPath(path)
 	return m.driver.WriteFile(ctx, *ws.ContainerID, absPath, data)
 }
 
@@ -405,7 +426,7 @@ func (m *WorkspaceManager) CreateFile(ctx context.Context, workspaceID, path str
 	if err != nil || ws.ContainerID == nil {
 		return fmt.Errorf("workspace not ready: %w", err)
 	}
-	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	absPath := containerPath(path)
 	parentDir := filepath.Dir(absPath)
 	mkdirResult, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
 		Command:        []string{"mkdir", "-p", parentDir},
@@ -423,7 +444,7 @@ func (m *WorkspaceManager) DeleteFile(ctx context.Context, workspaceID, path str
 	if err != nil || ws.ContainerID == nil {
 		return fmt.Errorf("workspace not ready: %w", err)
 	}
-	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	absPath := containerPath(path)
 	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
 		Command:        []string{"rm", "-f", "--", absPath},
 		TimeoutSeconds: 10,
@@ -443,8 +464,8 @@ func (m *WorkspaceManager) RenameFile(ctx context.Context, workspaceID, oldPath,
 	if err != nil || ws.ContainerID == nil {
 		return fmt.Errorf("workspace not ready: %w", err)
 	}
-	absOld := workspaceMountPath + "/" + strings.TrimPrefix(oldPath, "/")
-	absNew := workspaceMountPath + "/" + strings.TrimPrefix(newPath, "/")
+	absOld := containerPath(oldPath)
+	absNew := containerPath(newPath)
 
 	// Ensure destination parent exists.
 	destParent := filepath.Dir(absNew)
@@ -480,7 +501,7 @@ func (m *WorkspaceManager) ListDir(ctx context.Context, workspaceID, path string
 	if path == "" {
 		path = "."
 	}
-	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	absPath := containerPath(path)
 
 	// stat -c "%F|%s|%Y|%n" each entry: type|size|epoch|name
 	// Using find to get consistent output across different ls versions.
@@ -538,7 +559,7 @@ func (m *WorkspaceManager) Exists(ctx context.Context, workspaceID, path string)
 	if err != nil || ws.ContainerID == nil {
 		return false, fmt.Errorf("workspace not ready: %w", err)
 	}
-	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	absPath := containerPath(path)
 	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
 		Command:        []string{"test", "-e", absPath},
 		TimeoutSeconds: 5,
@@ -556,7 +577,7 @@ func (m *WorkspaceManager) Stat(ctx context.Context, workspaceID, path string) (
 	if err != nil || ws.ContainerID == nil {
 		return nil, fmt.Errorf("workspace not ready: %w", err)
 	}
-	absPath := workspaceMountPath + "/" + strings.TrimPrefix(path, "/")
+	absPath := containerPath(path)
 
 	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
 		// stat -c: %F=type %s=size %Y=epoch  — portable across Linux

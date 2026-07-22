@@ -124,6 +124,7 @@ const (
 	OutcomeUnsupported   Outcome = "unsupported"
 	OutcomeMisconfigured Outcome = "misconfigured"
 	OutcomeInfraError    Outcome = "infrastructure_error"
+	OutcomeCached        Outcome = "cached" // stage not re-run; previous result reused (incremental validation)
 )
 
 // FailureOrigin attributes a failing outcome to a layer, so the repair

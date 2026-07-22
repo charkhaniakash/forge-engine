@@ -318,8 +318,24 @@ func (o *Orchestrator) Run(
 		// Re-run Phase 8 validation — forward pause/cancel awareness so a Stop
 		// during a post-repair validation stage is observed between stages (and
 		// via ctx cancellation) rather than only after the whole run returns.
+		//
+		// Incremental validation: determine which stages can be skipped based on
+		// what files the repair actually modified. If only app code changed, skip
+		// install (the previous run's install is still valid).
 		log.Info("running_post_repair_validation")
-		postRepairRun, valErr := o.validationOrch.Run(sessionCtx, taskExecutionID, workspaceID, traceID, "post_repair", execID, pauseChecker)
+		var valOpts *validation.RunOpts
+		if len(attemptResult.ModifiedFiles) > 0 {
+			skipPolicy := validation.NewSkipPolicy()
+			earliest, reason := skipPolicy.EarliestAffectedStage(attemptResult.ModifiedFiles)
+			valOpts = &validation.RunOpts{
+				SkipBefore: &earliest,
+				SkipReason: reason,
+			}
+			log.Infow("incremental_validation_determined",
+				"earliest_stage", string(earliest), "reason", reason,
+				"modified_files", attemptResult.ModifiedFiles)
+		}
+		postRepairRun, valErr := o.validationOrch.RunWithOpts(sessionCtx, taskExecutionID, workspaceID, traceID, "post_repair", execID, pauseChecker, valOpts)
 		if valErr != nil {
 			log.Errorw("post_repair_validation_failed", "error", valErr)
 			_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, fmt.Sprintf("validation error: %v", valErr))

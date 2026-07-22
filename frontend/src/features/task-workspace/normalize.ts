@@ -374,8 +374,7 @@ export function buildValidationStages(
   stages: ValidationStage[],
   live: ValidationLiveEvent[],
 ): ValidationStageVM[] {
-  // Live streaming chunks per stage, so a running stage shows output before the
-  // persisted stage row lands.
+  // ── 1. Live streaming chunks per stage (existing behaviour) ────────────
   const liveLog: Record<string, string[]> = {}
   let current: string | undefined
   for (const le of live) {
@@ -387,20 +386,77 @@ export function buildValidationStages(
     }
   }
 
-  return stages
+  // ── 2. Extract richer outcome/reason from live events ──────────────────
+  // Maps stage name → extra data that overlays onto the persisted stage rows.
+  const liveData = new Map<string, {
+    outcome?: ValidationStageVM['outcome']
+    reason?: string
+    // Stages that only appear in live events (e.g. stage_skipped without a
+    // persisted row) will be created from scratch below.
+    synthetic?: boolean
+  }>()
+
+  for (const le of live) {
+    const ev = le.raw
+    if (ev.event === 'stage_complete' && ev.stage) {
+      const entry = liveData.get(ev.stage) ?? {}
+      // outcome is the backend's richer taxonomy; fall back to passed/failed
+      // when absent (legacy runs).
+      if (typeof ev.outcome === 'string') {
+        entry.outcome = ev.outcome as ValidationStageVM['outcome']
+      }
+      liveData.set(ev.stage, entry)
+    }
+    if (ev.event === 'stage_skipped' && ev.stage && typeof ev.reason === 'string') {
+      const entry = liveData.get(ev.stage) ?? { synthetic: true }
+      entry.reason = ev.reason
+      entry.synthetic = true
+      liveData.set(ev.stage, entry)
+    }
+  }
+
+  // ── 3. Build VMs from persisted stages + overlay live data ─────────────
+  const seen = new Set<string>()
+
+  const vms: ValidationStageVM[] = stages
     .slice()
     .sort((a, b) => a.sequence_number - b.sequence_number)
     .map((s) => {
+      seen.add(s.stage)
       const persisted = (s.combined_output ?? s.stdout ?? '').split('\n').filter(Boolean)
       const log = persisted.length > 0 ? persisted.slice(-400) : (liveLog[s.stage] ?? [])
+      const extra = liveData.get(s.stage)
       return {
         name: s.stage,
         state: STAGE_STATE[s.status] ?? 'pending',
         log,
         durationMs: s.duration_ms,
         exitCode: s.exit_code,
+        outcome: extra?.outcome,
+        reason: extra?.reason,
       }
     })
+
+  // ── 4. Synthetic stages: those that arrived only via live events (e.g.    ──
+  //    stage_skipped with no persisted row). Insert them in the order they
+  //    were first seen in the live stream so the timeline stays chronological.
+  for (const le of live) {
+    const ev = le.raw
+    const stageName = ev.stage
+    if (!stageName || seen.has(stageName)) continue
+    const extra = liveData.get(stageName)
+    if (!extra?.synthetic) continue
+    seen.add(stageName)
+    vms.push({
+      name: stageName,
+      state: 'skipped',
+      log: [],
+      outcome: undefined,
+      reason: extra.reason,
+    })
+  }
+
+  return vms
 }
 
 // ── Repair attempts ───────────────────────────────────────────────────────────

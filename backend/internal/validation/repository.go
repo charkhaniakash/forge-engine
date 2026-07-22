@@ -303,9 +303,9 @@ func computeSummary(stages []*models.ValidationStage, diags []*models.Validation
 		}
 		if d.RepairCategory != nil {
 			switch *d.RepairCategory {
-			case "auto_fixable":
+			case RepairCatAutoFixable:
 				s.AutoFixableCount++
-			case "needs_human":
+			case RepairCatNeedsHuman:
 				s.NeedsHumanCount++
 			}
 		}

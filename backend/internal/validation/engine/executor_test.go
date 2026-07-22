@@ -11,7 +11,7 @@ type fakeRunner struct {
 	ran     []Capability
 }
 
-func (f *fakeRunner) Run(_ context.Context, _ string, stage StageSpec) CommandResult {
+func (f *fakeRunner) Run(_ context.Context, _ string, stage StageSpec, _ OutputSink) CommandResult {
 	f.ran = append(f.ran, stage.Capability)
 	if r, ok := f.results[stage.Capability]; ok {
 		return r
@@ -43,7 +43,7 @@ func TestExecute_HappyPath(t *testing.T) {
 		supported(CapBuild, CapInstall),
 		supported(CapTest, CapInstall, CapBuild),
 	)
-	res := Execute(context.Background(), plan, &fakeRunner{})
+	res := Execute(context.Background(), plan, &fakeRunner{}, Options{})
 	if res.Verdict != OutcomePassed {
 		t.Fatalf("verdict=%s", res.Verdict)
 	}
@@ -57,7 +57,7 @@ func TestExecute_CodeFailureIsRepairable(t *testing.T) {
 	runner := &fakeRunner{results: map[Capability]CommandResult{
 		CapTest: {ExitCode: 1, Stdout: "FAIL src/x.test.js\nexpected 1 got 2"},
 	}}
-	res := Execute(context.Background(), plan, runner)
+	res := Execute(context.Background(), plan, runner, Options{})
 	if res.Verdict != OutcomeFailed {
 		t.Fatalf("verdict=%s", res.Verdict)
 	}
@@ -74,7 +74,7 @@ func TestExecute_TimeoutIsInfraNotCode(t *testing.T) {
 	runner := &fakeRunner{results: map[Capability]CommandResult{
 		CapTest: {TimedOut: true},
 	}}
-	res := Execute(context.Background(), plan, runner)
+	res := Execute(context.Background(), plan, runner, Options{})
 	if outcomeOf(res, CapTest) != OutcomeInfraError {
 		t.Fatalf("timeout should be InfraError, got %s", outcomeOf(res, CapTest))
 	}
@@ -91,7 +91,7 @@ func TestExecute_NoTestsIsNotFailure(t *testing.T) {
 	runner := &fakeRunner{results: map[Capability]CommandResult{
 		CapTest: {ExitCode: 0, Stdout: "No tests found, exiting with code 0"},
 	}}
-	res := Execute(context.Background(), plan, runner)
+	res := Execute(context.Background(), plan, runner, Options{})
 	if outcomeOf(res, CapTest) != OutcomeNoTests {
 		t.Fatalf("expected NoTests, got %s", outcomeOf(res, CapTest))
 	}
@@ -107,7 +107,7 @@ func TestExecute_MisconfiguredAndUnsupportedNeverRun(t *testing.T) {
 		StageSpec{Capability: CapTypecheck, State: StateUnsupported, DependsOn: []Capability{CapInstall}},
 	)
 	runner := &fakeRunner{}
-	res := Execute(context.Background(), plan, runner)
+	res := Execute(context.Background(), plan, runner, Options{})
 
 	if outcomeOf(res, CapLint) != OutcomeMisconfigured {
 		t.Fatalf("lint=%s", outcomeOf(res, CapLint))
@@ -131,6 +131,67 @@ func TestExecute_MisconfiguredAndUnsupportedNeverRun(t *testing.T) {
 	}
 }
 
+// Incremental: SkipBefore=build → install is Cached (not re-run) and, crucially,
+// does NOT block build (cached counts as dependency-satisfied). This is the
+// post-repair path.
+func TestExecute_IncrementalCachedIsSatisfied(t *testing.T) {
+	plan := planWith(
+		supported(CapInstall),
+		supported(CapBuild, CapInstall),
+	)
+	runner := &fakeRunner{}
+	build := CapBuild
+	res := Execute(context.Background(), plan, runner, Options{SkipBefore: &build})
+
+	if outcomeOf(res, CapInstall) != OutcomeCached {
+		t.Fatalf("install should be cached, got %s", outcomeOf(res, CapInstall))
+	}
+	for _, c := range runner.ran {
+		if c == CapInstall {
+			t.Fatal("cached install must not run")
+		}
+	}
+	if outcomeOf(res, CapBuild) != OutcomePassed {
+		t.Fatalf("build must run and pass despite cached install, got %s", outcomeOf(res, CapBuild))
+	}
+}
+
+// recObserver records the lifecycle callbacks fired.
+type recObserver struct {
+	started, completed, skipped, output []Capability
+}
+
+func (r *recObserver) OnStageStart(s StageSpec) { r.started = append(r.started, s.Capability) }
+func (r *recObserver) OnStageOutput(s StageSpec, _, _ string) {
+	r.output = append(r.output, s.Capability)
+}
+func (r *recObserver) OnStageComplete(s StageSpec, _ StageResult) {
+	r.completed = append(r.completed, s.Capability)
+}
+func (r *recObserver) OnStageSkipped(s StageSpec, _ StageResult) {
+	r.skipped = append(r.skipped, s.Capability)
+}
+
+func TestExecute_ObserverCallbacks(t *testing.T) {
+	plan := planWith(
+		supported(CapInstall),
+		StageSpec{Capability: CapLint, State: StateUnsupported},
+		supported(CapTest, CapInstall),
+	)
+	obs := &recObserver{}
+	Execute(context.Background(), plan, &fakeRunner{}, Options{Observer: obs})
+
+	if len(obs.started) != 2 || obs.started[0] != CapInstall || obs.started[1] != CapTest {
+		t.Fatalf("started=%v", obs.started)
+	}
+	if len(obs.completed) != 2 {
+		t.Fatalf("completed=%v", obs.completed)
+	}
+	if len(obs.skipped) != 1 || obs.skipped[0] != CapLint {
+		t.Fatalf("skipped=%v", obs.skipped)
+	}
+}
+
 func TestExecute_CascadeSkipOnDependencyFailure(t *testing.T) {
 	plan := planWith(
 		supported(CapInstall),
@@ -141,7 +202,7 @@ func TestExecute_CascadeSkipOnDependencyFailure(t *testing.T) {
 	runner := &fakeRunner{results: map[Capability]CommandResult{
 		CapBuild: {ExitCode: 2, Stderr: "build error"},
 	}}
-	res := Execute(context.Background(), plan, runner)
+	res := Execute(context.Background(), plan, runner, Options{})
 
 	if outcomeOf(res, CapBuild) != OutcomeFailed {
 		t.Fatalf("build=%s", outcomeOf(res, CapBuild))

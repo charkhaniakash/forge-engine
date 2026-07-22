@@ -93,6 +93,21 @@ export interface ValidationStageVM {
   log: string[]
   durationMs?: number
   exitCode?: number
+  /**
+   * Richer outcome classified by the backend validation engine.
+   * Absent on legacy runs — fall back to (state + exitCode) for display.
+   * - "passed"             → green
+   * - "failed"             → red
+   * - "no_tests"           → neutral/info  (not a failure)
+   * - "infrastructure_error" → amber/warning (not a code failure)
+   */
+  outcome?: 'passed' | 'failed' | 'no_tests' | 'infrastructure_error'
+  /**
+   * For skipped stages: the reason provided by the backend.
+   * When the reason starts with "misconfigured:", render as "Misconfigured" (amber).
+   * Strip the "skipped: " / "misconfigured: " prefix for display.
+   */
+  reason?: string
 }
 
 /** A single repair attempt, rendered inline in the timeline. */

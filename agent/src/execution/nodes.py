@@ -101,6 +101,8 @@ async def node_gather_context(state: ExecutionState) -> dict:
 
 def _hash_content(content: str) -> str:
     """Return a short SHA-256 hex digest of the given content string."""
+    if content is None:
+        content = ""
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
@@ -388,7 +390,30 @@ async def node_call_tool(state: ExecutionState) -> dict:
     # ── Fix 2: identical-content skip for write / create ─────────────────────
     if tool_name in ("write_file", "create_file"):
         path = tool_args.get("path", "")
-        content = tool_args.get("content", "")
+        content = tool_args.get("content") or ""
+        # Guard: LLM may hallucinate null content — reject immediately.
+        if not content:
+            logger.warning(
+                "node_call_tool_null_content_rejected",
+                step_id=ctx.step_id,
+                tool=tool_name,
+                path=path,
+            )
+            rejected_result = ToolCallResult(
+                tool=tool_name,
+                success=False,
+                result={"error": "content cannot be null or empty", "path": path},
+                cached=False,
+            )
+            history_entry = {
+                "request": {"action": "tool", "tool": tool_name, "args": tool_args},
+                "result": rejected_result.model_dump(),
+            }
+            return {
+                "tool_history": list(state["tool_history"]) + [history_entry],
+                "latest_tool_result": rejected_result,
+                "_pending_action": None,
+            }
         new_hash = _hash_content(content)
         old_hash = file_hashes.get(path)
 
@@ -442,7 +467,7 @@ async def node_call_tool(state: ExecutionState) -> dict:
     if result.success:
         if tool_name in ("write_file", "create_file"):
             path = tool_args.get("path", "")
-            content = tool_args.get("content", "")
+            content = tool_args.get("content") or ""
             new_hash = _hash_content(content)
             old_hash = file_hashes.get(path)
             file_hashes[path] = new_hash

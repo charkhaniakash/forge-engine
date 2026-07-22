@@ -105,6 +105,17 @@ func (o *ValidationOrchestrator) SetOnStartHook(hook ValidationStartHook) {
 	o.onStartHook = hook
 }
 
+// RunOpts holds optional configuration for a validation run.
+// Used to pass incremental validation hints (e.g., skip stages unaffected by repair).
+type RunOpts struct {
+	// SkipBefore, when set, causes all stages before this capability to be skipped.
+	// Used by post-repair validation to avoid re-running stages unaffected by the repair.
+	// Nil means run all stages (default behavior).
+	SkipBefore *engine.Capability
+	// SkipReason is a human-readable explanation for logging.
+	SkipReason string
+}
+
 // Run detects the stack, provisions a language-specific validation container,
 // and executes all validation stages inside it. Called as a goroutine.
 //
@@ -120,8 +131,25 @@ func (o *ValidationOrchestrator) Run(
 	execID string,
 	pauseChecker pipeline.PauseChecker,
 ) (*models.ValidationRun, error) {
+	return o.RunWithOpts(ctx, taskExecutionID, workspaceID, traceID, runType, execID, pauseChecker, nil)
+}
+
+// RunWithOpts is Run with additional options for incremental validation.
+func (o *ValidationOrchestrator) RunWithOpts(
+	ctx context.Context,
+	taskExecutionID, workspaceID, traceID string,
+	runType string,
+	execID string,
+	pauseChecker pipeline.PauseChecker,
+	opts *RunOpts,
+) (*models.ValidationRun, error) {
 	ctx = ingestion.WithTraceID(ctx, traceID)
 	log := o.logger.With("task_exec_id", taskExecutionID, "workspace_id", workspaceID)
+
+	if opts != nil && opts.SkipBefore != nil {
+		log.Infow("incremental_validation_mode",
+			"skip_before", string(*opts.SkipBefore), "reason", opts.SkipReason)
+	}
 
 	// 1. Detect stack by inspecting the Phase 7 workspace filesystem.
 	detection, err := o.detector.Detect(ctx, workspaceID)
@@ -273,7 +301,7 @@ func (o *ValidationOrchestrator) Run(
 		// Repository-driven execution + 7-state classification. Persists stages in
 		// the same shape the legacy loop does, so the result assembly below is
 		// identical.
-		installPassed, buildPassed, hasEnvironmentFailure = o.runEngineStages(ctx, run, enginePlan, validationContainerID, log)
+		installPassed, buildPassed, hasEnvironmentFailure = o.runEngineStages(ctx, run, enginePlan, validationContainerID, opts, execID, pauseChecker, log)
 	} else {
 		for _, stageCfg := range profile.Stages {
 			// Skip stages if install failed (cascading failure prevention)
@@ -564,7 +592,7 @@ func (o *ValidationOrchestrator) runStage(
 				Tool:           "validation_orchestrator",
 				Origin:         "stderr",
 				Confidence:     1.0,
-				RepairCategory: "environment_limitation",
+				RepairCategory: RepairCatEnvironment,
 			}
 			_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{infraDiag})
 			break
@@ -595,7 +623,7 @@ func (o *ValidationOrchestrator) runStage(
 			Tool:           "validation_orchestrator",
 			Origin:         "stderr",
 			Confidence:     envResult.Confidence,
-			RepairCategory: "environment_limitation",
+			RepairCategory: RepairCatEnvironment,
 		}
 		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{envDiag})
 		// Mark as environment failure so we skip agent parsing
@@ -610,7 +638,7 @@ func (o *ValidationOrchestrator) runStage(
 			Tool:           "validation_orchestrator",
 			Origin:         "stderr",
 			Confidence:     1.0,
-			RepairCategory: "environment_limitation",
+			RepairCategory: RepairCatEnvironment,
 		}
 		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{timeoutDiag})
 		isEnvironmentFailure = true
@@ -625,7 +653,7 @@ func (o *ValidationOrchestrator) runStage(
 			Tool:           "validation_orchestrator",
 			Origin:         "stderr",
 			Confidence:     1.0,
-			RepairCategory: "environment_limitation",
+			RepairCategory: RepairCatEnvironment,
 		}
 		_ = o.repo.InsertDiagnostics(ctx, run.ID, stageCfg.Name, []AgentDiagnostic{oomDiag})
 		isEnvironmentFailure = true

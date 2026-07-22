@@ -1,5 +1,4 @@
-import { Badge, Icon } from '@/components/common'
-import { resolveStatus } from '@/constants/status'
+import { Icon } from '@/components/common'
 import type { RepairAttemptVM } from './model'
 import styles from './RepairAttemptCard.module.css'
 
@@ -7,58 +6,61 @@ export interface RepairAttemptCardProps {
   attempt: RepairAttemptVM
 }
 
-const OUTCOME_TONE: Record<string, 'success' | 'warning' | 'danger' | 'neutral'> = {
-  passed: 'success',
-  improved: 'success',
-  no_change: 'warning',
-  regressed: 'danger',
-  cannot_repair: 'danger',
+/** Human-centered labels for repair outcomes — no "failed" */
+const OUTCOME_LABEL: Record<string, string> = {
+  passed: 'Resolved',
+  improved: 'Partially resolved',
+  no_change: 'No change',
+  regressed: 'Introduced new issue',
+  cannot_repair: 'Needs developer attention',
+}
+
+const OUTCOME_CLS: Record<string, string> = {
+  passed: 'resolved',
+  improved: 'partial',
+  no_change: 'noChange',
+  regressed: 'regressed',
+  cannot_repair: 'escalated',
 }
 
 export function RepairAttemptCard({ attempt }: RepairAttemptCardProps) {
-  const tone = attempt.outcome ? OUTCOME_TONE[attempt.outcome] ?? 'neutral' : 'neutral'
+  const label = attempt.outcome ? OUTCOME_LABEL[attempt.outcome] ?? '' : ''
+  const cls = attempt.outcome ? OUTCOME_CLS[attempt.outcome] ?? '' : ''
   const pct = attempt.confidence != null ? Math.round(attempt.confidence * 100) : null
 
   return (
-    <div className={styles.card} data-state={attempt.state}>
+    <div className={styles.card} data-outcome={attempt.outcome}>
       <div className={styles.head}>
-        <span className={styles.title}>
-          <Icon name="repair" size={15} /> Repair attempt {attempt.attempt}
+        <span className={styles.iconWrap}>
+          <Icon name="tool" size={13} />
         </span>
-        {attempt.outcome && (
-          <Badge tone={tone} size="sm">
-            {resolveStatus({}, attempt.outcome).label}
-          </Badge>
+        <span className={styles.title}>
+          Attempt {attempt.attempt}
+        </span>
+        {label && (
+          <span className={`${styles.outcomeChip} ${styles[cls]}`}>{label}</span>
         )}
       </div>
 
-      {attempt.rootCause && <p className={styles.rootCause}>{attempt.rootCause}</p>}
+      {attempt.rootCause && (
+        <p className={styles.rootCause}>{attempt.rootCause}</p>
+      )}
 
       <div className={styles.meta}>
         {attempt.strategy && (
-          <div className={styles.metaItem}>
-            <span className={styles.metaLabel}>Strategy</span>
-            <span className={styles.metaValue}>{attempt.strategy}</span>
-          </div>
+          <span className={styles.metaPill}>
+            {attempt.strategy === 'targeted_fix' ? 'Targeted fix' : attempt.strategy}
+          </span>
         )}
         {pct != null && (
-          <div className={styles.metaItem}>
-            <span className={styles.metaLabel}>Confidence</span>
-            <span className={styles.confidence}>
-              <span className={styles.confidenceTrack}>
-                <span className={styles.confidenceFill} style={{ width: `${pct}%` }} />
-              </span>
-              {pct}%
-            </span>
-          </div>
+          <span className={styles.metaPill}>
+            {pct}% confident
+          </span>
         )}
         {(attempt.errorsBefore != null || attempt.errorsAfter != null) && (
-          <div className={styles.metaItem}>
-            <span className={styles.metaLabel}>Errors</span>
-            <span className={styles.metaValue}>
-              {attempt.errorsBefore ?? '—'} <Icon name="chevronRight" size={11} /> {attempt.errorsAfter ?? '—'}
-            </span>
-          </div>
+          <span className={styles.metaPill}>
+            {attempt.errorsBefore ?? '—'} → {attempt.errorsAfter ?? '—'} issues
+          </span>
         )}
       </div>
 
@@ -66,7 +68,7 @@ export function RepairAttemptCard({ attempt }: RepairAttemptCardProps) {
         <div className={styles.files}>
           {attempt.filesModified.map((f) => (
             <span key={f} className={styles.file}>
-              <Icon name="file" size={11} /> {f}
+              <Icon name="file" size={10} /> {f}
             </span>
           ))}
         </div>

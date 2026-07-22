@@ -5,28 +5,26 @@ import styles from './ThoughtGroup.module.css'
 
 export interface ThoughtGroupProps {
   group: WorkGroup
-  /** Open by default and left open — this is the currently-streaming block. */
   isLive: boolean
 }
 
-/** A burst of consecutive reasoning/tool-use events shown inline as Devin-style steps. */
+/** A burst of consecutive reasoning/tool-use events shown inline as steps. */
 export function ThoughtGroup({ group, isLive }: ThoughtGroupProps) {
-  const verb = group.hasToolActivity ? 'Worked' : 'Thought'
+  const verb = group.hasToolActivity ? 'Working' : 'Exploring'
   const duration = group.durationMs != null ? formatDuration(group.durationMs) : null
-  const label = duration ? `${verb} for ${duration}` : verb
+  const label = duration
+    ? `${verb} · ${duration}`
+    : verb
 
   return (
     <div className={`${styles.group} ${isLive ? styles.live : ''}`}>
       <div className={styles.header}>
         <span className={styles.badge}>
           {isLive ? (
-            <span className={styles.liveSpinner}>
-              <span className={styles.spinner} />
-            </span>
+            <span className={styles.spinnerDot} />
           ) : (
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" className={styles.checkIcon}>
-              <circle cx="8" cy="8" r="7" stroke="var(--success)" strokeWidth="1.5" fill="none" />
-              <path d="M5 8.5l2 2 4-4" stroke="var(--success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            <svg width="10" height="10" viewBox="0 0 16 16" fill="none" className={styles.checkIcon}>
+              <path d="M4 8.5l3 3 5-5" stroke="var(--success)" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           )}
         </span>

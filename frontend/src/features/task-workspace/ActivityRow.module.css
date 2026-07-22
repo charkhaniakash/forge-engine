@@ -1,23 +1,24 @@
 .row {
   display: flex;
   align-items: center;
-  gap: var(--space-2);
-  padding: 4px var(--space-2);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
+  gap: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-family: var(--font-sans, Inter, sans-serif);
+  font-size: 13px;
   line-height: 1.4;
-  transition: background var(--duration-fast) var(--ease);
+  transition: background 0.15s ease;
 }
 .row:hover {
-  background: var(--surface-2);
+  background: rgba(255, 255, 255, 0.03);
 }
 .marker {
   flex-shrink: 0;
-  width: 18px;
+  width: 16px;
   text-align: center;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1.4;
+  opacity: 0.6;
 }
 .body {
   flex: 1;
@@ -27,90 +28,95 @@
   gap: 1px;
 }
 .title {
-  color: var(--text-primary);
+  color: var(--foreground, #E4E4E7);
   word-break: break-word;
 }
 .detail {
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 11px;
   word-break: break-all;
+  font-family: var(--font-mono, 'JetBrains Mono', monospace);
 }
 
-/* Tone accents on the title text */
+/* Tone accents */
 .tone_info .title {
-  color: var(--info);
+  color: #38BDF8;
 }
 .tone_success .title {
-  color: var(--success);
+  color: #00FF66;
 }
 .tone_warning .title {
-  color: var(--warning);
+  color: #F59E0B;
 }
 .tone_danger .title {
-  color: var(--danger);
+  color: #EF5350;
 }
 .tone_accent .title {
-  color: var(--accent);
+  color: #00E5FF;
 }
 .tone_neutral .title {
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.6);
 }
 
 /* Reasoning reads softer / italic to feel like thinking */
 .row[data-kind='reasoning'] .title {
-  color: var(--text-secondary);
+  color: rgba(255, 255, 255, 0.5);
   font-style: italic;
 }
 
-.outcome {
+.outcomeOk {
   flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  color: var(--success);
+  color: #00FF66;
+  opacity: 0.7;
 }
-.ok {
-  color: var(--success);
+.outcomeWarn {
+  flex-shrink: 0;
+  color: #F59E0B;
+  opacity: 0.7;
 }
-.fail {
-  color: var(--danger);
-}
+
 .spinnerWrap {
   flex-shrink: 0;
   display: flex;
   align-items: center;
 }
 .spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid var(--border-strong);
-  border-top-color: var(--accent);
-  border-radius: var(--radius-full);
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(0, 229, 255, 0.25);
+  border-top-color: #00E5FF;
+  border-radius: 50%;
   display: inline-block;
   animation: forge-spin 0.7s linear infinite;
 }
 
-/* ── Compact Devin-style step ──────────────────────────────────────────── */
+/* ── Compact step ─────────────────────────────────────────────────── */
 .compactRow {
   display: flex;
   align-items: flex-start;
-  gap: var(--space-2);
-  padding: 3px 0;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
+  gap: 7px;
+  padding: 2px 0;
+  font-family: var(--font-sans, Inter, sans-serif);
+  font-size: 12px;
   line-height: 1.4;
 }
 .compactIcon {
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-top: 1px;
 }
-.markerCompact {
-  font-size: 11px;
+.compactMarker {
+  font-size: 10px;
   line-height: 1;
+  opacity: 0.5;
+}
+.compactOk {
+  color: #00FF66;
+  opacity: 0.6;
 }
 .compactBody {
   flex: 1;
@@ -120,18 +126,27 @@
   gap: 1px;
 }
 .compactTitle {
-  color: var(--text-primary);
+  color: var(--foreground, #E4E4E7);
   word-break: break-word;
-  font-size: var(--text-sm);
+  font-size: 12px;
 }
 .compactDetail {
-  color: var(--text-tertiary);
-  font-size: var(--text-xs);
+  color: rgba(255, 255, 255, 0.4);
+  font-size: 10px;
   word-break: break-all;
 }
+.spinnerSm {
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgba(0, 229, 255, 0.25);
+  border-top-color: #00E5FF;
+  border-radius: 50%;
+  display: inline-block;
+  animation: forge-spin 0.7s linear infinite;
+}
 
-/* Tone for compact steps */
-.row[data-kind='reasoning'] .compactTitle {
-  color: var(--text-secondary);
+/* Reasoning in compact steps */
+.compactRow[data-kind='reasoning'] .compactTitle {
+  color: rgba(255, 255, 255, 0.5);
   font-style: italic;
 }

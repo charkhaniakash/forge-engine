@@ -5,39 +5,32 @@ import styles from './ValidationStages.module.css'
 
 export interface ValidationStagesProps {
   stages: ValidationStageVM[]
-  /** Auto-expand the stage that is currently running or failed. */
   title?: string
 }
 
+/** Human-readable outcome labels — never says "Failed" */
 const OUTCOME_META: Record<string, { icon: 'check' | 'x' | 'clock' | 'dot' | 'alert'; cls: string; label: string }> = {
-  passed:              { icon: 'check', cls: 'ok',       label: 'Passed' },
-  failed:              { icon: 'x',     cls: 'fail',     label: 'Failed' },
-  no_tests:            { icon: 'dot',   cls: 'info',     label: 'No tests' },
-  infrastructure_error: { icon: 'alert', cls: 'warning',  label: 'Infra error' },
+  passed:               { icon: 'check', cls: 'ok',       label: 'Passed' },
+  failed:               { icon: 'x',     cls: 'issues',   label: 'Found issues' },
+  no_tests:             { icon: 'dot',   cls: 'info',     label: 'No tests' },
+  infrastructure_error: { icon: 'alert', cls: 'warning',  label: 'Infra issue' },
 }
 
-/**
- * Determine the display badge for a stage, driven by `outcome` when present
- * and falling back to the legacy `state` + `exitCode` heuristics.
- */
 function stageBadge(stage: ValidationStageVM): { icon: 'check' | 'x' | 'clock' | 'dot' | 'alert'; cls: string; label: string } {
-  // 1. Richer outcome from the backend — take precedence
   if (stage.outcome && OUTCOME_META[stage.outcome]) {
     return OUTCOME_META[stage.outcome]
   }
-  // 2. Skipped stages: check if misconfigured
   if (stage.state === 'skipped' && stage.reason?.startsWith('misconfigured:')) {
     return { icon: 'alert', cls: 'warning', label: 'Misconfigured' }
   }
   if (stage.state === 'skipped') {
     return { icon: 'dot', cls: 'neutral', label: 'Skipped' }
   }
-  // 3. Legacy path — no `outcome` field
   switch (stage.state) {
     case 'passed':
       return { icon: 'check', cls: 'ok', label: 'Passed' }
     case 'failed':
-      return { icon: 'x', cls: 'fail', label: 'Failed' }
+      return { icon: 'x', cls: 'issues', label: 'Found issues' }
     case 'active':
       return { icon: 'clock', cls: 'active', label: 'Running' }
     case 'pending':
@@ -47,7 +40,6 @@ function stageBadge(stage: ValidationStageVM): { icon: 'check' | 'x' | 'clock' |
   }
 }
 
-/** Strip the "skipped: " / "misconfigured: " prefix for display. */
 function displayReason(reason: string): string {
   const prefixes = ['misconfigured: ', 'skipped: ']
   for (const p of prefixes) {
@@ -62,17 +54,76 @@ function fmtDuration(ms?: number): string {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
-/** Live install/build/test/lint stages with expandable streaming logs. */
-export function ValidationStages({ stages, title = 'Validation' }: ValidationStagesProps) {
+/** Summary row at top — total stages, how many passed, how many have issues */
+function StageSummary({ stages }: { stages: ValidationStageVM[] }) {
+  const total = stages.length
+  const passed = stages.filter((s) => s.state === 'passed').length
+  const issues = stages.filter((s) => s.state === 'failed').length
+  const skipped = stages.filter((s) => s.state === 'skipped').length
+  const running = stages.filter((s) => s.state === 'active').length
+
+  return (
+    <div className={styles.summary}>
+      <div className={styles.summaryStat}>
+        <span className={styles.summaryCount}>{total}</span>
+        <span className={styles.summaryLabel}>check{total === 1 ? '' : 's'}</span>
+      </div>
+      <div className={styles.summaryDivider} />
+      <div className={styles.summaryStat}>
+        <span className={styles.summaryCount} style={{ color: 'var(--success)' }}>{passed}</span>
+        <span className={styles.summaryLabel}>passed</span>
+      </div>
+      {issues > 0 && (
+        <>
+          <div className={styles.summaryDivider} />
+          <div className={styles.summaryStat}>
+            <span className={styles.summaryCount} style={{ color: 'var(--warning)' }}>{issues}</span>
+            <span className={styles.summaryLabel}>with feedback</span>
+          </div>
+        </>
+      )}
+      {running > 0 && (
+        <>
+          <div className={styles.summaryDivider} />
+          <div className={styles.summaryStat}>
+            <span className={styles.spinnerSm} />
+            <span className={styles.summaryLabel}>{running} running</span>
+          </div>
+        </>
+      )}
+      {skipped > 0 && (
+        <>
+          <div className={styles.summaryDivider} />
+          <div className={styles.summaryStat}>
+            <span className={styles.summaryCount} style={{ color: 'var(--text-tertiary)' }}>{skipped}</span>
+            <span className={styles.summaryLabel}>skipped</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+export function ValidationStages({ stages, title = '' }: ValidationStagesProps) {
   const [open, setOpen] = useState<string | null>(() => {
     const running = stages.find((s) => s.state === 'active')
-    const failed = stages.find((s) => s.state === 'failed')
-    return (running ?? failed)?.name ?? null
+    const issues = stages.find((s) => s.state === 'failed')
+    return (running ?? issues)?.name ?? null
   })
+
+  const issueCount = stages.filter((s) => s.state === 'failed').length
+  const totalCount = stages.length
 
   return (
     <div className={styles.root}>
-      <div className={styles.header}>{title}</div>
+      <p className={styles.headline}>
+        {issueCount > 0
+          ? `Build found ${issueCount} issue${issueCount === 1 ? '' : 's'} across ${totalCount} check${totalCount === 1 ? '' : 's'}`
+          : `All ${totalCount} check${totalCount === 1 ? '' : 's'} passed`}
+      </p>
+
+      <StageSummary stages={stages} />
+
       <div className={styles.stages}>
         {stages.map((stage) => {
           const badge = stageBadge(stage)
@@ -91,7 +142,7 @@ export function ValidationStages({ stages, title = 'Validation' }: ValidationSta
                   {stage.state === 'active' ? (
                     <span className={styles.spinner} />
                   ) : (
-                    <Icon name={badge.icon} size={12} />
+                    <Icon name={badge.icon} size={11} />
                   )}
                 </span>
                 <span className={styles.stageName}>{stage.name}</span>
@@ -103,7 +154,7 @@ export function ValidationStages({ stages, title = 'Validation' }: ValidationSta
                 {stage.log.length > 0 && (
                   <Icon
                     name="chevronRight"
-                    size={13}
+                    size={12}
                     className={`${styles.chevron} ${expanded ? styles.chevronOpen : ''}`}
                   />
                 )}
@@ -116,7 +167,13 @@ export function ValidationStages({ stages, title = 'Validation' }: ValidationSta
               )}
 
               {expanded && stage.log.length > 0 && (
-                <pre className={styles.log}>{stage.log.join('\n')}</pre>
+                <>
+                  <div className={styles.logToolbar}>
+                    <span className={styles.logLabel}>Output</span>
+                    <span className={styles.logCount}>{stage.log.length} lines</span>
+                  </div>
+                  <pre className={styles.log}>{stage.log.join('\n')}</pre>
+                </>
               )}
             </div>
           )

@@ -185,12 +185,12 @@ function ValidationEntry({ entry }: { entry: Extract<ConversationEntry, { type: 
     ? stageNames.slice(0, 3).join(', ') + (stageNames.length > 3 ? ` +${stageNames.length - 3}` : '')
     : `${total} task${total === 1 ? '' : 's'}`
 
-  // Status text from backend stage data
+  // Status text from backend stage data — human-centered language
   const statusText = running
     ? `${passedStages + failedStages}/${total} complete`
     : passed
-      ? `${total}/${total} passed`
-      : `${passedStages}/${total} passed, ${failedStages} failed`
+      ? `All checks passed`
+      : `${passedStages}/${total} passed, ${failedStages} with feedback`
 
   return (
     <div className={styles.entryRow}>
@@ -202,13 +202,12 @@ function ValidationEntry({ entry }: { entry: Extract<ConversationEntry, { type: 
         <CardShell entry={entry} header={
           <div className={styles.cardHeaderInner}>
             <Icon name="check" size={14} className={styles.cardHeaderIcon} style={{ color }} />
-            <span className={styles.cardHeaderTitle}>{titleText}</span>
-            <span
+            <span className={styles.cardHeaderTitle}>{titleText}</span>              <span
               className={styles.cardHeaderBadge}
               style={{
-                color: passed ? '#00FF66' : '#FFA726',
-                background: passed ? 'rgba(0,255,102,0.15)' : 'rgba(255,167,38,0.15)',
-                borderColor: passed ? 'rgba(0,255,102,0.3)' : 'rgba(255,167,38,0.3)',
+                color: passed ? '#00FF66' : '#F59E0B',
+                background: passed ? 'rgba(0,255,102,0.15)' : 'rgba(245,158,11,0.15)',
+                borderColor: passed ? 'rgba(0,255,102,0.3)' : 'rgba(245,158,11,0.3)',
               }}
             >
               {statusText}
@@ -226,7 +225,7 @@ function ValidationEntry({ entry }: { entry: Extract<ConversationEntry, { type: 
               <span className={styles.testStatValue}>{passedStages}</span>
             </div>
             <div className={styles.testStatBox}>
-              <span className={styles.testStatLabel}>Failed</span>
+              <span className={styles.testStatLabel}>Feedback</span>
               <span className={styles.testStatValue}>{failedStages}</span>
             </div>
           </div>
@@ -258,20 +257,20 @@ function RepairEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'rep
 function PublishEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'publish' }> }) {
   const color = entryColor(entry)
   const { session } = entry
-  const failed = session.status === 'failed'
+  const needsAttention = session.status === 'failed'
   const ready = session.status === 'completed' && session.pr_url
 
   // ALL text derived from backend PublishingSession data — only uses fields
   // that actually exist on the PublishingSession type.
   const statusText = ready
     ? `PR${session.pr_number ? ` #${session.pr_number}` : ''}`
-    : failed
-      ? session.status
+    : needsAttention
+      ? 'Needs attention'
       : session.current_step ?? session.status
 
   const titleText = ready
     ? `${session.branch_name ?? 'Branch'} pushed${session.pr_number ? ` — PR #${session.pr_number}` : ''}`
-    : failed
+    : needsAttention
       ? session.error_message ?? session.status
       : session.current_step ?? session.status
 
@@ -279,13 +278,13 @@ function PublishEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'pu
     ? session.branch_name
       ? `Branch: ${session.branch_name}`
       : ''
-    : failed
+    : needsAttention
       ? session.error_message ?? ''
       : ''
 
   return (
     <div className={styles.entryRow}>
-      <TimelineDot color={ready ? '#00FF66' : failed ? '#EF5350' : color} active={false} />
+      <TimelineDot color={ready ? '#00FF66' : needsAttention ? '#F59E0B' : color} active={false} />
       <div className={styles.entryContent}>
         <CardShell entry={entry} header={
           <div className={styles.cardHeaderInner}>
@@ -294,9 +293,9 @@ function PublishEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'pu
             <span
               className={styles.cardHeaderBadge}
               style={{
-                color: ready ? '#00FF66' : failed ? '#EF5350' : color,
-                background: ready ? 'rgba(0,255,102,0.15)' : failed ? 'rgba(239,83,80,0.15)' : `${color}15`,
-                borderColor: ready ? 'rgba(0,255,102,0.3)' : failed ? 'rgba(239,83,80,0.3)' : `${color}30`,
+                color: ready ? '#00FF66' : needsAttention ? '#F59E0B' : color,
+                background: ready ? 'rgba(0,255,102,0.15)' : needsAttention ? 'rgba(245,158,11,0.15)' : `${color}15`,
+                borderColor: ready ? 'rgba(0,255,102,0.3)' : needsAttention ? 'rgba(245,158,11,0.3)' : `${color}30`,
               }}
             >
               {statusText}

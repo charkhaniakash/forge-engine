@@ -74,26 +74,26 @@ export function TaskWorkspace() {
 
   const { data: valSnap, refetch: refetchVal } = useGetValidationQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId, pollingInterval: 1000 },
   )
   const valRun = valSnap?.run
   const valLiveState = valRun?.status === 'running' || valRun?.status === 'pending'
 
   const { data: repairSession, refetch: refetchRepair } = useGetRepairSessionByTaskQuery(taskExecutionId, {
     skip: !taskExecutionId,
-    pollingInterval: 3000,
+    pollingInterval: 1000,
   })
 
   const { data: workspace, refetch: refetchWorkspace } = useGetWorkspaceQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId, pollingInterval: 1000 },
   )
 
   // Phase 10 — publishing. Session id bootstraps the WebSocket; live progress
   // comes over usePublishingStream, not the poll.
   const { data: publishData, refetch: refetchPublish } = useGetPublishSessionQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId, pollingInterval: 1000 },
   )
   const publishSession = publishData?.session ?? null
   const publishTerminal =

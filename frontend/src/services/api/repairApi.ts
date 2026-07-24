@@ -11,6 +11,10 @@ export const repairApi = baseApi.injectEndpoints({
     getRepairSessionByTask: builder.query<RepairSession, string>({
       query: (taskExecutionId) =>
         `/repair/sessions/by-task/${taskExecutionId}`,
+      providesTags: (_r, _e, taskId) => [
+        { type: 'Repair', id: taskId },
+        { type: 'Execution', id: taskId },
+      ],
     }),
   }),
 })

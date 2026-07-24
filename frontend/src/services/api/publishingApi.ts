@@ -18,7 +18,8 @@ export const publishingApi = baseApi.injectEndpoints({
         body: { draft_mode: Boolean(draftMode) },
       }),
       invalidatesTags: (_r, _e, { taskId }) => [
-        { type: 'Execution', id: `publish-${taskId}` },
+        { type: 'Publishing', id: taskId },
+        { type: 'Execution', id: taskId },
       ],
     }),
 
@@ -29,7 +30,8 @@ export const publishingApi = baseApi.injectEndpoints({
       query: ({ repoId, taskId }) =>
         `/repos/${repoId}/tasks/${taskId}/publish`,
       providesTags: (_r, _e, { taskId }) => [
-        { type: 'Execution', id: `publish-${taskId}` },
+        { type: 'Publishing', id: taskId },
+        { type: 'Execution', id: taskId },
       ],
     }),
   }),

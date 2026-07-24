@@ -13,7 +13,8 @@ export const validationApi = baseApi.injectEndpoints({
       query: ({ repoId, taskId }) =>
         `/repos/${repoId}/tasks/${taskId}/validation`,
       providesTags: (_r, _e, { taskId }) => [
-        { type: 'Execution', id: `validation-${taskId}` },
+        { type: 'Validation', id: taskId },
+        { type: 'Execution', id: taskId },
       ],
     }),
 
@@ -26,7 +27,7 @@ export const validationApi = baseApi.injectEndpoints({
       transformResponse: (res: { diagnostics?: ValidationDiagnostic[] }) =>
         res.diagnostics ?? [],
       providesTags: (_r, _e, { taskId }) => [
-        { type: 'Execution', id: `validation-diags-${taskId}` },
+        { type: 'Validation', id: `diags-${taskId}` },
       ],
     }),
 
@@ -39,7 +40,8 @@ export const validationApi = baseApi.injectEndpoints({
         method: 'POST',
       }),
       invalidatesTags: (_r, _e, { taskId }) => [
-        { type: 'Execution', id: `validation-${taskId}` },
+        { type: 'Validation', id: taskId },
+        { type: 'Execution', id: taskId },
       ],
     }),
   }),

@@ -9,7 +9,10 @@ export const workspaceApi = baseApi.injectEndpoints({
     >({
       query: ({ repoId, taskId }) =>
         `/repos/${repoId}/tasks/${taskId}/workspace`,
-      providesTags: (_r, _e, { taskId }) => [{ type: 'Workspace', id: taskId }],
+      providesTags: (_r, _e, { taskId }) => [
+        { type: 'Workspace', id: taskId },
+        { type: 'Execution', id: taskId },
+      ],
     }),
 
     getWorkspaceLogs: builder.query<
@@ -32,7 +35,10 @@ export const workspaceApi = baseApi.injectEndpoints({
         url: `/repos/${repoId}/tasks/${taskId}/workspace`,
         method: 'POST',
       }),
-      invalidatesTags: (_r, _e, { taskId }) => [{ type: 'Workspace', id: taskId }],
+      invalidatesTags: (_r, _e, { taskId }) => [
+        { type: 'Workspace', id: taskId },
+        { type: 'Execution', id: taskId },
+      ],
     }),
 
     destroyWorkspace: builder.mutation<
@@ -43,7 +49,10 @@ export const workspaceApi = baseApi.injectEndpoints({
         url: `/repos/${repoId}/tasks/${taskId}/workspace`,
         method: 'DELETE',
       }),
-      invalidatesTags: (_r, _e, { taskId }) => [{ type: 'Workspace', id: taskId }],
+      invalidatesTags: (_r, _e, { taskId }) => [
+        { type: 'Workspace', id: taskId },
+        { type: 'Execution', id: taskId },
+      ],
     }),
   }),
 })

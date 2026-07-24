@@ -24,8 +24,8 @@ class GeminiChatProvider:
     def __init__(self) -> None:
         self._client = genai.Client(api_key=settings.gemini_api_key)
         self._model = settings.chat.model
-        self._max_retries = 3
-        self._base_delay = 1.0  # seconds
+        self._max_retries = 6
+        self._base_delay = 1.0  # seconds (1+2+4+8+16+32=63s total before giving up)
 
     @property
     def model_name(self) -> str:

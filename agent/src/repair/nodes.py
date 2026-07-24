@@ -46,8 +46,16 @@ logger = structlog.get_logger()
 # Confidence below which we escalate immediately rather than attempt repair
 CONFIDENCE_THRESHOLD = 0.30
 
+# Maximum times to retry generate_fix when the LLM returns valid JSON but
+# with an empty edits array (common after Gemini connection recovery — the
+# retried call may produce structurally-valid JSON with zero actual edits).
+_GENERATE_FIX_EMPTY_RETRIES = 2
+
 
 # ── LLM helper ────────────────────────────────────────────────────────────────
+
+_MAX_LLM_RETRIES = 3
+
 
 async def _call_llm(messages: list[dict], ctx, request_tag: str) -> str:
     """Single LLM call. Returns raw string response."""
@@ -72,6 +80,60 @@ async def _call_llm(messages: list[dict], ctx, request_tag: str) -> str:
     return "".join(parts).strip()
 
 
+def _repair_truncated_json(raw: str) -> str:
+    """
+    Attempt to repair truncated JSON by appending missing closing brackets,
+    braces, and quotes. The LLM stream is often cut off mid-response, leaving
+    unclosed delimiters that make json.loads() fail.
+
+    This handles the common case where the LLM produced complete key-value
+    content but the final closing delimiters were cut off.
+    """
+    if not raw or raw.isspace():
+        return raw
+
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+
+    for ch in raw:
+        if escaped:
+            escaped = False
+            continue
+        if ch == '\\':
+            escaped = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch in '{[':
+            stack.append(ch)
+        elif ch == '}':
+            if stack and stack[-1] == '{':
+                stack.pop()
+            else:
+                # Unmatched closing brace — might be noise, ignore
+                pass
+        elif ch == ']':
+            if stack and stack[-1] == '[':
+                stack.pop()
+            else:
+                pass
+
+    # If at the end we're still inside a string, close it
+    if in_string:
+        raw += '"'
+
+    # Append missing closing delimiters in reverse order
+    closer = {'{': '}', '[': ']'}
+    for delim in reversed(stack):
+        raw += closer.get(delim, '')
+
+    return raw
+
+
 def _strip_fences(text: str) -> str:
     """Remove markdown code fences if LLM added them despite instructions."""
     if text.startswith("```"):
@@ -81,6 +143,58 @@ def _strip_fences(text: str) -> str:
             lines = lines[:-1]
         return "\n".join(lines)
     return text
+
+
+async def _call_llm_with_retry(
+    messages: list[dict],
+    ctx,
+    request_tag: str,
+    max_retries: int = _MAX_LLM_RETRIES,
+) -> str:
+    """
+    Call the LLM with retry logic and JSON repair.
+
+    The LLM streaming API frequently returns truncated JSON because the
+    connection closes mid-stream (network issues, token limits, rate limits).
+    This helper:
+      1. Calls the LLM
+      2. Strips markdown fences
+      3. Attempts JSON repair on truncated output (closes unclosed brackets)
+      4. If parsing still fails, retries up to max_retries times
+      5. Returns the raw string (repaired) on success, or empty on exhaustion
+    """
+    last_error = ""
+    for attempt in range(max_retries):
+        if attempt > 0:
+            logger.info("llm_retry", request_tag=request_tag, attempt=attempt + 1, reason=last_error[:100])
+
+        raw = await _call_llm(messages, ctx, request_tag)
+        if not raw:
+            last_error = "empty response"
+            continue
+
+        # Strip markdown fences before any parsing
+        stripped = _strip_fences(raw)
+
+        # Quick check: if it parses cleanly, return immediately
+        try:
+            json.loads(stripped)
+            return stripped
+        except json.JSONDecodeError:
+            pass
+
+        # Attempt JSON repair for truncated output
+        repaired = _repair_truncated_json(stripped)
+        try:
+            json.loads(repaired)
+            logger.info("llm_json_repaired", request_tag=request_tag, original_len=len(stripped), repaired_len=len(repaired))
+            return repaired
+        except json.JSONDecodeError as e:
+            last_error = str(e)
+            continue
+
+    logger.warning("llm_retries_exhausted", request_tag=request_tag, error=last_error[:200])
+    return ""
 
 
 # ── System prompts ────────────────────────────────────────────────────────────
@@ -238,7 +352,12 @@ async def gather_context(state: dict) -> dict:
         )},
     ]
 
-    raw = await _call_llm(messages, ctx, f"gather-{iteration}")
+    raw = await _call_llm_with_retry(messages, ctx, f"gather-{iteration}")
+
+    if not raw:
+        logger.warning("gather_context_retries_exhausted")
+        # Bail out of gather loop; proceed with what we have
+        return {"_gather_iteration": max_iter}
 
     try:
         action = json.loads(raw)
@@ -387,7 +506,15 @@ async def root_cause_analysis(state: dict) -> dict:
         )},
     ]
 
-    raw = await _call_llm(messages, ctx, "root-cause")
+    raw = await _call_llm_with_retry(messages, ctx, "root-cause")
+
+    if not raw:
+        logger.warning("root_cause_retries_exhausted")
+        return {
+            "root_cause": "Could not parse root cause analysis (retries exhausted)",
+            "confidence": 0.5,
+            "reasoning": (state.get("reasoning") or "") + "\n[root_cause] retries exhausted",
+        }
 
     try:
         analysis = json.loads(raw)
@@ -525,7 +652,15 @@ async def select_strategy(state: dict) -> dict:
         )},
     ]
 
-    raw = await _call_llm(messages, ctx, "strategy")
+    raw = await _call_llm_with_retry(messages, ctx, "strategy")
+
+    if not raw:
+        logger.warning("select_strategy_retries_exhausted")
+        return {
+            "strategy": "cannot_repair",
+            "cannot_repair": True,
+            "cannot_repair_reason": "Strategy selection retries exhausted",
+        }
 
     try:
         result = json.loads(raw)
@@ -616,35 +751,61 @@ async def generate_fix(state: dict) -> dict:
         )},
     ]
 
-    raw = await _call_llm(messages, ctx, "generate-fix")
+    # Retry loop: the LLM may return valid JSON with an empty edits array if
+    # the connection was flaky (Gemini API disconnections are common) and the
+    # retried call produced a structurally-valid-but-empty response. We retry
+    # the LLM call when edits are empty (up to _GENERATE_FIX_EMPTY_RETRIES)
+    # before giving up.
+    valid_edits = []
+    explanation = ""
+    last_attempt_reason = ""
 
-    try:
-        result = json.loads(raw)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("generate_fix_json_parse_failed", raw=raw[:200])
-        return {
-            "edit_plan": [],
-            "cannot_repair": True,
-            "cannot_repair_reason": "Fix generation parse failed",
-        }
+    for attempt in range(_GENERATE_FIX_EMPTY_RETRIES):
+        if attempt > 0:
+            logger.info(
+                "generate_fix_empty_edits_retry",
+                attempt=attempt + 1,
+                reason=last_attempt_reason,
+            )
 
-    edits = result.get("edits", [])
-    explanation = result.get("explanation", "")
+        raw = await _call_llm_with_retry(messages, ctx, "generate-fix")
 
-    # Validate edits — must have path and content — and normalize each path to be
-    # workspace-relative so apply_fix, receive_fix_result, and modified_files all
-    # carry clean paths and the write never double-prefixes /workspace.
-    valid_edits = [
-        {**e, "path": _strip_workspace_prefix(e["path"])}
-        for e in edits
-        if isinstance(e, dict) and e.get("path") and e.get("content") is not None
-    ]
+        if not raw:
+            last_attempt_reason = "empty response after retries"
+            continue
+
+        try:
+            result = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            last_attempt_reason = f"JSON parse failed: {raw[:100]}"
+            continue
+
+        edits = result.get("edits", [])
+        explanation = result.get("explanation", "")
+
+        # Validate edits — must have path and content — and normalize each path
+        # to be workspace-relative so apply_fix, receive_fix_result, and
+        # modified_files all carry clean paths.
+        valid_edits = [
+            {**e, "path": _strip_workspace_prefix(e["path"])}
+            for e in edits
+            if isinstance(e, dict) and e.get("path") and e.get("content") is not None
+        ]
+
+        if valid_edits:
+            break  # Got real edits — exit retry loop
+
+        last_attempt_reason = f"no valid edits in response (edits={len(edits)}, valid={len(valid_edits)})"
 
     if not valid_edits:
+        logger.warning(
+            "generate_fix_empty_edits_exhausted",
+            reason=last_attempt_reason,
+        )
         return {
             "edit_plan": [],
             "cannot_repair": True,
-            "cannot_repair_reason": "LLM produced no valid file edits",
+            "cannot_repair_reason": f"LLM produced no valid file edits: {last_attempt_reason}",
         }
 
     logger.info("generate_fix_complete", edit_count=len(valid_edits), explanation=explanation)

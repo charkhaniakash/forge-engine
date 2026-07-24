@@ -174,6 +174,78 @@ func TestCountErrorDiagnostics(t *testing.T) {
 	}
 }
 
+// stg builds a minimal validation stage row carrying a status.
+func stg(stage, status string) *models.ValidationStage {
+	return &models.ValidationStage{Stage: stage, Status: status}
+}
+
+// TestCompareValidationOutcomes_SkippedStageIsNotRegression is the Bug 1 guard.
+// In the trigger run the build FAILED, so `test` was SKIPPED (its dependency
+// failed) and produced zero diagnostics. After the repair the build PASSES, so
+// `test` finally runs — and fails. `test` must NOT be counted as "newly failing"
+// because it never passed before; it was skipped. Without inspecting
+// before.Stages the comparator cannot tell "skipped" from "passed", which is
+// what previously produced a false "regressed" verdict and rolled back a good fix.
+func TestCompareValidationOutcomes_SkippedStageIsNotRegression(t *testing.T) {
+	o := &Orchestrator{}
+	log := zap.NewNop().Sugar()
+
+	before := run("failed_repairable",
+		diag("build", "error", "src/App.js", "'useEffect' is defined but never used", 5),
+		diag("build", "error", "src/App.js", "'searchData' is assigned but never used", 11),
+	)
+	before.Stages = []*models.ValidationStage{
+		stg("install", "passed"),
+		stg("build", "failed"),
+		stg("test", "skipped"),
+	}
+
+	after := run("failed_repairable",
+		diag("test", "error", "", "test stage failed with exit code 1", 0),
+	)
+	after.Stages = []*models.ValidationStage{
+		stg("install", "passed"),
+		stg("build", "passed"),
+		stg("test", "failed"),
+	}
+
+	if got := o.compareValidationOutcomes(before, after, log); got != "improved" {
+		t.Errorf("build fixed + previously-skipped test now failing must be %q, got %q", "improved", got)
+	}
+}
+
+// TestCompareValidationOutcomes_PassedStageNowFailingIsRegression guards the
+// opposite direction: a stage that genuinely PASSED before and fails now is a
+// real regression even when the net error count is unchanged (the count-only
+// path would say "no_change"). This proves the stage-status path is doing the
+// work and that the Bug 1 fix did not over-correct into ignoring real regressions.
+func TestCompareValidationOutcomes_PassedStageNowFailingIsRegression(t *testing.T) {
+	o := &Orchestrator{}
+	log := zap.NewNop().Sugar()
+
+	before := run("failed_repairable",
+		diag("lint", "error", "src/a.js", "unused var", 3),
+	)
+	before.Stages = []*models.ValidationStage{
+		stg("build", "passed"),
+		stg("lint", "failed"),
+	}
+
+	// Net error count stays at 1 (the lint error is replaced by a build error),
+	// but build went passed -> failed.
+	after := run("failed_repairable",
+		diag("build", "error", "src/a.js", "syntax error", 10),
+	)
+	after.Stages = []*models.ValidationStage{
+		stg("build", "failed"),
+		stg("lint", "passed"),
+	}
+
+	if got := o.compareValidationOutcomes(before, after, log); got != "regressed" {
+		t.Errorf("previously-passing build now failing must be %q, got %q", "regressed", got)
+	}
+}
+
 func TestFailingStages(t *testing.T) {
 	diags := []*models.ValidationDiagnostic{
 		diag("build", "error", "a", "e1", 1),

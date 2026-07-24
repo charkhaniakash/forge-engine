@@ -294,9 +294,66 @@ func (o *Orchestrator) hasStagedChanges(ctx context.Context, workspaceID string)
 }
 
 func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *PublishingSession, req PublishRequest, log *zap.SugaredLogger) error {
+	// ── DIAGNOSTIC: log workspace state before any operations ────────────────
+	workspaceStatusEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+		Command:        []string{"git", "status", "--porcelain"},
+		WorkingDir:     "",
+		TimeoutSeconds: 10,
+	})
+	var wsStatusOutput string
+	for ev := range workspaceStatusEvents {
+		if ev.Type == "stdout" {
+			wsStatusOutput += string(ev.Data)
+		}
+	}
+	wsStatusLines := strings.Split(strings.TrimSpace(wsStatusOutput), "\n")
+	// Filter out empty strings (blank lines with no unstaged changes)
+	var nonEmptyStatus []string
+	for _, l := range wsStatusLines {
+		if strings.TrimSpace(l) != "" {
+			nonEmptyStatus = append(nonEmptyStatus, l)
+		}
+	}
+	log.Infow("diag_pre_stash_workspace_status", "status_line_count", len(nonEmptyStatus), "status_lines", nonEmptyStatus)
+
+	// Log HEAD commit so we know the starting point.
+	headEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+		Command:        []string{"git", "rev-parse", "HEAD"},
+		WorkingDir:     "",
+		TimeoutSeconds: 5,
+	})
+	var headSHA string
+	for ev := range headEvents {
+		if ev.Type == "stdout" {
+			headSHA = strings.TrimSpace(string(ev.Data))
+		}
+	}
+	log.Infow("diag_pre_stash_head", "sha", headSHA)
+
+	// Log unstaged diff (working tree vs HEAD) so we can compare with staged later.
+	unstagedEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+		Command:        []string{"git", "diff", "--stat"},
+		WorkingDir:     "",
+		TimeoutSeconds: 10,
+	})
+	var unstagedStat string
+	for ev := range unstagedEvents {
+		if ev.Type == "stdout" {
+			unstagedStat += string(ev.Data)
+		}
+	}
+	log.Infow("diag_unstaged_diff_stat", "stat", strings.TrimSpace(unstagedStat))
+
 	// Load execution data for commit message generation
 	item, _ := o.workItemRepo.GetByIDInternal(ctx, req.WorkItemID)
 	diffs, _ := o.execRepo.ListDiffs(ctx, req.TaskExecutionID)
+
+	// ── DIAGNOSTIC: log the diffs returned by ListDiffs ───────────────────────
+	var diffFilePaths []string
+	for _, d := range diffs {
+		diffFilePaths = append(diffFilePaths, fmt.Sprintf("%s (%s +%d/-%d)", d.FilePath, d.Operation, d.LinesAdded, d.LinesRemoved))
+	}
+	log.Infow("diag_list_diffs_result", "diff_count", len(diffs), "diffs", diffFilePaths)
 
 	// Build diff summaries for the agent. Initialise as an empty (non-nil) slice
 	// so it marshals to [] rather than null — the agent's /summarize endpoint
@@ -336,8 +393,7 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		}
 	}
 
-	// Prefer staging the specific files recorded in code_diffs (avoids staging
-	// build artifacts). Paths may be absolute inside the workspace container.
+	// ── DIAGNOSTIC: log what filesToStage will contain ──────────────────────
 	var filesToStage []string
 	for _, d := range diffs {
 		path := d.FilePath
@@ -349,10 +405,11 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		}
 		filesToStage = append(filesToStage, path)
 	}
+	log.Infow("diag_files_to_stage", "count", len(filesToStage), "files", filesToStage)
 
 	if len(filesToStage) > 0 {
-		log.Infow("staging_files", "count", len(filesToStage), "files", filesToStage)
 		stageCmd := append([]string{"git", "add", "--"}, filesToStage...)
+		log.Infow("diag_git_add_command", "cmd", stageCmd)
 		events, err := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
 			Command:        stageCmd,
 			WorkingDir:     "",
@@ -370,6 +427,20 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		log.Warnw("no_recorded_diffs_falling_back_to_working_tree")
 	}
 
+	// ── DIAGNOSTIC: log staged changes after git add ─────────────────────────
+	cachedStatEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+		Command:        []string{"git", "diff", "--cached", "--stat"},
+		WorkingDir:     "",
+		TimeoutSeconds: 10,
+	})
+	var cachedStat string
+	for ev := range cachedStatEvents {
+		if ev.Type == "stdout" {
+			cachedStat += string(ev.Data)
+		}
+	}
+	log.Infow("diag_post_add_cached_diff_stat", "stat", strings.TrimSpace(cachedStat))
+
 	// If nothing is staged yet (empty code_diffs, or recorded paths that don't
 	// match the workspace), fall back to staging the whole working tree. Respects
 	// .gitignore, so build artifacts are excluded.
@@ -382,6 +453,20 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		})
 		for range fallbackEvents {
 		}
+		// Log staged state after fallback too
+		fallbackStatEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+			Command:        []string{"git", "diff", "--cached", "--stat"},
+			WorkingDir:     "",
+			TimeoutSeconds: 10,
+		})
+		var fallbackStat string
+		for ev := range fallbackStatEvents {
+			if ev.Type == "stdout" {
+				fallbackStat += string(ev.Data)
+			}
+		}
+		log.Infow("diag_post_fallback_cached_stat", "stat", strings.TrimSpace(fallbackStat))
+
 		// If the working tree is genuinely clean, there is nothing to publish.
 		// Surface a clear, actionable message instead of a cryptic git error.
 		if !o.hasStagedChanges(ctx, req.WorkspaceID) {
@@ -454,7 +539,21 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 	if commitExitCode != 0 {
 		return fmt.Errorf("git commit failed (exit %d): %s", commitExitCode, strings.TrimSpace(commitOutput))
 	}
-	log.Infow("commit_output", "output", strings.TrimSpace(commitOutput))
+	log.Infow("diag_commit_output", "output", strings.TrimSpace(commitOutput))
+
+	// ── DIAGNOSTIC: log the committed diff ────────────────────────────────────
+	commitStatEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+		Command:        []string{"git", "show", "--stat", "--oneline", "HEAD"},
+		WorkingDir:     "",
+		TimeoutSeconds: 10,
+	})
+	var commitStat string
+	for ev := range commitStatEvents {
+		if ev.Type == "stdout" {
+			commitStat += string(ev.Data)
+		}
+	}
+	log.Infow("diag_commit_show_stat", "stat", strings.TrimSpace(commitStat))
 
 	// Get the commit SHA
 	var commitSHA string

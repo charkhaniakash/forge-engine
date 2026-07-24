@@ -187,10 +187,17 @@ _FILE_PATH_RE = re.compile(
 )
 
 # ── Pattern: "Line N:M:" with leading whitespace (CRA standard) ────────
-_LINE_COL_RE = re.compile(r'^\s*Line\s+(\d+):(\d+):\s*$', re.IGNORECASE)
+# Captures group(3) as trailing text after the colon. CRA outputs two
+# formats depending on version:
+#
+#   Format A (older):  Line N:M:\n    message  rule-name
+#   Format B (newer):  Line N:M: message  rule-name
+#
+# Group 3 is empty for Format A, non-empty for Format B (inline message).
+_LINE_COL_RE = re.compile(r'^\s*Line\s+(\d+):(\d+):(.*)$', re.IGNORECASE)
 
 # ── Pattern: "Line N:" without column (less common but valid) ──────────
-_LINE_ONLY_RE = re.compile(r'^\s*Line\s+(\d+):\s*$', re.IGNORECASE)
+_LINE_ONLY_RE = re.compile(r'^\s*Line\s+(\d+):(.*)$', re.IGNORECASE)
 
 # ── Pattern: "(line:col)" suffix at end of message (CSS error format) ──
 _PAREN_LINECOL_RE = re.compile(r'\((\d+):(\d+)\)\s*$')
@@ -257,9 +264,14 @@ def _extract_rule_name(message: str) -> tuple[str, str]:
     if rule_match:
         candidate = rule_match.group(1)
         # Verify the match looks like a real rule name, not just a trailing word.
-        # Rule names are at least 3 chars, kebab-case, optionally scoped.
+        # Rule names are at least 3 chars, ALWAYS kebab-case or scoped
+        # (e.g. "no-unused-vars", "@typescript-eslint/no-unused-vars").
+        # A single plain word like "word" or "bar" is never a rule name.
+        # The presence of a dash (-) or slash (/) reliably distinguishes
+        # real rule names from plain-English trailing words.
         normalized = candidate.replace('-', '').replace('/', '').lstrip('@')
-        if normalized.isalnum() and len(candidate) >= 3:
+        has_dash_or_slash = '-' in candidate or '/' in candidate
+        if normalized.isalnum() and len(candidate) >= 3 and has_dash_or_slash:
             clean = message[:rule_match.start()].strip()
             return clean, candidate
 
@@ -268,7 +280,8 @@ def _extract_rule_name(message: str) -> tuple[str, str]:
     if paren_match:
         candidate = paren_match.group(0).strip().strip('()')
         normalized = candidate.replace('-', '').replace('/', '').lstrip('@')
-        if normalized.isalnum() and len(candidate) >= 3:
+        has_dash_or_slash = '-' in candidate or '/' in candidate
+        if normalized.isalnum() and len(candidate) >= 3 and has_dash_or_slash:
             clean = message[:paren_match.start()].strip()
             return clean, candidate
 
@@ -399,92 +412,174 @@ def _tokenize_cra_lines(lines: list[str]) -> tuple[list[ParsedDiagnostic], list[
                 break
 
             # ── Parse a CRA diagnostic block ─────────────────────────
-            # Format:
-            #   src/App.js                   <- file path
-            #     Line 5:21:                  <- line:column (optional)
-            #       'message'  rule-name     <- message (optional)
+            #
+            # Format (single file, multiple diagnostics):
+            #   src/App.js                   <- file path (appears once)
+            #     Line 5:21:                  <- line:column (optional, repeats)
+            #       'message'  rule-name     <- message (optional, follows Line N:M:)
+            #     Line 10:15:
+            #       'searchData'...
+            #     Line 10:32:
+            #       'setSearchData'...
             #
             # Also handles:
             #   src/App.css                   <- file path without line:col
             #     Unknown word (3:1)
             #
-            # IMPORTANT: Message extraction is NOT gated on Line N:M: being
-            # present. A file path always triggers message extraction from
-            # subsequent lines. This is the fix for Bug #1 in the original
-            # implementation (CSS errors and other non-line-col formats were
-            # silently dropped).
+            # IMPORTANT: The file path appears only ONCE even when there
+            # are multiple diagnostics for the same file. The parser uses
+            # an inner loop (`while True`) to consume all subsequent
+            # Line N:M: + message pairs until it encounters a line that
+            # doesn't match (e.g. a new file path, a blank section break,
+            # or end of output). This is the fix for Bug #2: previously
+            # only the first diagnostic per file was captured.
             file_match = _FILE_PATH_RE.match(line)
             if file_match and not _NODE_MODULES_PATH_RE.search(line):
                 file_path = _strip_path_prefix(file_match.group(1))
                 i += 1
 
-                line_num = 0
-                col_num = 0
-                message_text = ""
-                symbol = ""
+                # Inner loop: consume all Line N:M: + message pairs
+                # for the current file. Breaks when no more Line N:M:
+                # lines follow (e.g. a new file path or end of section).
+                while True:
+                    line_num = 0
+                    col_num = 0
+                    message_text = ""
+                    symbol = ""
 
-                # Check if next line is "Line N:M:" or "Line N:"
-                if i < len(lines):
-                    lc_match = _LINE_COL_RE.match(lines[i])
-                    if lc_match:
-                        line_num = int(lc_match.group(1))
-                        col_num = int(lc_match.group(2))
+                    # Skip blank lines between diagnostic entries
+                    while i < len(lines) and not lines[i].strip():
                         i += 1
-                    else:
-                        line_only = _LINE_ONLY_RE.match(lines[i])
-                        if line_only:
-                            line_num = int(line_only.group(1))
-                            col_num = 0
+
+                    # Check if current line is "Line N:M:" or "Line N:"
+                    # If not, could be a standalone message line (CSS
+                    # errors like "Unknown word (3:1)" that have no
+                    # Line N:M: header). Try to extract a message
+                    # before giving up — this preserves the original
+                    # behavior where message extraction was not gated
+                    # on Line N:M: being present.
+                    #
+                    # Supports TWO CRA output formats:
+                    #   Format A (multi-line):  Line N:M:\n    message
+                    #   Format B (inline):      Line N:M: message
+                    #
+                    # The _LINE_COL_RE / _LINE_ONLY_RE regexes capture
+                    # any trailing text after the colon in group(3) / group(2).
+                    # If non-empty, the message is inline (Format B).
+                    if i < len(lines):
+                        lc_match = _LINE_COL_RE.match(lines[i])
+                        if lc_match:
+                            line_num = int(lc_match.group(1))
+                            col_num = int(lc_match.group(2))
+                            trailing = lc_match.group(3)
+                            i += 1
+                            if trailing and trailing.strip():
+                                # Format B: message inline on same line
+                                raw_msg = trailing.strip()
+                                clean_msg, rule = _extract_rule_name(raw_msg)
+                                clean_msg, paren_line, paren_col = _extract_linecol_from_message(clean_msg)
+                                if paren_line and not line_num:
+                                    line_num = paren_line
+                                    col_num = paren_col
+                                symbol = _extract_symbol(clean_msg)
+                                message_text = clean_msg
+                                # Don't look at next line — message already extracted
+                        else:
+                            line_only = _LINE_ONLY_RE.match(lines[i])
+                            if line_only:
+                                line_num = int(line_only.group(1))
+                                col_num = 0
+                                trailing = line_only.group(2)
+                                i += 1
+                                if trailing and trailing.strip():
+                                    # Format B: message inline on same line
+                                    raw_msg = trailing.strip()
+                                    clean_msg, rule = _extract_rule_name(raw_msg)
+                                    clean_msg, paren_line, paren_col = _extract_linecol_from_message(clean_msg)
+                                    if paren_line and not line_num:
+                                        line_num = paren_line
+                                        col_num = paren_col
+                                    symbol = _extract_symbol(clean_msg)
+                                    message_text = clean_msg
+                            else:
+                                # No Line N:M: or Line N: — check if
+                                # this line is a standalone message
+                                # (CSS errors, etc.). If so, extract
+                                # it as a diagnostic and break.
+                                # If not, just break (outer loop
+                                # handles file paths, etc.).
+                                if _is_message_line(lines[i]):
+                                    # Will extract below after
+                                    # falling out of this if block.
+                                    pass
+                                else:
+                                    break
+
+                    # Extract message from the next line (only if not
+                    # already extracted from inline text above).
+                    # This handles Format A (message on line after
+                    # Line N:M:) and standalone CSS errors.
+                    if not message_text and i < len(lines):
+                        next_line = lines[i]
+                        if _is_message_line(next_line):
+                            raw_msg = next_line.strip()
+                            clean_msg, rule = _extract_rule_name(raw_msg)
+
+                            # Try to extract (line:col) suffix from message
+                            clean_msg, paren_line, paren_col = _extract_linecol_from_message(clean_msg)
+                            if paren_line and not line_num:
+                                line_num = paren_line
+                                col_num = paren_col
+
+                            symbol = _extract_symbol(clean_msg)
+                            message_text = clean_msg
                             i += 1
 
-                # Extract message from the next line (whether or not we
-                # found a Line N:M: line). The message is the first
-                # non-blank, non-control line after the file path.
-                if i < len(lines):
-                    next_line = lines[i]
-                    if _is_message_line(next_line):
-                        raw_msg = next_line.strip()
-                        clean_msg, rule = _extract_rule_name(raw_msg)
+                    # Emit diagnostic whenever we have at least a file
+                    # path with some actionable information (line number
+                    # or message).
+                    if not message_text and line_num == 0:
+                        # No actionable info — skip this entry and
+                        # continue the inner loop to look for more.
+                        continue
 
-                        # Try to extract (line:col) suffix from message
-                        clean_msg, paren_line, paren_col = _extract_linecol_from_message(clean_msg)
-                        if paren_line and not line_num:
-                            line_num = paren_line
-                            col_num = paren_col
+                    severity = "error"
+                    if _is_browserslist_only_message(message_text):
+                        severity = "info"
 
-                        symbol = _extract_symbol(clean_msg)
-                        message_text = clean_msg
+                    diags.append(ParsedDiagnostic(
+                        severity=severity,
+                        category="compile_error",
+                        file_path=file_path,
+                        line_number=line_num,
+                        column_number=col_num,
+                        symbol_name=symbol,
+                        message=message_text or f"Build error in {file_path}",
+                        raw_output=(
+                            f"{file_path}:{line_num}:{col_num}: {message_text}"
+                            if message_text else file_path
+                        ),
+                        tool="react-scripts",
+                        origin="stderr",
+                        confidence=0.9,
+                        repair_category="auto_fixable",
+                    ))
+
+                    # After emitting, skip blank lines and check if
+                    # the next line is another "Line N:M:" for the
+                    # same file. If so, stay in the inner loop.
+                    # If not, break and let the outer loop decide.
+                    while i < len(lines) and not lines[i].strip():
                         i += 1
 
-                # Emit diagnostic whenever we have at least a file path
-                # with some actionable information (line number or message).
-                if not message_text and line_num == 0:
-                    # No actionable info — skip and keep scanning.
-                    # The file path line has been consumed but there may
-                    # be more diagnostics later in the output.
-                    continue
+                    if i < len(lines) and (
+                        _LINE_COL_RE.match(lines[i])
+                        or _LINE_ONLY_RE.match(lines[i])
+                    ):
+                        continue  # Another diagnostic for the same file
+                    else:
+                        break  # No more diagnostics for this file
 
-                severity = "error"
-                if _is_browserslist_only_message(message_text):
-                    severity = "info"
-
-                diags.append(ParsedDiagnostic(
-                    severity=severity,
-                    category="compile_error",
-                    file_path=file_path,
-                    line_number=line_num,
-                    column_number=col_num,
-                    symbol_name=symbol,
-                    message=message_text or f"Build error in {file_path}",
-                    raw_output=(
-                        f"{file_path}:{line_num}:{col_num}: {message_text}"
-                        if message_text else file_path
-                    ),
-                    tool="react-scripts",
-                    origin="stderr",
-                    confidence=0.9,
-                    repair_category="auto_fixable",
-                ))
                 continue
 
             # Webpack ERROR in — don't consume; leave for webpack parser

@@ -47,16 +47,17 @@ class ChatConfig(BaseModel):
     different jobs (batch offline vs. real-time inference) and may use
     different providers, models, and rate-limit budgets.
     """
-    # Provider name. Supported: "openai" | "gemini" | "anthropic" | "ollama" | "groq"
+    # Provider name. Supported: "openai" | "gemini" | "anthropic" | "ollama" | "groq" | "openrouter"
     provider: str = "openai"
 
     # Chat model identifier sent to the provider.
-    # openai:    gpt-4o-mini (default), gpt-4o
-    # gemini:    gemini-2.5-flash, gemini-1.5-pro
-    # anthropic: claude-3-haiku-20240307, claude-3-sonnet-20240229
-    # ollama:    gemma3:12b, gemma3:27b, qwen2.5-coder:7b, codellama:13b, qwen2.5-coder:14b
-    # groq:      llama-3.3-70b-versatile, llama-3.1-8b-instant, openai/gpt-oss-120b
-    model: str = "gpt-4o-mini"
+    # openai:      gpt-4o-mini (default), gpt-4o
+    # gemini:      gemini-2.5-flash, gemini-1.5-pro
+    # anthropic:   claude-3-haiku-20240307, claude-3-sonnet-20240229
+    # ollama:      gemma3:12b, gemma3:27b, qwen2.5-coder:7b, codellama:13b, qwen2.5-coder:14b
+    # groq:        llama-3.3-70b-versatile, llama-3.1-8b-instant, openai/gpt-oss-120b
+    # openrouter:  nvidia/nemotron-3-ultra-550b-a55b:free, anthropic/claude-3.5-sonnet, openai/gpt-4o
+    model: str = "gemini-3.1-pro-preview"
 
 
 class RetrievalConfig(BaseModel):
@@ -100,6 +101,7 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     gemini_api_key: str = ""
     anthropic_api_key: str = ""
+    openrouter_api_key: str = ""
 
     # ── Ollama (local models — Gemma, CodeLlama, Qwen, etc.) ─────────────────
     # Base URL of the running Ollama instance. The /v1 suffix is appended

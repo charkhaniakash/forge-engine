@@ -222,6 +222,15 @@ func (o *Orchestrator) Run(
 	// 4. Repair loop
 	sessionStartTime := time.Now()
 	lastValidationRunID := validationRunID // start with trigger validation
+	// Track previous attempt's post-repair diagnostic identities to detect
+	// when the repair is stuck (same remaining errors across attempts).
+	var prevDiagnosticSet map[string]struct{} // diagnosticIdentity → {}
+
+	// Diagnostics the CURRENT attempt targets. Attempt 1 targets the trigger
+	// run's repairable diagnostics; after a partial ("improved") repair we
+	// re-target later attempts at what STILL fails (see the "improved" case),
+	// so the agent never re-fixes errors an earlier attempt already resolved.
+	currentDiags := decision.RepairableDiags
 
 	for attemptNum := 1; attemptNum <= session.MaxAttempts; attemptNum++ {
 		log := log.With("attempt_number", attemptNum)
@@ -270,7 +279,7 @@ func (o *Orchestrator) Run(
 
 		// Execute ONE repair attempt (brand-new graph)
 		attemptResult, attemptErr := o.executeRepairAttempt(
-			sessionCtx, session, attemptNum, decision.RepairableDiags, previousAttempts, traceID, log,
+			sessionCtx, session, attemptNum, currentDiags, previousAttempts, traceID, log,
 		)
 
 		if attemptErr != nil {
@@ -341,9 +350,7 @@ func (o *Orchestrator) Run(
 			_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, fmt.Sprintf("validation error: %v", valErr))
 			_ = o.workItemRepo.TransitionToFailed(sessionCtx, workItemID, fmt.Sprintf("validation error: %v", valErr))
 			return valErr
-		}
-
-		// Update attempt with post-repair validation ID
+		}			// Update attempt with post-repair validation ID
 		_ = o.repairRepo.UpdateAttemptResult(
 			sessionCtx, attemptResult.AttemptID, attemptResult.Reasoning,
 			attemptResult.Strategy, attemptResult.Confidence,
@@ -355,6 +362,22 @@ func (o *Orchestrator) Run(
 		// Compare outcomes (error-count + stage-transition based).
 		outcome := o.compareValidationOutcomes(validationRun, postRepairRun, log)
 		log.Infow("repair_outcome_determined", "outcome", outcome)
+
+		// Detect stuck repair: if the previous attempt produced the SAME
+		// remaining diagnostic set, the repair is not making progress on the
+		// remaining errors. Override outcome to "no_change" so we escalate.
+		if outcome == "improved" && prevDiagnosticSet != nil {
+			currentSet := buildDiagnosticSet(postRepairRun.Diagnostics)
+			if diagnosticSetsEqual(prevDiagnosticSet, currentSet) {
+				log.Warnw("repair_stuck_same_diagnostics_consecutive",
+					"attempt_number", attemptNum,
+					"diagnostic_count", len(currentSet),
+				)
+				outcome = "no_change"
+			}
+		}
+		// Store this attempt's diagnostic set for the next iteration.
+		prevDiagnosticSet = buildDiagnosticSet(postRepairRun.Diagnostics)
 
 		// Concise per-attempt summary for observability.
 		log.Infow("repair_attempt_summary",
@@ -410,6 +433,29 @@ func (o *Orchestrator) Run(
 					o.publish(session.ID, "repair_resumed", nil)
 				}
 			}
+
+			// Re-target the NEXT attempt at what STILL fails after this repair,
+			// instead of the original trigger diagnostics. Without this the agent
+			// is handed the same already-fixed errors every attempt, re-applies the
+			// same fix (a no-op write), and never addresses the remaining failure.
+			nextDecision := o.policy.Evaluate(postRepairRun)
+			if len(nextDecision.RepairableDiags) == 0 {
+				// Nothing left that we're allowed to auto-fix (e.g. the only
+				// remaining failure is non-repairable). Spinning another attempt
+				// would just repeat a no-op — escalate now.
+				log.Warnw("repair_no_repairable_diagnostics_remain_escalating",
+					"remaining_diagnostics", len(postRepairRun.Diagnostics))
+				reason := "no auto-fixable diagnostics remain after partial repair"
+				_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, reason)
+				_ = o.workItemRepo.TransitionToFailed(sessionCtx, workItemID, "repair escalated: "+reason)
+				o.publish(session.ID, "repair_escalated", map[string]interface{}{"reason": reason})
+				return fmt.Errorf("repair escalated: %s (after attempt %d)", reason, attemptNum)
+			}
+			currentDiags = nextDecision.RepairableDiags
+			log.Infow("repair_retargeted_next_attempt",
+				"attempt_number", attemptNum,
+				"remaining_repairable", len(currentDiags),
+			)
 			// Continue to next attempt
 
 		case "no_change":
@@ -946,6 +992,34 @@ func normalizeDiagnosticMessage(msg string) string {
 	return s
 }
 
+// buildDiagnosticSet builds a set of error diagnostic identities for the given
+// diagnostics. Used to detect when the repair is stuck (same remaining errors
+// across consecutive attempts). Only error-severity diagnostics are included
+// to stay consistent with compareValidationOutcomes, which also judges by
+// error count. Flapping warnings won't interfere with stuck detection.
+func buildDiagnosticSet(diags []*models.ValidationDiagnostic) map[string]struct{} {
+	set := map[string]struct{}{}
+	for _, d := range diags {
+		if d.Severity == "error" {
+			set[diagnosticIdentity(d)] = struct{}{}
+		}
+	}
+	return set
+}
+
+// diagnosticSetsEqual returns true if both sets contain the same identities.
+func diagnosticSetsEqual(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key := range a {
+		if _, ok := b[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // compareValidationOutcomes determines the repair outcome by identity-based
 // comparison of diagnostics between the before and after validation runs.
 //
@@ -1015,15 +1089,37 @@ func (o *Orchestrator) compareValidationOutcomes(
 	// fixing the build and tests. Instead:
 	//   - a stage that PASSED before but fails now → genuine regression
 	//   - otherwise judge by net error count (errors only, warnings ignored)
+	//
+	// IMPORTANT: A stage that was SKIPPED or UNSUPPORTED in the before run
+	// (because a dependency like build or install failed) must NOT be treated
+	// as "previously passing". The failingStages() helper only sees diagnostics
+	// — skipped stages produce none, making them invisible and indistinguishable
+	// from passing stages. We build beforePassed from the actual stage statuses
+	// to distinguish: only a stage with status="passed" was truly validated.
 	beforeErrors := countErrorDiagnostics(before.Diagnostics)
 	afterErrors := countErrorDiagnostics(after.Diagnostics)
 	beforeFailing := failingStages(before.Diagnostics)
 	afterFailing := failingStages(after.Diagnostics)
 
+	// Build the set of stages that ACTUALLY PASSED in the before run.
+	// A stage that was skipped (dependency failure) or unsupported never
+	// truly passed — it was never validated. Only status="passed" counts.
+	beforePassed := map[string]struct{}{}
+	for _, st := range before.Stages {
+		if st.Status == "passed" {
+			beforePassed[st.Stage] = struct{}{}
+		}
+	}
+
 	var newlyFailing []string
 	for stage := range afterFailing {
 		if _, wasFailing := beforeFailing[stage]; !wasFailing {
-			newlyFailing = append(newlyFailing, stage)
+			// Not previously failing. But was it truly passing?
+			// If the stage was skipped/unsupported before, it was never
+			// validated — a new error here is NOT a regression.
+			if _, wasPassing := beforePassed[stage]; wasPassing {
+				newlyFailing = append(newlyFailing, stage)
+			}
 		}
 	}
 

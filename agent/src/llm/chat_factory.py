@@ -34,7 +34,11 @@ def get_chat_provider() -> ChatProvider:
         from src.llm.groq_chat import GroqChatProvider
         return GroqChatProvider()
 
+    if provider == "openrouter":
+        from src.llm.openrouter_chat import OpenRouterChatProvider
+        return OpenRouterChatProvider()
+
     raise ValueError(
         f"Unknown CHAT__PROVIDER '{provider}'. "
-        "Supported values: openai, gemini, anthropic, ollama, groq"
+        "Supported values: openai, gemini, anthropic, ollama, groq, openrouter"
     )

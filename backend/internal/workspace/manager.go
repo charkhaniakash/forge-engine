@@ -175,10 +175,29 @@ func (m *WorkspaceManager) provision(
 		fmt.Sprintf("Repository cloned: %s", repoFullName))
 
 	// 6. Checkout the target commit SHA.
+	//
+	// IMPORTANT: git clone --depth=1 only fetches the default branch's latest
+	// commit. If commitSHA is an older commit (recorded by an earlier ingestion
+	// job), the shallow clone won't have it. We must fetch the specific commit
+	// before checking it out.
 	_, _ = m.wsRepo.LogLifecycle(ctx, ws.ID,
 		models.LifecycleEventRepoCheckout,
-		fmt.Sprintf("Checking out %s", commitSHA[:8]))
+		fmt.Sprintf("Fetching and checking out %s", commitSHA[:8]))
 
+	// First, fetch the target commit specifically into the shallow clone.
+	fetchResult, err := m.execAndLog(ctx, ws.ID, info.ContainerID, ExecRequest{
+		Command:        []string{"git", "-C", "/workspace", "fetch", "--depth=1", "origin", commitSHA},
+		TimeoutSeconds: 60,
+		User:           "forge",
+	}, log)
+	if err != nil {
+		return fmt.Errorf("git fetch commit: %w", err)
+	}
+	if fetchResult.ExitCode != 0 {
+		return fmt.Errorf("git fetch commit failed (exit %d): %s", fetchResult.ExitCode, fetchResult.Stderr)
+	}
+
+	// Now checkout the commit.
 	checkoutResult, err := m.execAndLog(ctx, ws.ID, info.ContainerID, ExecRequest{
 		Command:        []string{"git", "-C", "/workspace", "checkout", commitSHA},
 		TimeoutSeconds: 60,

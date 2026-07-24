@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -408,6 +409,11 @@ func main() {
 					workItemID := exec.WorkItemID
 					log = log.With("work_item_id", workItemID)
 
+					// Publish gate (opt-in). Default false preserves the advisory,
+					// non-blocking policy below; PUBLISH_REQUIRE_GREEN=1 blocks
+					// publishing whenever the final tree is not green.
+					requireGreen := publishRequiresGreen()
+
 					// Phase 8: Validation
 					//
 					// NON-BLOCKING POLICY (Devin-style): validation is ADVISORY.
@@ -444,7 +450,12 @@ func main() {
 						// Validation infrastructure error — couldn't run at all.
 						// Per the non-blocking policy, proceed rather than fail.
 						log.Warnw("phase_8_validation_could_not_run_proceeding", "error", err)
-						if !checkPauseCancel("ForceToDone") {
+						if requireGreen {
+							// Gate enabled: validation could not run → not green → do
+							// not publish; leave the item failed.
+							log.Warnw("publish_blocked_validation_could_not_run")
+							_ = workItemRepo.TransitionToFailed(ctx, workItemID, "publish gate: validation could not run")
+						} else if !checkPauseCancel("ForceToDone") {
 							_ = workItemRepo.ForceToDone(ctx, workItemID)
 						}
 						return
@@ -455,6 +466,11 @@ func main() {
 						overallResult = *validationRun.OverallResult
 					}
 					log.Infow("phase_8_validation_complete", "overall_result", overallResult)
+
+					// Track whether the final tree is green. Starts true only when
+					// validation itself passed; a successful repair (repErr == nil,
+					// i.e. repair reached the "passed" outcome) flips it true below.
+					treeGreen := overallResult == "passed"
 
 					// Phase 10B: Notify browser workspace of validation completion
 					if bwGateway != nil {
@@ -501,6 +517,9 @@ func main() {
 							}
 						} else {
 							log.Info("phase_9_repair_complete")
+							// repairOrch.Run returns nil only when the repair reached the
+							// "passed" outcome, so the post-repair tree is green.
+							treeGreen = true
 							if bwGateway != nil {
 								bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
 									"phase": "repair", "status": "success",
@@ -515,9 +534,25 @@ func main() {
 						return
 					}
 
-					// Always finish in a publishable state — validation is advisory and
-					// must never block. The UI shows the advisory verdict + logs from the
-					// validation run itself.
+					// Publish gate (opt-in via PUBLISH_REQUIRE_GREEN). When enabled, a
+					// tree that did not end green is NOT marked done — so downstream
+					// publishing never fires and the item stays in its failed state.
+					if requireGreen && !treeGreen {
+						log.Warnw("publish_blocked_validation_not_green", "overall_result", overallResult)
+						if bwGateway != nil {
+							bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
+								"phase": "publish", "status": "blocked", "reason": "validation not green",
+							})
+						}
+						if failErr := workItemRepo.TransitionToFailed(ctx, workItemID, "publish gate: validation not green"); failErr != nil {
+							log.Warnw("publish_gate_transition_failed", "error", failErr)
+						}
+						return
+					}
+
+					// Advisory (default): always finish in a publishable state —
+					// validation is advisory and must never block. The UI shows the
+					// advisory verdict + logs from the validation run itself.
 					log.Infow("validation_advisory_marking_done", "advisory_result", overallResult)
 					if doneErr := workItemRepo.ForceToDone(ctx, workItemID); doneErr != nil {
 						log.Errorw("force_to_done_failed", "error", doneErr)
@@ -855,6 +890,18 @@ func main() {
 	sugar.Infof("Backend listening on :%s", port)
 	if err := app.Listen(":" + port); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
+	}
+}
+
+// publishRequiresGreen reports whether publishing must be blocked when the final
+// validation tree is not green (all stages passed). Default false preserves the
+// advisory, non-blocking policy; set PUBLISH_REQUIRE_GREEN=1|true|on|yes to enforce.
+func publishRequiresGreen() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("PUBLISH_REQUIRE_GREEN"))) {
+	case "1", "true", "on", "yes":
+		return true
+	default:
+		return false
 	}
 }
 

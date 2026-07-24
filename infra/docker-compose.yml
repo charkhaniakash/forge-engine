@@ -123,13 +123,17 @@ services:
       # CHAT__PROVIDER: ollama
       # CHAT__MODEL: qwen2.5-coder:7b
       # OLLAMA_BASE_URL: http://host.docker.internal:11434
-      # CHAT__PROVIDER: gemini
-      # CHAT__MODEL: gemini-3.1-pro-preview
+      CHAT__PROVIDER: gemini
+      CHAT__MODEL: gemini-3.1-pro-preview
       # CHAT__PROVIDER: openai
       # CHAT__MODEL: gpt-4o-mini
       # Groq (hosted, OpenAI-compatible). Set GROQ_API_KEY in agent/.env.local.
-      CHAT__PROVIDER: groq
-      CHAT__MODEL: llama-3.3-70b-versatile
+      # CHAT__PROVIDER: groq
+      # CHAT__MODEL: llama-3.3-70b-versatile
+      # OpenRouter (OpenAI-compatible, supports many models including NVIDIA)
+      # CHAT__PROVIDER: openrouter
+      # CHAT__MODEL: nvidia/nemotron-3-ultra-550b-a55b:free
+      # CHAT__MODEL: poolside/laguna-m.1:free
 
       # Phase 4 — retrieval
       RETRIEVAL__CANDIDATE_K: 50

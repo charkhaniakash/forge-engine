@@ -57,7 +57,7 @@ class ChatConfig(BaseModel):
     # ollama:      gemma3:12b, gemma3:27b, qwen2.5-coder:7b, codellama:13b, qwen2.5-coder:14b
     # groq:        llama-3.3-70b-versatile, llama-3.1-8b-instant, openai/gpt-oss-120b
     # openrouter:  nvidia/nemotron-3-ultra-550b-a55b:free, anthropic/claude-3.5-sonnet, openai/gpt-4o
-    model: str = "gemini-3.1-pro-preview"
+    model: str = "llama-3.3-70b-versatile"
 
 
 class RetrievalConfig(BaseModel):

@@ -184,7 +184,9 @@ func (r *GitHubRepoRepository) UpdateSyncInfo(
 	now := time.Now()
 	query := `
 		UPDATE github_repos
-		SET last_synced_at = $2, last_commit_sha = $3, updated_at = $4
+		SET last_synced_at = $2,
+		    last_commit_sha = CASE WHEN $3 = '' THEN last_commit_sha ELSE $3 END,
+		    updated_at = $4
 		WHERE id = $1
 	`
 

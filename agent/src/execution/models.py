@@ -122,3 +122,10 @@ class ExecutionState(TypedDict):
     # content. route_after_result reads this flag to terminate the step
     # immediately without re-entering node_reason, saving one full LLM call.
     _convergence_triggered: bool
+
+    # Set to True by node_already_satisfied when the LLM claimed already_satisfied
+    # without having called any tools (i.e. tool_history is empty). Forces one
+    # more reason pass with an explicit "you MUST verify by reading the files"
+    # challenge before the step is allowed to end with no changes.
+    # Cleared (set to False) after the forced verify pass.
+    _verify_required: bool

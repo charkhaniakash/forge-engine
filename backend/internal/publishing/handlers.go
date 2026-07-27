@@ -119,13 +119,21 @@ func (h *Handlers) StartPublish(c *fiber.Ctx) error {
 		})
 	}
 
+	// Prefer ghRepo.LastCommitSHA (kept fresh by push webhooks) over
+	// ws.CommitSHA (set at provisioning time and never updated). For follow-up
+	// tasks the repo has moved on since the workspace was provisioned.
+	baseCommitSHA := ws.CommitSHA
+	if ghRepo.LastCommitSHA != nil && *ghRepo.LastCommitSHA != "" {
+		baseCommitSHA = *ghRepo.LastCommitSHA
+	}
+
 	publishReq := PublishRequest{
 		WorkItemID:      taskID,
 		TaskExecutionID: exec.ID,
 		WorkspaceID:     ws.ID,
 		RepoFullName:    ghRepo.RepoFullName,
 		DefaultBranch:   ghRepo.DefaultBranch,
-		BaseCommitSHA:   ws.CommitSHA,
+		BaseCommitSHA:   baseCommitSHA,
 		DraftMode:       reqBody.DraftMode,
 		UserID:          userID,
 		TraceID:         traceID,

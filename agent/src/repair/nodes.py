@@ -49,34 +49,49 @@ CONFIDENCE_THRESHOLD = 0.30
 # Maximum times to retry generate_fix when the LLM returns valid JSON but
 # with an empty edits array (common after Gemini connection recovery — the
 # retried call may produce structurally-valid JSON with zero actual edits).
-_GENERATE_FIX_EMPTY_RETRIES = 2
+_GENERATE_FIX_EMPTY_RETRIES = 3
 
 
 # ── LLM helper ────────────────────────────────────────────────────────────────
 
-_MAX_LLM_RETRIES = 3
+_MAX_LLM_RETRIES = 4
 
 
 async def _call_llm(messages: list[dict], ctx, request_tag: str) -> str:
-    """Single LLM call. Returns raw string response."""
+    """Single LLM call. Returns raw string response, or empty string on error."""
     from src.llm.chat_factory import get_chat_provider
 
     provider = get_chat_provider()
     parts: list[str] = []
+    had_error = False
+
+    model_override = getattr(ctx, "model", None) or None
 
     async for event in provider.stream(
         messages=messages,
         payload={},
         request_id=f"repair-{ctx.repair_session_id[:8]}-{request_tag}",
         response_format={"type": "json_object"},
+        model=model_override,
     ):
         if event and isinstance(event, dict):
             evt = event.get("event")
             if evt == "token":
                 parts.append(event.get("text", ""))
-            elif evt in ("done", "error"):
+            elif evt == "done":
+                break
+            elif evt == "error":
+                # Return empty so the caller's retry loop kicks in, not partial garbage.
+                logger.warning(
+                    "llm_error_event",
+                    request_tag=request_tag,
+                    error=event.get("message", ""),
+                )
+                had_error = True
                 break
 
+    if had_error:
+        return ""
     return "".join(parts).strip()
 
 
@@ -342,11 +357,20 @@ async def gather_context(state: dict) -> dict:
     context_block = _format_context_for_llm(retrieved_context)
 
     diag_text = _format_diagnostics(diagnostics)
+    diag_paths = _extract_diagnostic_paths(diagnostics)
+    paths_hint = ""
+    if diag_paths:
+        paths_hint = (
+            "\nFiles mentioned in diagnostics (use EXACTLY these paths):\n  "
+            + "\n  ".join(diag_paths)
+            + "\n\n"
+        )
 
     messages = [
         {"role": "system", "content": _GATHER_SYSTEM},
         {"role": "user", "content": (
             f"Diagnostics:\n{diag_text}\n\n"
+            + paths_hint
             + (f"Files read so far:\n{context_block}\n\n" if context_block else "")
             + f"Iteration {iteration + 1} of {max_iter}. What should you read next?"
         )},
@@ -739,6 +763,15 @@ async def generate_fix(state: dict) -> dict:
 
     context_block = _format_context_for_llm(retrieved_context)
     diag_text = _format_diagnostics(diagnostics)
+    diag_paths = _extract_diagnostic_paths(diagnostics)
+    paths_hint = ""
+    if diag_paths:
+        paths_hint = (
+            "\nIMPORTANT — use EXACTLY these file paths from the diagnostics "
+            "(do NOT guess extensions like .tsx vs .jsx):\n  "
+            + "\n  ".join(diag_paths)
+            + "\n\n"
+        )
 
     messages = [
         {"role": "system", "content": _GENERATE_FIX_SYSTEM},
@@ -746,7 +779,8 @@ async def generate_fix(state: dict) -> dict:
             f"Strategy: {strategy}\n"
             f"Root cause: {root_cause}\n\n"
             f"Diagnostics:\n{diag_text}\n\n"
-            f"Repository context:\n{context_block}\n\n"
+            + paths_hint
+            + f"Repository context:\n{context_block}\n\n"
             "Generate the minimal edit plan to fix this."
         )},
     ]
@@ -755,10 +789,13 @@ async def generate_fix(state: dict) -> dict:
     # the connection was flaky (Gemini API disconnections are common) and the
     # retried call produced a structurally-valid-but-empty response. We retry
     # the LLM call when edits are empty (up to _GENERATE_FIX_EMPTY_RETRIES)
-    # before giving up.
+    # before giving up. On retry we append a feedback message so the model
+    # knows why it's being re-asked instead of silently repeating itself.
     valid_edits = []
     explanation = ""
     last_attempt_reason = ""
+    last_raw = ""
+    active_messages = messages
 
     for attempt in range(_GENERATE_FIX_EMPTY_RETRIES):
         if attempt > 0:
@@ -767,8 +804,21 @@ async def generate_fix(state: dict) -> dict:
                 attempt=attempt + 1,
                 reason=last_attempt_reason,
             )
+            # Tell the LLM why the previous attempt failed so it can self-correct.
+            feedback = (
+                f"Your previous response was not usable: {last_attempt_reason}. "
+                "Please respond with a valid JSON object containing an 'edits' array. "
+                "Each edit MUST have 'path' (relative to workspace root, e.g. 'src/App.tsx') "
+                "and 'content' (the complete new file content as a string). "
+                "Do not return an empty edits array."
+            )
+            active_messages = active_messages + [
+                {"role": "assistant", "content": last_raw or "{}"},
+                {"role": "user", "content": feedback},
+            ]
 
-        raw = await _call_llm_with_retry(messages, ctx, "generate-fix")
+        raw = await _call_llm_with_retry(active_messages, ctx, f"generate-fix-{attempt}")
+        last_raw = raw
 
         if not raw:
             last_attempt_reason = "empty response after retries"
@@ -1003,6 +1053,18 @@ def route_apply_loop(state: dict) -> str:
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _extract_diagnostic_paths(diagnostics: list) -> list[str]:
+    """Extract unique, non-empty file paths from diagnostics in order."""
+    seen: set[str] = set()
+    paths: list[str] = []
+    for d in diagnostics:
+        p = d.get("file_path", "")
+        if p and p not in seen:
+            seen.add(p)
+            paths.append(p)
+    return paths
+
 
 def _format_diagnostics(diagnostics: list) -> str:
     parts = []

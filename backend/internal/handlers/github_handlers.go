@@ -534,6 +534,21 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 	var syncedRepoIDs []string
 
 	for _, ghRepo := range githubRepos {
+		// Fetch the default branch HEAD SHA so resolveCommitSHA has a fresh value
+		// immediately after install/sync, without waiting for the first push webhook.
+		// Non-fatal: if the API call fails we pass "" and UpdateSyncInfo preserves
+		// the existing last_commit_sha value (it only overwrites on non-empty input).
+		headSHA := ""
+		if sha, headErr := h.client.GetDefaultBranchHead(token, ghRepo.FullName, ghRepo.DefaultBranch); headErr == nil {
+			headSHA = sha
+		} else {
+			h.logger.Warnw("sync_get_branch_head_failed",
+				"repo", ghRepo.FullName,
+				"error", headErr,
+				"trace_id", traceID,
+			)
+		}
+
 		existing, err := h.repoRepo.GetByGitHubRepoID(ctx, ghRepo.ID)
 		if err != nil {
 			created, err := h.repoRepo.CreateRepo(
@@ -554,13 +569,25 @@ func (h *GitHubHandlers) syncReposForInstallation(installationID string, githubI
 				)
 				continue
 			}
+			// Store the HEAD SHA for newly-created repos so workspace provisioning
+			// can use it immediately without waiting for an ingestion job.
+			if headSHA != "" {
+				if updateErr := h.repoRepo.UpdateSyncInfo(ctx, created.ID, headSHA); updateErr != nil {
+					h.logger.Warnw("sync_new_repo_sha_update_failed",
+						"repo", ghRepo.FullName, "error", updateErr)
+				}
+			}
 			h.logger.Infow("repo_created",
 				"repo_full_name", ghRepo.FullName,
+				"head_sha", headSHA,
 				"trace_id", traceID,
 			)
 			syncedRepoIDs = append(syncedRepoIDs, created.ID)
 		} else {
-			if err := h.repoRepo.UpdateSyncInfo(ctx, existing.ID, ""); err != nil {
+			// Pass headSHA (may be ""); UpdateSyncInfo SQL preserves the existing
+			// last_commit_sha when an empty string is passed, so a failed API call
+			// never clears a good SHA that a push webhook already wrote.
+			if err := h.repoRepo.UpdateSyncInfo(ctx, existing.ID, headSHA); err != nil {
 				h.logger.Errorw("failed_to_update_repo",
 					"error", err,
 					"repo_full_name", ghRepo.FullName,
@@ -917,6 +944,20 @@ func (h *GitHubHandlers) handlePushEvent(c *fiber.Ctx, event *github.PushEvent, 
 			"trace_id", traceID,
 		)
 		return c.Status(500).JSON(fiber.Map{"error": "failed to enqueue ingestion job"})
+	}
+
+	// Update the repo's last_commit_sha immediately so that resolveCommitSHA
+	// (used by workspace provisioning) returns the latest HEAD without waiting
+	// for the ingestion job to complete. The ingestion job's commit_sha is only
+	// updated when status reaches 'done', which may take 30-120+ seconds.
+	if err := h.repoRepo.UpdateSyncInfo(ctx, repo.ID, commitSHA); err != nil {
+		h.logger.Warnw("push_update_last_commit_sha_failed",
+			"repo_id", repo.ID,
+			"commit_sha", commitSHA,
+			"error", err,
+			"trace_id", traceID,
+		)
+		// Non-fatal: ingestion job was enqueued successfully.
 	}
 
 	h.logger.Infow("push_ingestion_enqueued",

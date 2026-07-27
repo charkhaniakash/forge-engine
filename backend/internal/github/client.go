@@ -253,6 +253,40 @@ func (c *Client) GetInstallationByID(appJWT string, installationID int64) (*Inst
 	return &installation, nil
 }
 
+// GetDefaultBranchHead returns the HEAD commit SHA of the given branch.
+// Used during repo sync to populate last_commit_sha without waiting for a push webhook.
+func (c *Client) GetDefaultBranchHead(token, repoFullName, branch string) (string, error) {
+	url := fmt.Sprintf("%s/repos/%s/branches/%s", c.baseURL, repoFullName, branch)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("create branch head request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("get branch head: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("get branch head: status %d, body: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("decode branch head: %w", err)
+	}
+	return result.Commit.SHA, nil
+}
+
 // ListAppInstallations returns all active installations for this GitHub App.
 // Used during recovery to find installations that exist on GitHub but not locally.
 func (c *Client) ListAppInstallations(appJWT string) ([]*Installation, error) {

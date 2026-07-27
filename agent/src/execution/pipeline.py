@@ -78,6 +78,7 @@ class ExecutionPipeline:
                 "_file_cache": {},
                 "_no_progress_write_cycles": 0,
                 "_convergence_triggered": False,
+                "_verify_required": False,
             }
 
             # Run the graph with astream — yields state snapshots per node.

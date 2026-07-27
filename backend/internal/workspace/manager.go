@@ -641,6 +641,36 @@ func (m *WorkspaceManager) Stat(ctx context.Context, workspaceID, path string) (
 	}, nil
 }
 
+// HasChanges reports whether the workspace working tree has any uncommitted
+// changes relative to HEAD — modified, staged, or untracked files.
+//
+// This is the authoritative "did the execution actually change anything?"
+// signal. It cannot be fooled by no-op writes (identical content) or by an
+// agent that reports success without touching a file: `git status --porcelain`
+// reflects the real working tree. The publishing orchestrator uses the same
+// check before committing, so both stages agree on what "no changes" means.
+//
+// Returns (false, err) only when the check could not run (workspace gone, exec
+// error). Callers should treat an error as "unknown" and NOT block on it — the
+// advisory pipeline must never fail a task on infrastructure trouble.
+func (m *WorkspaceManager) HasChanges(ctx context.Context, workspaceID string) (bool, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return false, fmt.Errorf("workspace not ready: %w", err)
+	}
+	result, err := m.execAndLog(ctx, workspaceID, *ws.ContainerID, ExecRequest{
+		Command:        []string{"git", "status", "--porcelain"},
+		TimeoutSeconds: 15,
+	}, m.logger.With("workspace_id", workspaceID))
+	if err != nil {
+		return false, err
+	}
+	if result.ExitCode != 0 {
+		return false, fmt.Errorf("git status failed (exit %d): %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return strings.TrimSpace(result.Stdout) != "", nil
+}
+
 // ── Validation container helpers (Phase 8) ────────────────────────────────────
 
 // ProvisionValidationContainer creates an ephemeral language-specific container

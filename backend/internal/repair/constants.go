@@ -7,7 +7,7 @@ const (
 	DefaultMaxDurationSecs = 1800 // 30 minutes
 	DefaultAgentTokenTTL   = 300  // 5 minutes
 	DefaultAgentVersion    = "repair_graph_v1"
-	DefaultModel           = "gemini-2.0-flash-exp"
+	DefaultModel           = "" // empty = let the agent use its own CHAT__MODEL config
 	DefaultTemperature     = 0.1
 	DefaultMaxTokens       = 4096
 )

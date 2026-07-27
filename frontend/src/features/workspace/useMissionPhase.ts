@@ -63,6 +63,7 @@ export function useMissionPhase(repoId: string, taskId: string): MissionPhase {
   const valLive = valStatus === 'running' || valStatus === 'pending'
   const repairing = status === 'repairing'
   const publishing = status === 'publishing'
+  const missionNoChanges = status === 'no_changes'
   const missionDone = status === 'done' || overall === 'passed'
   const missionFailed = status === 'failed' || status === 'cancelled'
 
@@ -80,7 +81,9 @@ export function useMissionPhase(repoId: string, taskId: string): MissionPhase {
             ? 'Repairing'
             : publishing
               ? 'Publishing'
-              : missionDone
+              : missionNoChanges
+                ? 'No changes made'
+                : missionDone
                 ? 'Completed'
                 : missionFailed
                   ? (status === 'cancelled' ? 'Cancelled' : 'Failed')
@@ -90,9 +93,9 @@ export function useMissionPhase(repoId: string, taskId: string): MissionPhase {
                       ? 'Approved'
                       : 'Idle'
 
-  const tone: PhaseTone = missionFailed ? 'danger' : missionDone ? 'success' : live ? 'active' : 'neutral'
+  const tone: PhaseTone = missionFailed ? 'danger' : missionDone ? 'success' : missionNoChanges ? 'neutral' : live ? 'active' : 'neutral'
 
-  const progress = missionFailed || missionDone
+  const progress = missionFailed || missionDone || missionNoChanges
     ? 1
     : publishing
       ? 0.92

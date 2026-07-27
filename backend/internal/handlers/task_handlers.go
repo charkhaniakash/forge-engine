@@ -505,13 +505,14 @@ func (h *TaskHandlers) FollowUp(c *fiber.Ctx) error {
 	// Follow-up is only allowed from terminal or plan_ready states.
 	allowed := map[string]bool{
 		models.WorkItemStatusDone:      true,
+		models.WorkItemStatusNoChanges: true,
 		models.WorkItemStatusFailed:    true,
 		models.WorkItemStatusCancelled: true,
 		models.WorkItemStatusPlanReady: true,
 	}
 	if !allowed[item.Status] {
 		return c.Status(fiber.StatusUnprocessableEntity).JSON(fiber.Map{
-			"error": "follow-up is only available when the mission is done, failed, cancelled, or plan_ready",
+			"error": "follow-up is only available when the mission is done, no_changes, failed, cancelled, or plan_ready",
 		})
 	}
 

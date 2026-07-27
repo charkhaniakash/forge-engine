@@ -31,6 +31,7 @@ export const WORK_ITEM_STATUS: Record<string, StatusMeta> = {
   repairing: meta('warning', 'Repairing'),
   publishing: meta('info', 'Publishing'),
   done: meta('success', 'Done'),
+  no_changes: meta('warning', 'No changes made'),
   failed: meta('danger', 'Failed'),
   cancelled: meta('neutral', 'Cancelled'),
 }

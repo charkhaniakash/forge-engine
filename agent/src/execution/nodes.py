@@ -23,6 +23,46 @@ from src.execution.tool_client import ToolClient
 
 logger = structlog.get_logger()
 
+# The write/read tools the LLM may invoke. Used to normalize protocol variants
+# where a model puts the tool name directly in the "action" field.
+_TOOL_NAMES = frozenset({
+    "read_file", "write_file", "create_file", "delete_file", "rename_file",
+    "list_dir", "search_symbol", "exists", "stat",
+})
+
+# The recognized control actions (everything that is NOT a tool dispatch).
+_CONTROL_ACTIONS = frozenset({
+    "tool", "already_satisfied", "plan_deviation", "requires_human",
+    "execution_error", "complete", "deviation",
+})
+
+
+def _normalize_action(action: dict) -> dict:
+    """Rewrite common LLM protocol variations into the canonical action shape.
+
+    The canonical tool-call shape is {"action": "tool", "tool": "<name>", "args": {...}}.
+    Smaller / non-Gemini models frequently emit instead:
+      {"action": "write_file", "tool": "write_file", "args": {...}}   (tool name in action)
+      {"action": "write_file", "args": {...}}                          (no tool field)
+    Left unhandled, route_after_reason does not match "tool" and silently routes
+    to complete_step — the edit is dropped and the step ends with NO changes.
+    This normalization makes the graph robust to any configured chat model.
+    """
+    if not isinstance(action, dict):
+        return action
+    act_val = action.get("action", "")
+    # Case 1: action is a tool name → canonicalize to action="tool".
+    if act_val in _TOOL_NAMES:
+        if not action.get("tool"):
+            action["tool"] = act_val
+        action["action"] = "tool"
+        return action
+    # Case 2: action is missing/unknown but a valid tool field is present.
+    if act_val not in _CONTROL_ACTIONS and action.get("tool") in _TOOL_NAMES:
+        action["action"] = "tool"
+    return action
+
+
 # ── System prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """\
@@ -245,16 +285,39 @@ async def node_reason(state: ExecutionState) -> dict:
     step_title = step.get("title", "") if step else ""
     step_desc = step.get("description", "") if step else ""
     step_files = step.get("affected_files", []) if step else []
-    messages.append({
-        "role": "user",
-        "content": (
-            f"Step to execute:\n"
-            f"Title: {step_title}\n"
-            f"Description: {step_desc}\n"
-            f"Affected files: {step_files}\n\n"
-            "What should you do? Respond with a JSON object."
-        ),
-    })
+
+    verify_required: bool = state.get("_verify_required", False)  # type: ignore[call-overload]
+    if verify_required:
+        # The LLM previously claimed already_satisfied without calling any tools.
+        # Inject a hard challenge: it MUST call read_file explicitly and justify
+        # why the runtime error cannot occur, or else fix the code.
+        messages.append({
+            "role": "user",
+            "content": (
+                "VERIFICATION REQUIRED — your previous 'already_satisfied' response was rejected.\n\n"
+                "You claimed the step was already done without calling a single tool. "
+                "The pre-loaded file context is NOT sufficient proof — you must actively verify.\n\n"
+                f"The step involves these files: {step_files}\n\n"
+                "You MUST now call read_file on each affected file and carefully check:\n"
+                "1. Is the exact bug described in the step title actually absent from the code?\n"
+                "2. Trace the full call path — not just 'the prop is passed' but WHY the runtime error cannot occur.\n"
+                "3. If ANY doubt remains, make the fix.\n\n"
+                "Respond with a read_file tool call to start your verification. "
+                "Only respond with already_satisfied AFTER you have read the files AND "
+                "can cite the exact line that proves the bug is absent."
+            ),
+        })
+    else:
+        messages.append({
+            "role": "user",
+            "content": (
+                f"Step to execute:\n"
+                f"Title: {step_title}\n"
+                f"Description: {step_desc}\n"
+                f"Affected files: {step_files}\n\n"
+                "What should you do? Respond with a JSON object."
+            ),
+        })
 
     # ── LLM call with JSON-parse retry ────────────────────────────────────────
     action: dict = {}
@@ -285,7 +348,7 @@ async def node_reason(state: ExecutionState) -> dict:
             parsed = json.loads(raw)
             if not isinstance(parsed, dict):
                 raise ValueError(f"Expected dict, got {type(parsed).__name__}")
-            action = parsed
+            action = _normalize_action(parsed)
             logger.info(
                 "node_reason_parsed",
                 step_id=ctx.step_id,
@@ -353,6 +416,10 @@ async def node_call_tool(state: ExecutionState) -> dict:
     tool_client = _get_tool_client(state)
 
     tool_name = action.get("tool", "")
+    # Fallback: if the model put the tool name in "action" and omitted "tool"
+    # (a variation _normalize_action already handles, but this guards any path).
+    if not tool_name and action.get("action", "") in _TOOL_NAMES:
+        tool_name = action["action"]
     tool_args = action.get("args", {})
     reasoning = action.get("reasoning", "")
 
@@ -598,17 +665,43 @@ async def node_already_satisfied(state: ExecutionState) -> dict:
     This is a SUCCESSFUL completion. The step is marked complete with no diffs.
     It does NOT block downstream dependent steps.
     Distinct from plan_deviation: the plan was correct, the work was already done.
+
+    Guardrail: if the LLM claimed already_satisfied without having called a
+    SINGLE tool (i.e. it relied only on gather_context's pre-loaded files and
+    never verified anything itself), we reject the claim and force one more
+    reason pass with an explicit verification challenge. This prevents the
+    common failure mode where the LLM reads pre-loaded context, decides the
+    code "looks correct", and exits without actually fixing anything.
     """
     action: dict = state.get("_pending_action", {}) or {}
     if not isinstance(action, dict):
         action = {}
     summary = action.get("summary", "Desired state already exists — no changes required")
+
+    tool_history = state.get("tool_history") or []
+    if len(tool_history) == 0:
+        # Premature claim — no tools called in the reason loop at all.
+        # Force a verification pass: route_after_already_satisfied will redirect
+        # back to reason with _verify_required=True so node_reason adds a
+        # challenge message demanding explicit file reads.
+        logger.warning(
+            "already_satisfied_blocked_no_tools_called",
+            step_id=state["ctx"].step_id,
+            summary=summary,
+        )
+        return {
+            "_verify_required": True,
+            "_pending_action": None,
+            "complete": False,
+        }
+
     logger.info("step_already_satisfied",
                 summary=summary, step_id=state["ctx"].step_id)
     return {
         "reasoning": (state.get("reasoning") or "") + "\n[already satisfied] " + summary,
         "complete": True,
         "_pending_action": None,
+        "_verify_required": False,
     }
 
 
@@ -630,6 +723,10 @@ def route_after_reason(state: ExecutionState) -> str:
     logger.info("route_after_reason_decision", action=a)
 
     if a == "tool":
+        return "call_tool"
+    # Defense-in-depth: a tool-name that slipped through un-normalized still
+    # dispatches as a tool call instead of silently completing with no changes.
+    if a in _TOOL_NAMES or (a not in _CONTROL_ACTIONS and action.get("tool") in _TOOL_NAMES):
         return "call_tool"
     if a == "already_satisfied":
         return "already_satisfied"
@@ -679,6 +776,20 @@ def route_after_result(state: ExecutionState) -> str:
         return "reason"
     # Continue reasoning loop.
     return "reason"
+
+
+def route_after_already_satisfied(state: ExecutionState) -> str:
+    """Route after node_already_satisfied.
+
+    Normally the step ends here (→ END). But if the LLM made a premature
+    already_satisfied claim with zero tool calls, node_already_satisfied sets
+    _verify_required=True and complete=False so we can redirect back to reason
+    for one mandatory verification pass.
+    """
+    if state.get("_verify_required"):
+        logger.info("already_satisfied_redirecting_to_verify", step_id=state["ctx"].step_id)
+        return "reason"
+    return "__end__"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

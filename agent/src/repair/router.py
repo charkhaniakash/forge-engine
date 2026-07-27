@@ -65,7 +65,7 @@ async def repair_endpoint(
             workspace_id=ctx_data["workspace_id"],
             attempt_number=ctx_data["attempt_number"],
             trace_id=ctx_data["trace_id"],
-            model=ctx_data.get("model", "gemini-2.0-flash-exp"),
+            model=ctx_data.get("model") or None,
             temperature=ctx_data.get("temperature", 0.1),
             max_tokens=ctx_data.get("max_tokens", 4096),
         )

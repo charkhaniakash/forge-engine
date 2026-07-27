@@ -293,19 +293,33 @@ func (h *WorkspaceHandlers) InternalExec(c *fiber.Ctx) error {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 // resolveCommitSHA returns the commit SHA to use for the workspace.
-// Priority: latest done ingestion job's commit SHA.
+// Priority:
+//   1. github_repos.last_commit_sha — updated immediately on push webhooks,
+//      so workspace provisioning gets the latest HEAD without waiting for
+//      ingestion to finish. This is the primary source.
+//   2. Latest done ingestion job's commit_sha — fallback for repos that
+//      haven't received a push webhook yet (initial setup).
 func (h *WorkspaceHandlers) resolveCommitSHA(
 	ctx context.Context,
 	taskID string,
 	repoID string,
 ) (string, error) {
-	// Get the latest done ingestion job for this repo.
+	// Priority 1: github_repos.last_commit_sha (updated on push webhooks).
+	repo, err := h.repoRepo.GetByID(ctx, repoID)
+	if err != nil {
+		return "", fmt.Errorf("repo not found: %w", err)
+	}
+	if repo.LastCommitSHA != nil && *repo.LastCommitSHA != "" {
+		return *repo.LastCommitSHA, nil
+	}
+
+	// Priority 2: latest done ingestion job's commit SHA (fallback).
 	job, err := h.jobRepo.GetLatestDoneForRepo(ctx, repoID)
 	if err != nil {
 		return "", fmt.Errorf("no completed ingestion job found for repo")
 	}
 	if job.CommitSHA == "" {
-		return "", fmt.Errorf("ingestion job has empty commit SHA")
+		return "", fmt.Errorf("both last_commit_sha and ingestion job have empty commit SHA")
 	}
 	return job.CommitSHA, nil
 }

@@ -133,6 +133,28 @@ func (r *WorkItemRepository) ForceToDone(ctx context.Context, id string) error {
 	return err
 }
 
+// TransitionToNoChanges moves a work item to the honest "no_changes" terminal
+// state with an explanatory message. Called when execution completed but the
+// workspace working tree has zero real changes — the agent produced no diff
+// (e.g. it declared the step "already satisfied" without writing anything, or
+// only wrote identical content).
+//
+// This is deliberately NOT "done": marking a no-op run as done was a
+// false-success bug — the UI showed a green checkmark and a publish was
+// attempted that could only fail with "no code changes to publish". This state
+// is terminal and eligible for follow-up, exactly like done/failed.
+func (r *WorkItemRepository) TransitionToNoChanges(ctx context.Context, id, reason string) error {
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE work_items
+		SET status = $2, error = $3, updated_at = NOW()
+		WHERE id = $1 AND status IN ($4, $5, $6)
+	`, id, models.WorkItemStatusNoChanges, reason,
+		models.WorkItemStatusExecuting,
+		models.WorkItemStatusRepairing,
+		models.WorkItemStatusFailed)
+	return err
+}
+
 // GetByIDInternal returns a work item by UUID without org scoping.
 // Only used by internal goroutines (e.g. the planning background goroutine).
 // Never expose this to HTTP handlers.
@@ -266,7 +288,8 @@ func (r *WorkItemRepository) Approve(ctx context.Context, id, orgID string) (*mo
 // ResetForReplan transitions status back to planning and clears the error.
 // Called when the user triggers a re-plan. Allowed from the plan-review states
 // (plan_ready / planning_failed) and from terminal/decision states the UI can
-// re-plan from: done (re-plan after execution completed), failed, and cancelled.
+// re-plan from: done (re-plan after execution completed), no_changes (re-plan
+// after a run produced no diff), failed, and cancelled.
 // In-flight states (executing / repairing / publishing) are intentionally excluded.
 func (r *WorkItemRepository) ResetForReplan(ctx context.Context, id, orgID string) error {
 	result, err := r.db.ExecContext(ctx, `
@@ -277,12 +300,13 @@ func (r *WorkItemRepository) ResetForReplan(ctx context.Context, id, orgID strin
 		    updated_at      = NOW()
 		WHERE id = $1
 		  AND org_id = $2
-		  AND status IN ($4, $5, $6, $7, $8)
+		  AND status IN ($4, $5, $6, $7, $8, $9)
 	`, id, orgID,
 		models.WorkItemStatusPlanning,
 		models.WorkItemStatusPlanReady,
 		models.WorkItemStatusPlanningFailed,
 		models.WorkItemStatusDone,
+		models.WorkItemStatusNoChanges,
 		models.WorkItemStatusFailed,
 		models.WorkItemStatusCancelled)
 	if err != nil {
@@ -349,12 +373,12 @@ func (r *WorkItemRepository) Cancel(ctx context.Context, id, orgID string) error
 		SET status = $3, updated_at = NOW()
 		WHERE id = $1
 		  AND org_id = $2
-		  AND status NOT IN ($4, $5, $6)
+		  AND status NOT IN ($4, $5, $6, $7)
 	`, id, orgID,
 		models.WorkItemStatusCancelled,
 		models.WorkItemStatusDone,
 		models.WorkItemStatusFailed,
-		models.WorkItemStatusCancelled)
+		models.WorkItemStatusNoChanges)
 	if err != nil {
 		return err
 	}

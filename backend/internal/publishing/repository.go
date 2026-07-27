@@ -21,13 +21,17 @@ func NewRepository(db *sql.DB) *Repository {
 
 // CreateSession creates a new publishing session.
 func (r *Repository) CreateSession(ctx context.Context, req PublishRequest) (*PublishingSession, error) {
+	var initiatedBy *string
+	if req.UserID != "" {
+		initiatedBy = &req.UserID
+	}
 	session := &PublishingSession{
 		WorkItemID:      req.WorkItemID,
 		TaskExecutionID: req.TaskExecutionID,
 		WorkspaceID:     req.WorkspaceID,
 		Status:          StatusPending,
 		DraftMode:       req.DraftMode,
-		InitiatedBy:     &req.UserID,
+		InitiatedBy:     initiatedBy,
 	}
 
 	err := r.db.QueryRowContext(ctx, `

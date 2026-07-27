@@ -34,6 +34,7 @@ from src.execution.nodes import (
     node_complete_step,
     route_after_reason,
     route_after_result,
+    route_after_already_satisfied,
 )
 
 
@@ -84,12 +85,16 @@ def build_execution_graph() -> StateGraph:
         },
     )
 
-    # Terminal nodes → END.
+    # Terminal nodes → END (already_satisfied has a conditional re-verify path).
     graph.add_edge("plan_deviation",   END)
     graph.add_edge("requires_human",   END)
     graph.add_edge("execution_error",  END)
     graph.add_edge("check_deviation",  END)
-    graph.add_edge("already_satisfied",END)
+    graph.add_conditional_edges(
+        "already_satisfied",
+        route_after_already_satisfied,
+        {"reason": "reason", "__end__": END},
+    )
     graph.add_edge("complete_step",    END)
 
     return graph.compile()

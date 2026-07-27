@@ -166,7 +166,7 @@ export function TaskWorkspace() {
   // Task is in an active (non-terminal) lifecycle phase. Keeps sockets
   // connected through phase transitions (e.g., planning→execution during
   // auto-run) with no gap.
-  const taskActive = task?.status != null && !['done', 'failed', 'cancelled'].includes(task.status)
+  const taskActive = task?.status != null && !['done', 'no_changes', 'failed', 'cancelled'].includes(task.status)
 
   // ── Live subscriptions ──────────────────────────────────────────────────
   useSocketChannel({
@@ -555,6 +555,7 @@ export function TaskWorkspace() {
   const isExecuting = execStatus === 'running' || execStatus === 'pending'
   const execDone = execStatus === 'completed'
   const canValidate = execDone && !valRun && !validating
+  const missionNoChanges = status === 'no_changes'
   const missionDone = status === 'done' || overall === 'passed'
   const missionFailed = status === 'failed' || status === 'cancelled'
   const prUrl = publishSession?.status === 'completed' ? publishSession.pr_url : null
@@ -648,6 +649,15 @@ export function TaskWorkspace() {
         Re-plan &amp; retry
       </Button>
     )
+  } else if (missionNoChanges) {
+    // The run produced no diff — nothing to publish. Offer a re-plan so the
+    // user can refine the request or point at the specific file/symptom.
+    actionRow = (
+      <Button key="nochanges-replan" variant="primary" loading={replanning} leadingIcon={<Icon name="refresh" size={15} />}
+        onClick={() => setReplanConfirmOpen(true)}>
+        Re-plan &amp; retry
+      </Button>
+    )
   }
 
   const liveHint = isPlanningLive
@@ -663,7 +673,7 @@ export function TaskWorkspace() {
             : undefined
 
   // ── Hero: phase title + honest pipeline-position ring ─────────────────────
-  const heroProgress = missionFailed || missionDone
+  const heroProgress = missionFailed || missionDone || missionNoChanges
     ? 1
     : publishActive
       ? 0.92
@@ -686,9 +696,11 @@ export function TaskWorkspace() {
     ? 'danger'
     : missionDone
       ? 'success'
-      : live
-        ? 'active'
-        : 'neutral'
+      : missionNoChanges
+        ? 'neutral'
+        : live
+          ? 'active'
+          : 'neutral'
   const heroTitle = isPlanningLive
     ? 'Planning your changes'
     : isExecuting
@@ -701,7 +713,9 @@ export function TaskWorkspace() {
             ? 'Publishing to GitHub'
             : missionDone
               ? 'Mission complete'
-              : missionFailed
+              : missionNoChanges
+                ? 'No changes made'
+                : missionFailed
                 ? (status === 'cancelled' ? 'Mission cancelled' : 'Mission failed')
                 : canApprove
                   ? 'Plan ready for your review'
@@ -772,7 +786,7 @@ export function TaskWorkspace() {
   //   • otherwise       → input disabled with a contextual hint (Tier 2 will
   //                       enable follow-ups after completion)
   const canRefine = canApprove
-  const canStartNew = missionDone || missionFailed
+  const canStartNew = missionDone || missionFailed || missionNoChanges
   const showStop = live
   const composerBusy = refining || followingUp
   // The input is typeable while reviewing a plan (refine) or once the mission has

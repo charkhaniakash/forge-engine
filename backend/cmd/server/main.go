@@ -414,6 +414,39 @@ func main() {
 					// publishing whenever the final tree is not green.
 					requireGreen := publishRequiresGreen()
 
+					// ── False-success guard: did the execution change anything? ───
+					// The workspace working tree is the authoritative source of truth.
+					// If the agent produced zero real changes (declared a step
+					// "already satisfied" without writing, or wrote identical
+					// content), there is nothing to validate, repair, or publish.
+					// Marking such a run "done" was a false-success bug: the UI showed
+					// a green success and auto-publish then failed with "no code
+					// changes to publish". Instead we end in the honest "no_changes"
+					// terminal state so the user knows the request produced no diff and
+					// can refine it. This check runs BEFORE validation so build
+					// artifacts (node_modules, dist/) can never mask an empty diff.
+					// On a check error we do NOT block (advisory principle) — fall
+					// through to the normal flow.
+					if changed, chErr := wsManager.HasChanges(ctx, workspaceID); chErr != nil {
+						log.Warnw("no_change_check_failed_proceeding", "error", chErr)
+					} else if !changed {
+						log.Infow("execution_made_no_changes_marking_no_changes")
+						if bwGateway != nil {
+							bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
+								"phase": "done", "status": "no_changes",
+							})
+							bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{
+								"status":  "no_changes",
+								"message": "No code changes were made for this request",
+							})
+						}
+						reason := "No code changes were made — the assumed change was already present in the code, so no diff was produced. Refine the request or point to the specific file or symptom to change."
+						if ncErr := workItemRepo.TransitionToNoChanges(ctx, workItemID, reason); ncErr != nil {
+							log.Errorw("transition_no_changes_failed", "error", ncErr)
+						}
+						return
+					}
+
 					// Phase 8: Validation
 					//
 					// NON-BLOCKING POLICY (Devin-style): validation is ADVISORY.
@@ -557,6 +590,58 @@ func main() {
 					if doneErr := workItemRepo.ForceToDone(ctx, workItemID); doneErr != nil {
 						log.Errorw("force_to_done_failed", "error", doneErr)
 					}
+
+					// Auto-trigger publishing for auto-run / follow-up tasks.
+					// Without this, a follow-up task's changes are stuck in the workspace
+					// forever because there is no frontend to call POST /publish. The
+					// publishing orchestrator creates a branch, commits, pushes, and
+					// creates a PR — all asynchronously. If publishing fails (no changes,
+					// workspace gone, etc.) we log and continue; a human can retry via
+					// the frontend's publish button.
+					go func() {
+						item, itemErr := workItemRepo.GetByIDInternal(context.Background(), workItemID)
+						if itemErr != nil {
+							log.Warnw("auto_publish_work_item_lookup_failed", "error", itemErr)
+							return
+						}
+
+						ghRepo, ghErr := githubRepoRepo.GetByID(context.Background(), item.RepoID)
+						if ghErr != nil {
+							log.Warnw("auto_publish_repo_lookup_failed", "error", ghErr)
+							return
+						}
+
+						ws, wsErr := wsRepo.GetByWorkItemID(context.Background(), workItemID)
+						if wsErr != nil || ws == nil {
+							log.Warnw("auto_publish_workspace_lookup_failed", "error", wsErr)
+							return
+						}
+
+						// Prefer the freshest commit SHA available.
+						// ghRepo.LastCommitSHA is updated immediately on push webhooks (BUG-1 fix),
+						// so it tracks the true remote HEAD. ws.CommitSHA was set at provisioning
+						// time and may point to an older commit if PRs have been merged since.
+						baseCommitSHA := ws.CommitSHA
+						if ghRepo.LastCommitSHA != nil && *ghRepo.LastCommitSHA != "" {
+							baseCommitSHA = *ghRepo.LastCommitSHA
+						}
+
+						publishReq := publishing.PublishRequest{
+							WorkItemID:      workItemID,
+							TaskExecutionID: taskExecutionID,
+							WorkspaceID:     workspaceID,
+							RepoFullName:    ghRepo.RepoFullName,
+							DefaultBranch:   ghRepo.DefaultBranch,
+							BaseCommitSHA:   baseCommitSHA,
+							DraftMode:       false,
+							UserID:          "",
+							TraceID:         traceID,
+						}
+
+						if err := publishingOrch.Run(context.Background(), publishReq); err != nil {
+							log.Warnw("auto_publish_failed", "error", err)
+						}
+					}()
 
 					// Phase 10B: Notify browser workspace that the task is done
 					if bwGateway != nil {

@@ -219,9 +219,23 @@ func (o *Orchestrator) stepCreateBranch(ctx context.Context, session *Publishing
 	branchName := generateBranchName(item.Intent, req.TaskExecutionID)
 	log.Infow("branch_name_generated", "branch", branchName)
 
-	// Check if branch already exists for this work item (idempotent)
+	// Reuse a previously-pushed branch ONLY when it belongs to THIS execution.
+	//
+	// generateBranchName is execution-scoped (…-<taskExecutionID8>), so the name
+	// generated above uniquely identifies this run. GetBranchForWorkItem returns
+	// the latest branch for the work item regardless of execution, so for a
+	// follow-up or re-plan (a NEW execution) it returns a PREVIOUS execution's
+	// branch. Reusing that branch is the root cause of the "fetch first" /
+	// "refusing to merge unrelated histories" push failure: the workspace is a
+	// fresh shallow clone at the base SHA, so its history is unrelated to the
+	// remote branch left by the earlier run, and the push is rejected.
+	//
+	// By requiring BranchName == branchName we reuse only on a genuine idempotent
+	// retry of the SAME execution's publish; every new execution gets its own
+	// fresh branch and therefore its own fresh PR — exactly what generateBranchName
+	// was designed for.
 	existingBranch, _ := o.repo.GetBranchForWorkItem(ctx, req.WorkItemID)
-	if existingBranch != nil && existingBranch.Status == "pushed" {
+	if existingBranch != nil && existingBranch.Status == "pushed" && existingBranch.BranchName == branchName {
 		// Reuse existing branch — but must checkout in workspace
 		branchName = existingBranch.BranchName
 		events, err := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
@@ -241,21 +255,125 @@ func (o *Orchestrator) stepCreateBranch(ctx context.Context, session *Publishing
 		}
 	}
 
-	// Create (or force-reset) branch in workspace. Use -B to handle the case
-	// where the branch exists locally from a previous failed attempt.
-	events, err := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
-		Command:        []string{"git", "checkout", "-B", branchName},
-		WorkingDir:     "",
-		TimeoutSeconds: 10,
-	})
-	if err != nil {
-		return fmt.Errorf("create branch: %w", err)
-	}
-	for ev := range events {
-		if ev.Type == "error" && !strings.Contains(string(ev.Data), "Switched to") {
-			return fmt.Errorf("branch creation failed: %s", string(ev.Data))
+	// For follow-up tasks the workspace HEAD may be at a stale commit (the
+	// first PR was merged and main has moved on). Fetch the default branch so
+	// the git object database knows about the new HEAD, then attempt to create
+	// the forge branch starting from that FETCH_HEAD. This keeps the PR diff
+	// clean — it shows only the repair's changes, not everything since the
+	// workspace was provisioned.
+	//
+	// Critically: git checkout -B <branch> FETCH_HEAD updates the working tree
+	// only for files that differ between the current HEAD and FETCH_HEAD. If
+	// the repair already modified one of those files, git will refuse with
+	// "local changes would be overwritten". In that case we fall back to
+	// branching from the local HEAD — the PR will show some divergence but the
+	// push succeeds and the changes are correct.
+	//
+	// The fetch is advisory — fetch failure falls back to local HEAD silently.
+	fetchedHead := false
+	if req.DefaultBranch != "" {
+		fetchToken, fetchTokenErr := o.githubClient.GetPushToken(ctx, req.RepoFullName)
+		if fetchTokenErr != nil {
+			log.Warnw("branch_create_fetch_token_failed", "error", fetchTokenErr)
+		} else {
+			fetchCredHelper := fmt.Sprintf(
+				`!f(){ echo "protocol=https"; echo "host=github.com"; echo "username=x-access-token"; echo "password=%s"; echo ""; }; f`,
+				fetchToken,
+			)
+			remoteURL := fmt.Sprintf("https://github.com/%s.git", req.RepoFullName)
+			fetchEvents, fetchErr := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+				Command: []string{
+					"git", "-c", "credential.helper=" + fetchCredHelper,
+					"fetch", remoteURL, req.DefaultBranch,
+				},
+				WorkingDir:     "",
+				TimeoutSeconds: 60,
+				Env:            map[string]string{"GIT_TERMINAL_PROMPT": "0"},
+			})
+			if fetchErr != nil {
+				log.Warnw("branch_create_fetch_failed", "error", fetchErr)
+			} else {
+				for range fetchEvents {
+				}
+				fetchedHead = true
+				log.Infow("branch_create_fetch_ok", "default_branch", req.DefaultBranch)
+			}
 		}
 	}
+
+	// gitCheckoutBranch runs git checkout -B <branchName> [startPoint] and
+	// returns (exitCode, combinedOutput, execError).
+	gitCheckoutBranch := func(startPoint string) (int, string, error) {
+		cmd := []string{"git", "checkout", "-B", branchName}
+		if startPoint != "" {
+			cmd = append(cmd, startPoint)
+		}
+		evts, execErr := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+			Command:        cmd,
+			WorkingDir:     "",
+			TimeoutSeconds: 10,
+		})
+		if execErr != nil {
+			return -1, "", execErr
+		}
+		var out string
+		var code int
+		for ev := range evts {
+			if ev.Type == "stdout" || ev.Type == "stderr" {
+				out += string(ev.Data)
+			}
+			if ev.Type == "exit" && ev.ExitCode != nil {
+				code = *ev.ExitCode
+			}
+		}
+		return code, out, nil
+	}
+
+	// Attempt 1: branch from FETCH_HEAD (current remote main) when available.
+	// Attempt 2: fall back to local HEAD if FETCH_HEAD checkout fails (e.g.
+	// the repair modified a file that the merged PR also changed — git refuses
+	// to overwrite local modifications).
+	exitCode, checkoutOut, execErr := -1, "", error(nil)
+	if fetchedHead {
+		exitCode, checkoutOut, execErr = gitCheckoutBranch("FETCH_HEAD")
+		if execErr != nil || exitCode != 0 {
+			log.Warnw("branch_create_fetch_head_checkout_failed_falling_back",
+				"exit_code", exitCode, "output", strings.TrimSpace(checkoutOut), "exec_err", execErr)
+			exitCode, checkoutOut, execErr = gitCheckoutBranch("")
+		} else {
+			log.Infow("branch_created_from_fetch_head")
+		}
+	} else {
+		exitCode, checkoutOut, execErr = gitCheckoutBranch("")
+	}
+
+	if execErr != nil {
+		return fmt.Errorf("create branch exec: %w", execErr)
+	}
+	if exitCode != 0 {
+		return fmt.Errorf("create branch failed (exit %d): %s", exitCode, strings.TrimSpace(checkoutOut))
+	}
+
+	// Confirm the branch ref actually exists before proceeding. This guards
+	// against any silent git failure that exits 0 but leaves HEAD unchanged.
+	verifyEvents, verifyErr := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+		Command:        []string{"git", "rev-parse", "--verify", branchName},
+		WorkingDir:     "",
+		TimeoutSeconds: 5,
+	})
+	if verifyErr != nil {
+		return fmt.Errorf("branch ref verify exec: %w", verifyErr)
+	}
+	var verifyExitCode int
+	for ev := range verifyEvents {
+		if ev.Type == "exit" && ev.ExitCode != nil {
+			verifyExitCode = *ev.ExitCode
+		}
+	}
+	if verifyExitCode != 0 {
+		return fmt.Errorf("branch %q does not exist locally after checkout (exit %d)", branchName, verifyExitCode)
+	}
+	log.Infow("branch_ref_verified", "branch", branchName)
 
 	// Persist branch record
 	_, err = o.repo.CreateBranch(ctx, req.WorkItemID, session.ID, branchName, req.BaseCommitSHA)
@@ -584,6 +702,37 @@ func (o *Orchestrator) stepCreateCommits(ctx context.Context, session *Publishin
 		logSHA = logSHA[:8]
 	}
 	log.Infow("commit_created", "sha", logSHA)
+
+	// Force the branch ref to point to the new commit — ONLY when the commit
+	// landed on detached HEAD (output contains "detached HEAD"). This happens
+	// because workspaces are provisioned via git clone --depth=1 + git checkout
+	// <SHA>, which leaves HEAD detached; if stepCreateBranch's `git checkout -B`
+	// ran successfully the commit will be on the branch (output "[branchName sha]")
+	// and no fix is needed. In that case `git branch -f` would fail with exit 128
+	// ("Cannot force update the current branch"). Only apply when detached.
+	if session.BranchName != nil && *session.BranchName != "" &&
+		strings.Contains(commitOutput, "detached HEAD") {
+
+		branchFixEvents, branchFixErr := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
+			Command:        []string{"git", "branch", "-f", *session.BranchName, "HEAD"},
+			WorkingDir:     "",
+			TimeoutSeconds: 10,
+		})
+		if branchFixErr != nil {
+			return fmt.Errorf("git branch -f after detached HEAD commit: %w", branchFixErr)
+		}
+		var branchFixCode int
+		for ev := range branchFixEvents {
+			if ev.Type == "exit" && ev.ExitCode != nil {
+				branchFixCode = *ev.ExitCode
+			}
+		}
+		if branchFixCode != 0 {
+			return fmt.Errorf("git branch -f failed (exit %d): could not update branch ref %s to HEAD", branchFixCode, *session.BranchName)
+		}
+		log.Infow("branch_ref_updated_after_detached_head_commit", "branch", *session.BranchName, "sha", logSHA)
+	}
+
 	return nil
 }
 
@@ -646,29 +795,34 @@ func (o *Orchestrator) stepCheckConflicts(ctx context.Context, session *Publishi
 			})
 			if mergeErr == nil {
 				var mergeOutput string
+				mergeFailed := false
 				for mev := range mergeEvents {
 					if mev.Type == "stdout" || mev.Type == "stderr" {
 						mergeOutput += string(mev.Data)
 					}
 					if mev.Type == "exit" && mev.ExitCode != nil && *mev.ExitCode != 0 {
-						// Conflicts detected — abort merge and fail
-						abortEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
-							Command:        []string{"git", "merge", "--abort"},
-							WorkingDir:     "",
-							TimeoutSeconds: 10,
-						})
-						for range abortEvents {
-						}
-						return fmt.Errorf("merge conflicts detected with base branch (%s has diverged): %s", req.DefaultBranch, strings.TrimSpace(mergeOutput))
+						mergeFailed = true
 					}
 				}
-				// No conflicts — abort the merge (we just wanted to check)
+				// Abort the merge attempt (we just wanted to check).
+				// Best-effort: the workspace may already be in a clean state.
 				abortEvents, _ := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
 					Command:        []string{"git", "merge", "--abort"},
 					WorkingDir:     "",
 					TimeoutSeconds: 10,
 				})
 				for range abortEvents {
+				}
+				if mergeFailed {
+					// Merge was attempted but failed. This can happen when:
+					//   - the base SHA is stale and histories are unrelated
+					//   - there are actual file conflicts
+					// In both cases, this is advisory only — the PR will show
+					// the divergence on GitHub. Don't block publishing.
+					log.Warnw("merge_check_failed_proceeding_anyway",
+						"merge_output", strings.TrimSpace(mergeOutput),
+						"note", "PR will show divergence but publishing continues",
+					)
 				}
 			}
 			log.Infow("base_branch_diverged_no_conflicts", "note", "PR will show divergence but no conflicts")
@@ -709,11 +863,17 @@ func (o *Orchestrator) stepPushBranch(ctx context.Context, session *PublishingSe
 	remoteURL := fmt.Sprintf("https://github.com/%s.git", req.RepoFullName)
 	var pushErr error
 	for attempt := 1; attempt <= PushMaxRetries; attempt++ {
+		// --force is safe here: forge/* branches are execution-scoped (unique per
+		// run) and owned entirely by Forge, so force only ever overwrites Forge's
+		// own earlier push of THIS SAME execution (e.g. a partial-retry that
+		// re-committed a new SHA). It never clobbers another run's branch because
+		// each run has its own name. This turns a non-fast-forward retry into a
+		// deterministic success instead of a "fetch first" failure.
 		events, execErr := o.workspaceManager.Exec(ctx, req.WorkspaceID, workspace.ExecRequest{
 			Command: []string{
 				"git",
 				"-c", "credential.helper=" + credHelperArg,
-				"push", remoteURL, branchName,
+				"push", "--force", remoteURL, branchName,
 			},
 			WorkingDir:     "",
 			TimeoutSeconds: 120,
@@ -786,13 +946,23 @@ func (o *Orchestrator) stepCreatePR(ctx context.Context, session *PublishingSess
 		branchName = *session.BranchName
 	}
 
-	// Check for existing PR (idempotent)
+	// Reuse an existing open PR ONLY when it points to THIS execution's branch.
+	//
+	// GetPRForWorkItem returns the latest PR for the work item regardless of
+	// execution, so for a follow-up / re-plan the latest PR belongs to a PREVIOUS
+	// execution and points at that run's branch. Reusing it would orphan the new
+	// branch we just pushed (its changes would have no PR) and leave the user
+	// looking at the old PR's stale diff. We reuse only on a genuine idempotent
+	// retry of the SAME execution — detected by the PR pointing at the current
+	// execution's branch record. Every new execution gets its own fresh PR.
+	currentBranch, _ := o.repo.GetBranchForWorkItem(ctx, req.WorkItemID)
 	existingPR, _ := o.repo.GetPRForWorkItem(ctx, req.WorkItemID)
-	if existingPR != nil && (existingPR.State == "open" || existingPR.State == "draft") {
-		// Update existing PR
+	if existingPR != nil && (existingPR.State == "open" || existingPR.State == "draft") &&
+		currentBranch != nil && existingPR.BranchID == currentBranch.ID {
+		// Same-execution retry → reuse the PR we already opened.
 		session.PRNumber = &existingPR.PRNumber
 		session.PRURL = &existingPR.URL
-		log.Infow("reusing_existing_pr", "pr_number", existingPR.PRNumber)
+		log.Infow("reusing_existing_pr", "pr_number", existingPR.PRNumber, "branch", currentBranch.BranchName)
 		return nil
 	}
 

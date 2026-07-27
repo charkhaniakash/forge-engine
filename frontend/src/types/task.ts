@@ -8,6 +8,7 @@ export type WorkItemStatus =
   | 'plan_approved'
   | 'executing'
   | 'done'
+  | 'no_changes'
   | 'failed'
   | 'cancelled'
 

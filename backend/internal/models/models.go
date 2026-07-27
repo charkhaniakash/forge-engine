@@ -164,6 +164,7 @@ const (
 	WorkItemStatusExecuting      = "executing" // Phase 7+
 	WorkItemStatusRepairing      = "repairing" // Phase 9+
 	WorkItemStatusDone           = "done"
+	WorkItemStatusNoChanges      = "no_changes" // execution made zero file changes — honest terminal state, NOT a success
 	WorkItemStatusFailed         = "failed"
 	WorkItemStatusCancelled      = "cancelled"
 )

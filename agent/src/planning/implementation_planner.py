@@ -225,35 +225,72 @@ class ImplementationPlanner:
         self,
         messages: list[dict],
         req: PlanningRequest,
+        max_retries: int = 6,
     ) -> str | None:
-        """Call the configured chat provider with JSON mode enabled."""
+        """Call the configured chat provider with JSON mode enabled.
+
+        Retries up to max_retries times on network/server errors (disconnects,
+        timeouts, rate limits) with exponential backoff — same strategy as the
+        repair graph's _call_llm_with_retry.
+        """
+        import asyncio
         from src.llm.chat_factory import get_chat_provider
 
         provider = get_chat_provider()
 
-        # Collect all tokens into a single string — plan generation is not
-        # streamed to the user token-by-token, only "thinking" events are.
-        content_parts: list[str] = []
-        try:
-            async for event in provider.stream(
-                messages=messages,
-                payload={},
-                request_id=req.request_id,
-                response_format={"type": "json_object"},
-            ):
-                if event.get("event") == "token":
-                    content_parts.append(event.get("text", ""))
-                elif event.get("event") in ("done", "error"):
-                    break
-        except Exception as exc:
-            logger.error(
-                "implementation_planner_llm_error",
-                error=str(exc),
-                work_item_id=req.work_item_id,
-            )
-            return None
+        for attempt in range(max_retries):
+            if attempt > 0:
+                delay = 2 ** (attempt - 1)  # 1, 2, 4, 8, 16, 32 s
+                logger.warning(
+                    "planning_llm_retry",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_seconds=delay,
+                    work_item_id=req.work_item_id,
+                )
+                await asyncio.sleep(delay)
 
-        return "".join(content_parts) if content_parts else None
+            content_parts: list[str] = []
+            had_error = False
+            try:
+                async for event in provider.stream(
+                    messages=messages,
+                    payload={},
+                    request_id=req.request_id,
+                    response_format={"type": "json_object"},
+                ):
+                    evt = event.get("event")
+                    if evt == "token":
+                        content_parts.append(event.get("text", ""))
+                    elif evt == "done":
+                        break
+                    elif evt == "error":
+                        logger.warning(
+                            "planning_llm_error_event",
+                            error=event.get("message", ""),
+                            attempt=attempt + 1,
+                            work_item_id=req.work_item_id,
+                        )
+                        had_error = True
+                        break
+            except Exception as exc:
+                logger.warning(
+                    "planning_llm_exception",
+                    error=str(exc),
+                    attempt=attempt + 1,
+                    work_item_id=req.work_item_id,
+                )
+                had_error = True
+
+            if not had_error and content_parts:
+                return "".join(content_parts)
+
+        logger.error(
+            "planning_llm_retries_exhausted",
+            max_retries=max_retries,
+            work_item_id=req.work_item_id,
+        )
+        return None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

@@ -9,36 +9,47 @@ from __future__ import annotations
 from src.config import settings
 from src.llm.chat_provider import ChatProvider
 
+# Module-level singleton — avoids recreating API clients (and their connection
+# pools) on every LLM call. Safe in asyncio (single-threaded event loop).
+_instance: ChatProvider | None = None
+
 
 def get_chat_provider() -> ChatProvider:
-    """Return the ChatProvider instance for the configured CHAT__PROVIDER."""
+    """Return the shared ChatProvider instance for the configured CHAT__PROVIDER."""
+    global _instance
+    if _instance is not None:
+        return _instance
+
     provider = settings.chat.provider.lower()
 
     if provider == "openai":
         from src.llm.openai_chat import OpenAIChatProvider
-        return OpenAIChatProvider()
+        _instance = OpenAIChatProvider()
 
-    if provider == "gemini":
+    elif provider == "gemini":
         from src.llm.gemini_chat import GeminiChatProvider
-        return GeminiChatProvider()
+        _instance = GeminiChatProvider()
 
-    if provider == "anthropic":
+    elif provider == "anthropic":
         from src.llm.anthropic_chat import AnthropicChatProvider
-        return AnthropicChatProvider()
+        _instance = AnthropicChatProvider()
 
-    if provider == "ollama":
+    elif provider == "ollama":
         from src.llm.ollama_chat import OllamaChatProvider
-        return OllamaChatProvider()
+        _instance = OllamaChatProvider()
 
-    if provider == "groq":
+    elif provider == "groq":
         from src.llm.groq_chat import GroqChatProvider
-        return GroqChatProvider()
+        _instance = GroqChatProvider()
 
-    if provider == "openrouter":
+    elif provider == "openrouter":
         from src.llm.openrouter_chat import OpenRouterChatProvider
-        return OpenRouterChatProvider()
+        _instance = OpenRouterChatProvider()
 
-    raise ValueError(
-        f"Unknown CHAT__PROVIDER '{provider}'. "
-        "Supported values: openai, gemini, anthropic, ollama, groq, openrouter"
-    )
+    else:
+        raise ValueError(
+            f"Unknown CHAT__PROVIDER '{provider}'. "
+            "Supported values: openai, gemini, anthropic, ollama, groq, openrouter"
+        )
+
+    return _instance

@@ -28,6 +28,7 @@ class ChatProvider(Protocol):
         payload: dict,
         request_id: str,
         response_format: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[dict]:
         """Yield NDJSON-compatible event dicts.
 

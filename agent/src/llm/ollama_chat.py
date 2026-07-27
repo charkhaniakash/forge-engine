@@ -74,13 +74,15 @@ class OllamaChatProvider:
         payload: dict,
         request_id: str,
         response_format: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[dict]:
         seq = 0
         total_tokens = 0
+        effective_model = model or self._model
 
         # Build kwargs — Ollama uses the same OpenAI wire format.
         kwargs: dict[str, Any] = dict(
-            model=self._model,
+            model=effective_model,
             messages=self._maybe_inject_json_prompt(messages, response_format),
             stream=True,
         )
@@ -112,7 +114,7 @@ class OllamaChatProvider:
                 "ollama_chat_error",
                 error=str(exc),
                 request_id=request_id,
-                model=self._model,
+                model=effective_model,
             )
             yield {
                 "v": 1, "event": "error", "seq": seq,
@@ -122,7 +124,7 @@ class OllamaChatProvider:
 
         done: dict = {
             "v": 1, "event": "done", "seq": seq,
-            "request_id": request_id, "model": self._model,
+            "request_id": request_id, "model": effective_model,
             "token_count": total_tokens,
         }
         done.update(payload)

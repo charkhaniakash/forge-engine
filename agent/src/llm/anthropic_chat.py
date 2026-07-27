@@ -33,9 +33,11 @@ class AnthropicChatProvider:
         payload: dict,
         request_id: str,
         response_format: dict[str, Any] | None = None,  # ignored — use system prompt
+        model: str | None = None,
     ) -> AsyncIterator[dict]:
         seq = 0
         total_tokens = 0
+        effective_model = model or self._model
 
         system_parts = [m["content"] for m in messages if m.get("role") == "system"]
         chat_messages = [m for m in messages if m.get("role") != "system"]
@@ -43,7 +45,7 @@ class AnthropicChatProvider:
 
         try:
             async with self._client.messages.stream(
-                model=self._model,
+                model=effective_model,
                 max_tokens=4096,
                 system=system_prompt,
                 messages=chat_messages,
@@ -69,7 +71,7 @@ class AnthropicChatProvider:
 
         done: dict = {
             "v": 1, "event": "done", "seq": seq,
-            "request_id": request_id, "model": self._model,
+            "request_id": request_id, "model": effective_model,
             "token_count": total_tokens,
         }
         done.update(payload)

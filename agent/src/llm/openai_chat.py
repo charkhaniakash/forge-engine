@@ -32,12 +32,14 @@ class OpenAIChatProvider:
         payload: dict,
         request_id: str,
         response_format: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[dict]:
         seq = 0
         total_tokens = 0
+        effective_model = model or self._model
 
         kwargs: dict[str, Any] = dict(
-            model=self._model,
+            model=effective_model,
             messages=messages,
             stream=True,
             stream_options={"include_usage": True},
@@ -71,7 +73,7 @@ class OpenAIChatProvider:
 
         done: dict = {
             "v": 1, "event": "done", "seq": seq,
-            "request_id": request_id, "model": self._model,
+            "request_id": request_id, "model": effective_model,
             "token_count": total_tokens,
         }
         done.update(payload)

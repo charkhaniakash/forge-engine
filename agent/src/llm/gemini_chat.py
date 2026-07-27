@@ -37,9 +37,11 @@ class GeminiChatProvider:
         payload: dict,
         request_id: str,
         response_format: dict[str, Any] | None = None,
+        model: str | None = None,
     ) -> AsyncIterator[dict]:
         seq = 0
         total_tokens = 0
+        effective_model = model or self._model
 
         gemini_contents = _to_gemini_contents(messages)
 
@@ -53,7 +55,7 @@ class GeminiChatProvider:
         for attempt in range(self._max_retries):
             try:
                 async for chunk in await self._client.aio.models.generate_content_stream(
-                    model=self._model,
+                    model=effective_model,
                     contents=gemini_contents,
                     config=genai_types.GenerateContentConfig(**gen_config) if gen_config else None,
                 ):
@@ -101,7 +103,7 @@ class GeminiChatProvider:
 
         done: dict = {
             "v": 1, "event": "done", "seq": seq,
-            "request_id": request_id, "model": self._model,
+            "request_id": request_id, "model": effective_model,
             "token_count": total_tokens,
         }
         done.update(payload)

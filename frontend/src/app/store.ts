@@ -1,11 +1,13 @@
 import { configureStore } from '@reduxjs/toolkit'
 import { baseApi } from '@/services/api/baseApi'
 import { websocketMiddleware } from '@/store/middleware/websocketMiddleware'
+import { unifiedStreamBridgeMiddleware } from '@/store/middleware/unifiedStreamBridgeMiddleware'
 import authReducer from '@/store/slices/authSlice'
 import uiReducer from '@/store/slices/uiSlice'
 import notificationReducer from '@/store/slices/notificationSlice'
 import websocketReducer from '@/store/slices/websocketSlice'
 import streamReducer from '@/store/slices/streamSlice'
+import unifiedStreamReducer from '@/store/slices/unifiedStreamSlice'
 import workspaceEditorReducer from '@/store/slices/workspaceEditorSlice'
 import workspaceTerminalReducer from '@/store/slices/workspaceTerminalSlice'
 import workspaceActivityReducer from '@/store/slices/workspaceActivitySlice'
@@ -31,12 +33,17 @@ export const store = configureStore({
     notifications: notificationReducer,
     websocket: websocketReducer,
     stream: streamReducer,
+    unifiedStream: unifiedStreamReducer,
     workspaceEditor: workspaceEditorReducer,
     workspaceTerminal: workspaceTerminalReducer,
     workspaceActivity: workspaceActivityReducer,
   },
   middleware: (getDefaultMiddleware) =>
-    getDefaultMiddleware().concat(baseApi.middleware, websocketMiddleware),
+    getDefaultMiddleware().concat(
+      baseApi.middleware,
+      websocketMiddleware,
+      unifiedStreamBridgeMiddleware,
+    ),
 })
 
 export type RootState = ReturnType<typeof store.getState>

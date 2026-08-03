@@ -7,6 +7,7 @@ import {
   unifiedStreamEnvelopeReceived,
   unifiedStreamConnectionStateChanged,
 } from '@/store/slices/unifiedStreamSlice'
+import { updateSessionSeq } from '@/store/slices/reconnectSessionSlice'
 
 /**
  * Single-use hook to initialize and manage the unified WebSocket connection
@@ -28,12 +29,40 @@ export function useUnifiedStream(
   workspaceId: string | undefined,
   channels: SocketChannel[] = ['execution', 'validation', 'repair', 'publishing'],
   enabled = true,
+  sessionId?: string,
 ): void {
   const dispatch = useAppDispatch()
   const { token } = useAuth()
   const clientRef = useRef<UnifiedStreamClient | null>(null)
 
   const connectionState = useAppSelector((s) => s.unifiedStream?.connectionState ?? 'idle')
+  const lastSeqFromSession = useAppSelector(
+    (s) => workspaceId ? s.reconnectSession.sessions[workspaceId]?.lastSeq : undefined,
+  )
+
+  // Track connection changes to trigger gap-fill reconnect on recovery
+  useEffect(() => {
+    if (connectionState === 'open' && clientRef.current && sessionId) {
+      // On reconnect, request gap-fill instead of full replay
+      clientRef.current.requestReconnect(sessionId)
+    }
+  }, [connectionState, sessionId])
+
+  // Periodically save lastSeq to Redux for persistence across page reloads
+  useEffect(() => {
+    if (!clientRef.current || !workspaceId) return
+
+    const interval = setInterval(() => {
+      const lastSeq = clientRef.current
+        ? Object.fromEntries(
+            channels.map((ch) => [ch, clientRef.current!.getLastSeq(ch)]),
+          )
+        : {}
+      dispatch(updateSessionSeq({ workspaceId, sessionId: sessionId || '', lastSeq }))
+    }, 5000) // Save every 5s
+
+    return () => clearInterval(interval)
+  }, [workspaceId, sessionId, dispatch, channels])
 
   useEffect(() => {
     if (!enabled || !workspaceId || !token) {
@@ -73,20 +102,4 @@ export function useUnifiedStream(
       // the lifetime of the workspace session.
     }
   }, [workspaceId, token, enabled, dispatch, channels])
-}
-
-/**
- * Helper hook to request gap-fill reconnect after session recovery.
- * Call this when you detect a reconnect and want to fill gaps instead of
- * replaying the full history.
- */
-export function useGapFillReconnect(sessionId: string | undefined): void {
-  const clientRef = useRef<UnifiedStreamClient | null>(null)
-
-  useEffect(() => {
-    if (!sessionId) return
-    // This would normally come from useUnifiedStream's clientRef, but since
-    // we can't directly access it, this is a placeholder for direct client access
-    // In production, consider storing the client in Redux context or a provider.
-  }, [sessionId])
 }

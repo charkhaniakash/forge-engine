@@ -3,6 +3,7 @@ import { baseApi } from '@/services/api/baseApi'
 import { websocketMiddleware } from '@/store/middleware/websocketMiddleware'
 import { unifiedStreamBridgeMiddleware } from '@/store/middleware/unifiedStreamBridgeMiddleware'
 import { reconnectPersistenceMiddleware } from '@/store/middleware/reconnectPersistenceMiddleware'
+import { activityTrackingMiddleware } from '@/store/middleware/activityTrackingMiddleware'
 import authReducer from '@/store/slices/authSlice'
 import uiReducer from '@/store/slices/uiSlice'
 import notificationReducer from '@/store/slices/notificationSlice'
@@ -49,6 +50,7 @@ export const store = configureStore({
       websocketMiddleware,
       unifiedStreamBridgeMiddleware,
       reconnectPersistenceMiddleware,
+      activityTrackingMiddleware,
     ),
 })
 

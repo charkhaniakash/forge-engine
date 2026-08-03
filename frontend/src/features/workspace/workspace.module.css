@@ -48,6 +48,7 @@
   color: var(--text-secondary);
   white-space: nowrap;
   user-select: none;
+  transition: background-color var(--duration-fast) var(--ease);
 }
 .treeRow:hover {
   background: var(--surface-2);
@@ -55,6 +56,9 @@
 .treeRowActive {
   background: var(--accent-subtle);
   color: var(--text-primary);
+}
+.fileModified {
+  background: rgba(59, 130, 246, 0.08);
 }
 .chevron {
   flex: 0 0 auto;
@@ -206,4 +210,248 @@
   background: #1e1e1e;
   padding: var(--space-2);
   box-sizing: border-box;
+}
+
+/* ── Status Bar ────────────────────────────────────────────────────────────── */
+
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  height: 32px;
+  background: var(--surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+  color: var(--text-secondary);
+}
+
+.statusGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.statusDivider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-subtle);
+}
+
+.statusLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
+}
+
+.connectionDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  animation: pulse 2s infinite;
+}
+
+.timestamp {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes fileModifiedGlow {
+  0% {
+    background-color: rgba(59, 130, 246, 0.3);
+    box-shadow: 0 0 8px rgba(59, 130, 246, 0.5);
+  }
+  100% {
+    background-color: rgba(59, 130, 246, 0.08);
+    box-shadow: none;
+  }
+}
+
+/* ── Activity Panel ────────────────────────────────────────────────────────── */
+
+.activityPanel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.activityList {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-2);
+}
+
+.activityPanelEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: var(--space-3);
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.activityPanelEmpty p {
+  margin: 0;
+  font-weight: var(--font-semibold);
+  color: var(--text-secondary);
+}
+
+.activityPanelEmpty span {
+  font-size: var(--text-xs);
+}
+
+.activityRow {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  margin-bottom: var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  transition: all var(--duration-fast) var(--ease);
+  font-size: var(--text-sm);
+}
+
+.activityRowActive {
+  background: var(--accent-subtle);
+  box-shadow: 0 0 0 1px var(--accent);
+  animation: slideIn var(--duration-normal) var(--ease);
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.activityIcon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+.activityContent {
+  flex: 1;
+  min-width: 0;
+}
+
+.activityLabel {
+  color: var(--text-primary);
+  font-weight: var(--font-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.activityDetails {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activityTime {
+  flex: 0 0 auto;
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+/* ── Live Preview ──────────────────────────────────────────────────────────── */
+
+.previewContainer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.previewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  flex: 0 0 auto;
+}
+
+.previewTitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: var(--font-semibold);
+  font-size: var(--text-sm);
+  color: var(--text-primary);
+}
+
+.previewStatus {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+}
+
+.statusDot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  animation: pulse 1.5s infinite;
+}
+
+.previewIframe {
+  flex: 1;
+  border: none;
+  width: 100%;
+}
+
+.previewLoading,
+.previewError,
+.previewEmpty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  color: var(--text-tertiary);
+}
+
+.previewLoading p,
+.previewError p,
+.previewEmpty p {
+  margin: 0;
+  color: var(--text-primary);
+  font-weight: var(--font-semibold);
+}
+
+.previewLoading span,
+.previewError span,
+.previewEmpty span {
+  font-size: var(--text-xs);
 }

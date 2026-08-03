@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
+import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge, ConnectionStatus } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
+import { useOptimisticMutation } from '@/hooks/useOptimisticMutation'
 import { MissionHero } from '@/features/task-workspace/MissionHero'
 import { useRepairStream } from '@/features/task-workspace/useRepairStream'
 import {
@@ -78,19 +79,18 @@ export function TaskWorkspace() {
   const toast = useToast()
 
   // ── Data ────────────────────────────────────────────────────────────────
-  // Poll like the sibling snapshots: the WS 'plan_ready' event alone can race the
-  // DB write / late socket connect, leaving task.status stale — which the auto-run
-  // gate depends on. Polling guarantees the frontend observes plan_ready promptly.
+  // WebSocket events now drive all updates. Event-based refetch on terminal events
+  // ensures fresh data without continuous polling overhead.
   const { data: taskData, isLoading, refetch: refetchTask } = useGetTaskQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId },
   )
   const task = taskData?.task
   const plan = taskData?.plan
 
   const { data: execSnap, refetch: refetchExec } = useGetExecutionQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId },
   )
   const execution = execSnap?.execution
   const taskExecutionId = execution?.id ?? ''
@@ -103,26 +103,25 @@ export function TaskWorkspace() {
 
   const { data: valSnap, refetch: refetchVal } = useGetValidationQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId },
   )
   const valRun = valSnap?.run
   const valLiveState = valRun?.status === 'running' || valRun?.status === 'pending'
 
   const { data: repairSession, refetch: refetchRepair } = useGetRepairSessionByTaskQuery(taskExecutionId, {
     skip: !taskExecutionId,
-    pollingInterval: 3000,
   })
 
   const { data: workspace, refetch: refetchWorkspace } = useGetWorkspaceQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId },
   )
 
   // Phase 10 — publishing. Session id bootstraps the WebSocket; live progress
-  // comes over usePublishingStream, not the poll.
+  // comes over usePublishingStream, not polling.
   const { data: publishData, refetch: refetchPublish } = useGetPublishSessionQuery(
     { repoId, taskId },
-    { skip: !repoId || !taskId, pollingInterval: 3000 },
+    { skip: !repoId || !taskId },
   )
   const publishSession = publishData?.session ?? null
   const publishTerminal =
@@ -757,6 +756,7 @@ export function TaskWorkspace() {
         <span className={styles.headerRepoName}>{repoId ? `repo-${repoId.slice(0, 6)}` : 'No repo'}</span>
       </div>
       <div className={styles.headerRight}>
+        <ConnectionStatus />
         {live && (
           <span className={styles.headerLive}>
             <span className={styles.liveDot}><span /></span>

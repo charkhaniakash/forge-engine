@@ -53,3 +53,5 @@ export { DiffViewer } from './DiffViewer/DiffViewer'
 export { CodeViewer } from './CodeViewer/CodeViewer'
 export { LogViewer } from './LogViewer/LogViewer'
 export type { LogLine } from './LogViewer/LogViewer'
+
+export { ConnectionStatus } from './ConnectionStatus/ConnectionStatus'

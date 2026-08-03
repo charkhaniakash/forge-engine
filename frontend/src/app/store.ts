@@ -10,6 +10,7 @@ import websocketReducer from '@/store/slices/websocketSlice'
 import streamReducer from '@/store/slices/streamSlice'
 import unifiedStreamReducer from '@/store/slices/unifiedStreamSlice'
 import reconnectSessionReducer from '@/store/slices/reconnectSessionSlice'
+import optimisticReducer from '@/store/slices/optimisticSlice'
 import workspaceEditorReducer from '@/store/slices/workspaceEditorSlice'
 import workspaceTerminalReducer from '@/store/slices/workspaceTerminalSlice'
 import workspaceActivityReducer from '@/store/slices/workspaceActivitySlice'
@@ -37,6 +38,7 @@ export const store = configureStore({
     stream: streamReducer,
     unifiedStream: unifiedStreamReducer,
     reconnectSession: reconnectSessionReducer,
+    optimistic: optimisticReducer,
     workspaceEditor: workspaceEditorReducer,
     workspaceTerminal: workspaceTerminalReducer,
     workspaceActivity: workspaceActivityReducer,

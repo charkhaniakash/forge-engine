@@ -292,6 +292,13 @@ func (o *ValidationOrchestrator) RunWithOpts(
 		pfCancel()
 	}
 
+	// 4b. If the engine plan uses a package manager that isn't installed in the
+	// sandbox (e.g. bun.lockb exists → plan says "bun install" → but the
+	// sandbox only ships npm), rewrite the plan to fall back to npm.
+	if usingEngine {
+		_patchPlanForMissingPM(ctx, &enginePlan, validationContainerID, o.wsManager, log)
+	}
+
 	// 5. Run stages in sequence inside the validation container.
 	buildPassed := true
 	installPassed := true          // track install separately to skip downstream stages
@@ -958,6 +965,89 @@ func _primaryToolForStack(language string) string {
 		return "python3"
 	default:
 		return ""
+	}
+}
+
+// _patchPlanForMissingPM checks whether the package-manager binary referenced
+// in the engine plan's install stage is actually available inside the validation
+// container. If not (e.g. bun.lockb exists but the sandbox only has npm), it
+// rewrites every stage command that uses that PM to use npm instead.
+func _patchPlanForMissingPM(
+	ctx context.Context,
+	plan *engine.ValidationPlan,
+	containerID string,
+	wsManager *workspace.WorkspaceManager,
+	log *zap.SugaredLogger,
+) {
+	for i := range plan.Units {
+		// Find the install stage to determine which PM binary the plan chose.
+		var pmBinary string
+		for _, s := range plan.Units[i].Stages {
+			if s.Capability == engine.CapInstall && len(s.Command) > 0 {
+				pmBinary = s.Command[0]
+				break
+			}
+		}
+		if pmBinary == "" || pmBinary == "npm" || pmBinary == "npx" {
+			continue
+		}
+
+		// Check if the detected PM binary exists in the container.
+		whichCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		ch, err := wsManager.ExecInValidationContainer(whichCtx, containerID, workspace.ExecRequest{
+			Command:        []string{"which", pmBinary},
+			TimeoutSeconds: 5,
+		})
+		exitCode := -1
+		if err == nil {
+			for ev := range ch {
+				if ev.Type == "exit" && ev.ExitCode != nil {
+					exitCode = *ev.ExitCode
+				}
+			}
+		}
+		cancel()
+
+		if exitCode == 0 {
+			continue
+		}
+
+		log.Warnw("pm_binary_not_available_rewriting_to_npm",
+			"missing_binary", pmBinary,
+			"unit", plan.Units[i].Unit.Path,
+		)
+
+		for j := range plan.Units[i].Stages {
+			s := &plan.Units[i].Stages[j]
+			if len(s.Command) == 0 || s.Command[0] != pmBinary {
+				continue
+			}
+			original := strings.Join(s.Command, " ")
+			s.Command = _rewriteCommandToNpm(s.Command)
+			s.Reason = fmt.Sprintf("%s (rewritten: %s not in container, using npm)", s.Reason, pmBinary)
+			log.Infow("pm_command_rewritten",
+				"stage", string(s.Capability),
+				"original", original,
+				"rewritten", strings.Join(s.Command, " "),
+			)
+		}
+	}
+}
+
+// _rewriteCommandToNpm replaces a non-npm package-manager command with its npm
+// equivalent. Handles "X install" → "npm install --no-audit --no-fund" and
+// "X run <script>" → "npm run <script>".
+func _rewriteCommandToNpm(cmd []string) []string {
+	if len(cmd) < 2 {
+		return append([]string{"npm"}, cmd[1:]...)
+	}
+	switch cmd[1] {
+	case "install":
+		return []string{"npm", "install", "--no-audit", "--no-fund"}
+	case "run":
+		return append([]string{"npm", "run"}, cmd[2:]...)
+	default:
+		return append([]string{"npm"}, cmd[1:]...)
 	}
 }
 

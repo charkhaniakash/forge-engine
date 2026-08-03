@@ -378,6 +378,7 @@ func (r *WorkItemRepository) Cancel(ctx context.Context, id, orgID string) error
 		models.WorkItemStatusCancelled,
 		models.WorkItemStatusDone,
 		models.WorkItemStatusFailed,
+		models.WorkItemStatusCancelled,
 		models.WorkItemStatusNoChanges)
 	if err != nil {
 		return err

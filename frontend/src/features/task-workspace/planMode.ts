@@ -13,9 +13,11 @@ const PLAN_MODE_KEY = 'forge_plan_mode'
 
 export function loadPlanMode(): boolean {
   try {
-    return localStorage.getItem(PLAN_MODE_KEY) !== 'off'
+    const val = localStorage.getItem(PLAN_MODE_KEY)
+    if (val === null) return false
+    return val !== 'off'
   } catch {
-    return true
+    return false
   }
 }
 

@@ -61,10 +61,15 @@ function Row({ index, style, rows, expanded, activePath, decorations, onToggle, 
   const active = node.path === activePath
   const decor = !isDir ? decorations.get(node.path) : undefined
   const decorCls = decor ? DECOR_CLASS[decor] : ''
+  
   return (
     <div
-      style={{ ...style, paddingLeft: `calc(${depth} * var(--space-4) + var(--space-2))` }}
-      className={`${styles.treeRow} ${active ? styles.treeRowActive : ''}`}
+      style={{
+        ...style,
+        paddingLeft: `calc(${depth} * var(--space-4) + var(--space-2))`,
+        animation: decor && decor !== 'staged' ? 'fileModifiedGlow 0.5s ease-out' : undefined,
+      }}
+      className={`${styles.treeRow} ${active ? styles.treeRowActive : ''} ${decor ? styles.fileModified : ''}`}
       onClick={() => (isDir ? onToggle(node.path) : onOpen(node))}
       title={node.path}
     >

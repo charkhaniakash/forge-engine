@@ -3,6 +3,10 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge, ConnectionStatus } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
 import { useOptimisticMutation } from '@/hooks/useOptimisticMutation'
+import { AIActivityPanel } from '@/features/workspace/AIActivityPanel'
+import { TaskStatusBar } from '@/features/workspace/TaskStatusBar'
+import { LivePreview } from '@/features/workspace/LivePreview'
+import { FileExplorer } from '@/features/workspace/FileExplorer'
 import { MissionHero } from '@/features/task-workspace/MissionHero'
 import { useRepairStream } from '@/features/task-workspace/useRepairStream'
 import {
@@ -919,28 +923,60 @@ export function TaskWorkspace() {
   )
 
   return (
-    <>
-      <MissionThread
-        header={header}
-        hero={hero}
-        entries={conversation.filter(
-          (e) => e.type !== 'intent' && !(taskAutoRun && e.type === 'plan'),
-        )}
-        live={live}
-        planActions={planActions}
-        actionRow={actionRow}
-        trailingMessages={(() => {
-          // Only show optimistic sentRefinements that haven't been persisted yet
-          // Server-persisted messages now render inline via buildConversation
-          const serverMsgs = (messagesData?.messages ?? [])
-            .filter((m) => m.role === 'user' && m.turn_number > 1)
-            .map((m) => m.content)
-          const serverSet = new Set(serverMsgs)
-          const pending = sentRefinements.filter((r) => !serverSet.has(r))
-          return pending
-        })()}
-        composer={composer}
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100%' }}>
+      {/* Status Bar - Always visible at top */}
+      <TaskStatusBar />
+
+      {/* Main Content Area */}
+      <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: '1px', background: 'var(--border-subtle)' }}>
+        {/* Left: Activity Panel + File Explorer */}
+        <div style={{ display: 'flex', flexDirection: 'column', width: '280px', minHeight: 0, background: 'var(--surface-base)' }}>
+          {/* Activity Feed */}
+          <div style={{ flex: '1 1 40%', minHeight: 0, borderBottom: '1px solid var(--border-subtle)' }}>
+            <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
+              AI Activity
+            </div>
+            <AIActivityPanel />
+          </div>
+
+          {/* File Explorer */}
+          <div style={{ flex: '1 1 60%', minHeight: 0 }}>
+            <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
+              Files
+            </div>
+            <FileExplorer />
+          </div>
+        </div>
+
+        {/* Center: Main Mission Thread */}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+          <MissionThread
+            header={header}
+            hero={hero}
+            entries={conversation.filter(
+              (e) => e.type !== 'intent' && !(taskAutoRun && e.type === 'plan'),
+            )}
+            live={live}
+            planActions={planActions}
+            actionRow={actionRow}
+            trailingMessages={(() => {
+              const serverMsgs = (messagesData?.messages ?? [])
+                .filter((m) => m.role === 'user' && m.turn_number > 1)
+                .map((m) => m.content)
+              const serverSet = new Set(serverMsgs)
+              const pending = sentRefinements.filter((r) => !serverSet.has(r))
+              return pending
+            })()}
+            composer={composer}
+          />
+        </div>
+
+        {/* Right: Live Preview */}
+        <div style={{ width: '400px', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <LivePreview />
+        </div>
+      </div>
+
       <ConfirmDialog
         open={replanConfirmOpen}
         danger
@@ -950,7 +986,7 @@ export function TaskWorkspace() {
         loading={replanning}
         message={
           <>
-            This starts a completely fresh cycle. The current run’s work — the plan,
+            This starts a completely fresh cycle. The current run's work — the plan,
             code changes, validation results, and any pull request created for it —
             will be discarded and <strong>cannot be recovered</strong>.
           </>
@@ -958,7 +994,7 @@ export function TaskWorkspace() {
         onConfirm={handleReplan}
         onCancel={() => setReplanConfirmOpen(false)}
       />
-    </>
+    </div>
   )
 }
 

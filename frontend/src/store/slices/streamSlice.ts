@@ -164,8 +164,56 @@ const streamSlice = createSlice({
     executionStreamCleared(state, action: PayloadAction<string>) {
       delete state.execution[action.payload]
     },
+    appendExecutionEvent(
+      state,
+      action: PayloadAction<{ sessionId: string; event: ExecutionSocketEvent }>,
+    ) {
+      const { sessionId, event } = action.payload
+      const bucket =
+        state.execution[sessionId] ??
+        (state.execution[sessionId] = { events: [], complete: false, lastSeq: 0 })
+      // Seq-based dedup: reject events already processed (replay + live overlap)
+      const seq = typeof event.seq === 'number' ? event.seq : bucket.events.length
+      if (typeof event.seq === 'number' && event.seq <= bucket.lastSeq) {
+        return
+      }
+      bucket.events.push({
+        seq,
+        kind: event.event,
+        label: labelExecutionEvent(event),
+        raw: event,
+        receivedAt: Date.now(),
+      })
+      if (seq > bucket.lastSeq) bucket.lastSeq = seq
+      if (bucket.events.length > 500) bucket.events.shift()
+      if (TERMINAL_EXEC.has(event.event)) bucket.complete = true
+    },
     qaStreamCleared(state, action: PayloadAction<string>) {
       delete state.qa[action.payload]
+    },
+    appendValidationEvent(
+      state,
+      action: PayloadAction<{ sessionId: string; event: ValidationSocketEvent }>,
+    ) {
+      const { sessionId, event } = action.payload
+      const bucket =
+        state.validation[sessionId] ??
+        (state.validation[sessionId] = { events: [], complete: false, lastSeq: 0 })
+      // Seq-based dedup: reject events already processed (replay + live overlap)
+      const seq = typeof event.seq === 'number' ? event.seq : bucket.events.length
+      if (typeof event.seq === 'number' && event.seq <= bucket.lastSeq) {
+        return
+      }
+      bucket.events.push({
+        seq,
+        kind: event.event,
+        label: labelValidationEvent(event),
+        raw: event,
+        receivedAt: Date.now(),
+      })
+      if (seq > bucket.lastSeq) bucket.lastSeq = seq
+      if (bucket.events.length > 500) bucket.events.shift()
+      if (TERMINAL_VALIDATION.has(event.event)) bucket.complete = true
     },
     appendRepairEvent(state, action: PayloadAction<{ sessionId: string; event: RepairSocketEvent }>) {
       const { sessionId, event } = action.payload
@@ -298,6 +346,8 @@ const streamSlice = createSlice({
 
 export const {
   executionStreamCleared,
+  appendExecutionEvent,
+  appendValidationEvent,
   qaStreamCleared,
   appendRepairEvent,
   clearRepairEvents,

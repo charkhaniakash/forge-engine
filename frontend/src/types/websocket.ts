@@ -4,7 +4,7 @@ import type { Citation } from './qa'
  * Channel kinds the WebSocket layer can subscribe to. Each maps to a backend
  * streaming endpoint under /v1/... and carries a discriminated event payload.
  */
-export type SocketChannel = 'qa' | 'planning' | 'execution' | 'validation' | 'repair'
+export type SocketChannel = 'qa' | 'planning' | 'execution' | 'validation' | 'repair' | 'publishing'
 
 export type ConnectionState =
   | 'idle'
@@ -42,6 +42,9 @@ export interface ExecutionSocketEvent {
   message?: string
   summary?: string
   seq?: number
+  ts?: number
+  id?: string
+  phase?: string
   [key: string]: unknown
 }
 
@@ -56,4 +59,35 @@ export interface SocketMessage {
   /** Resource id (session id, task id) the event belongs to. */
   resourceId: string
   event: ForgeSocketEvent
+}
+
+/**
+ * Unified stream envelope: wrapper that includes full event metadata
+ * (id, seq, ts, phase) as sent by the backend.
+ */
+export interface UnifiedStreamEnvelope {
+  id: string                    // Event UUID
+  ch: SocketChannel             // Channel: execution|validation|repair|publishing
+  ev: string                    // Event type
+  seq: number                   // Monotonic sequence counter
+  ts: number                    // Unix milliseconds
+  phase: string                 // Phase: executing|validation|repair|publishing
+  payload?: Record<string, unknown>
+}
+
+/**
+ * Subscription request sent to unified stream WebSocket.
+ */
+export interface SubscriptionRequest {
+  type: 'subscribe'
+  channels: SocketChannel[]
+}
+
+/**
+ * Reconnect request sent to unified stream WebSocket to get gap-fill events.
+ */
+export interface ReconnectRequest {
+  type: 'reconnect'
+  session_id: string
+  last_seq: Record<SocketChannel, number>
 }

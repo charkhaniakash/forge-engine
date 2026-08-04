@@ -16,6 +16,7 @@ import (
 type WorkspaceConfig struct {
 	WorkspaceID    string // DB UUID — used to name the container
 	Image          string
+	Network        string // Docker network to attach to ("bridge" default, or backend's network)
 	CPULimit       string // e.g. "1.0" (cores)
 	MemoryLimitMB  int
 	PIDLimit       int

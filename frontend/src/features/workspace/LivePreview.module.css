@@ -1,0 +1,276 @@
+/* LivePreview.module.css — embedded live-preview panel */
+
+@keyframes lp-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+@keyframes lp-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Root ─────────────────────────────────────────────────────────────────── */
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--surface-base);
+  overflow: hidden;
+}
+.root[data-collapsed='true'] {
+  /* When collapsed the header still shows; body is gone */
+}
+
+/* ── Header ───────────────────────────────────────────────────────────────── */
+.header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  height: 36px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border-default);
+  flex: 0 0 auto;
+  overflow: hidden;
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+.headerCenter {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: var(--font-semibold);
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* ── Address bar ──────────────────────────────────────────────────────────── */
+.urlChip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--surface-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 260px;
+  text-align: left;
+  transition: color var(--duration-fast) var(--ease),
+              border-color var(--duration-fast) var(--ease);
+}
+.urlChip:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--border-default);
+}
+.urlChip:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.addressForm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.addressInput {
+  flex: 1 1 auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  padding: 2px 8px;
+  outline: none;
+  min-width: 0;
+}
+.addressInput::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--duration-fast) var(--ease),
+              color var(--duration-fast) var(--ease);
+}
+.iconBtn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text-primary);
+}
+.iconBtn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.startBtn {
+  color: var(--accent);
+}
+.startBtn:hover:not(:disabled) {
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
+/* ── Status chip ──────────────────────────────────────────────────────────── */
+.statusChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  white-space: nowrap;
+  padding: 0 var(--space-1);
+}
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+/* ── Body ─────────────────────────────────────────────────────────────────── */
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  background: #fff;
+  overflow: hidden;
+}
+
+/* ── Iframe ───────────────────────────────────────────────────────────────── */
+.iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #fff;
+}
+
+/* ── Compiling overlay (sits above iframe, semi-transparent) ──────────────── */
+.overlay {
+  position: absolute;
+  bottom: var(--space-3);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: rgba(10, 10, 15, 0.85);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-medium);
+  z-index: 10;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* ── State screens (idle / loading / error / stopped) ─────────────────────── */
+.stateScreen {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  background: var(--surface-base);
+  padding: var(--space-6);
+  z-index: 5;
+  text-align: center;
+}
+.stateIcon {
+  color: var(--text-tertiary);
+  opacity: 0.7;
+}
+.stateTitle {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  color: var(--text-primary);
+}
+.stateSubtitle {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  max-width: 240px;
+  line-height: 1.5;
+}
+
+/* ── CTA buttons ──────────────────────────────────────────────────────────── */
+.startFullBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 8px 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-md);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-size: var(--text-sm);
+  font-weight: var(--font-semibold);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease),
+              border-color var(--duration-fast) var(--ease);
+}
+.startFullBtn:hover {
+  background: rgba(0, 255, 102, 0.12);
+  border-color: var(--accent);
+}
+
+.retryBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease);
+}
+.retryBtn:hover {
+  background: var(--surface-3);
+  color: var(--text-primary);
+}

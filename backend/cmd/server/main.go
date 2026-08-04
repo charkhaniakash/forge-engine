@@ -316,6 +316,9 @@ func main() {
 				bwGateway.SetExecutionRepository(execRepo)
 				bwGateway.SetContextRegistry(contextRegistry)
 				bwHandlers = browserworkspace.NewHandlers(bwGateway, bwFsService, bwTermService, wsRepo, workItemRepo, execRepo, wsManager, contextRegistry, sugar)
+				// Wire preview service
+				bwPreviewService := browserworkspace.NewPreviewService(wsManager, wsRepo, bwGateway, sugar)
+				bwHandlers.SetPreviewService(bwPreviewService)
 				_ = bwFsService  // used by handlers
 				_ = bwTermService // used by handlers
 
@@ -945,6 +948,12 @@ func main() {
 		app.Post("/v1/workspace/:workspaceID/collaborate/pause", middleware.RequireAuth(sugar), bwHandlers.PauseExecution)
 		app.Post("/v1/workspace/:workspaceID/collaborate/resume", middleware.RequireAuth(sugar), bwHandlers.ResumeExecution)
 		app.Post("/v1/workspace/:workspaceID/collaborate/stop", middleware.RequireAuth(sugar), bwHandlers.StopExecution)
+		// Preview (embedded live dev-server proxy)
+		app.Post("/v1/workspace/:workspaceID/preview/start", middleware.RequireAuth(sugar), bwHandlers.StartPreview)
+		app.Delete("/v1/workspace/:workspaceID/preview", middleware.RequireAuth(sugar), bwHandlers.StopPreview)
+		app.Get("/v1/workspace/:workspaceID/preview", middleware.RequireAuth(sugar), bwHandlers.GetPreviewStatus)
+		// Proxy — all HTTP methods, no auth (bearer forwarded in headers by the iframe)
+		app.All("/v1/workspace/:workspaceID/preview/proxy/*", bwHandlers.ProxyPreview)
 		// WebSocket
 		app.Get("/v1/workspace/:workspaceID/stream", bwGateway.StreamUpgrade, websocket.New(bwGateway.StreamWS))
 	}

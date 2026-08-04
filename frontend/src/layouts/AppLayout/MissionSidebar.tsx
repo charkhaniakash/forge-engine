@@ -1,6 +1,5 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 import { Icon, Dropdown, Tooltip } from '@/components/common'
-import type { IconName } from '@/components/common'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { themeToggled } from '@/store/slices/uiSlice'
 import { loggedOut } from '@/store/slices/authSlice'
@@ -11,30 +10,30 @@ import { WORK_ITEM_STATUS } from '@/constants/status'
 import { ROUTES, routeTo } from '@/constants/routes'
 import styles from './MissionSidebar.module.css'
 
-const NAV: Array<{ to: string; label: string; icon: IconName; end?: boolean }> = [
-  { to: ROUTES.root, label: 'Console', icon: 'dashboard', end: true },
-  { to: ROUTES.repositories, label: 'Repositories', icon: 'repo' },
-]
+// Map StatusMeta.tone → a CSS color variable (StatusMeta has no .color field)
+const TONE_TO_COLOR: Record<string, string> = {
+  success: 'var(--success)',
+  warning: 'var(--warning)',
+  danger:  'var(--danger)',
+  info:    'var(--info)',
+  accent:  'var(--accent)',
+  neutral: 'var(--text-tertiary)',
+}
 
 export function MissionSidebar() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
-  const { user, org } = useAuth()
+  const { user } = useAuth()
   const theme = useAppSelector((s) => s.ui.theme)
 
-  const missionsResult = useListMissionsQuery(undefined, {
-    pollingInterval: 15000,
-  })
+  const missionsResult = useListMissionsQuery(undefined, { pollingInterval: 15000 })
   const missions = missionsResult.data ?? []
   const isLoading = missionsResult.isLoading
+
   const reposResult = useListReposQuery()
   const repos = reposResult.data ?? []
   const repoName = (repoId: string) =>
     repos.find((r) => r.id === repoId)?.repo_full_name ?? 'repository'
-
-  const activeCount = missions.filter((m) =>
-    ['planning', 'draft', 'plan_ready', 'plan_approved', 'executing', 'validating', 'repairing', 'publishing'].includes(m.status),
-  ).length
 
   return (
     <aside className={styles.sidebar}>
@@ -49,7 +48,6 @@ export function MissionSidebar() {
           <span className={styles.statusDot} />
           <span className={styles.statusLabel}>Agent Idle</span>
         </div>
-
         <button className={styles.newTask} onClick={() => navigate(ROUTES.root)}>
           <Icon name="plus" size={16} />
           <span>NEW TASK</span>
@@ -65,21 +63,25 @@ export function MissionSidebar() {
             <div className={styles.muted}>No missions yet</div>
           )}
           {missions.map((m) => {
-            const statusLabel =
-              WORK_ITEM_STATUS[m.status as keyof typeof WORK_ITEM_STATUS]?.label ?? m.status
-            const statusColor =
-              WORK_ITEM_STATUS[m.status as keyof typeof WORK_ITEM_STATUS]?.color ?? 'var(--neutral)'
+            const meta = WORK_ITEM_STATUS[m.status as keyof typeof WORK_ITEM_STATUS]
+            const statusLabel = meta?.label ?? m.status
+            const statusColor = meta ? (TONE_TO_COLOR[meta.tone] ?? 'var(--text-tertiary)') : 'var(--text-tertiary)'
             return (
               <NavLink
                 key={m.id}
                 to={routeTo.mission(m.id) + `?repo=${m.repo_id}`}
-                className={({ isActive }) => `${styles.item} ${isActive ? styles.itemActive : ''}`}
+                className={({ isActive }) =>
+                  `${styles.item} ${isActive ? styles.itemActive : ''}`
+                }
               >
                 <div className={styles.itemTop}>
                   <span className={styles.itemTitle}>{m.intent}</span>
                   <span
                     className={styles.itemBadge}
-                    style={{ color: statusColor, background: statusColor.startsWith('#') ? `${statusColor}20` : 'var(--neutral-subtle)' }}
+                    style={{
+                      color: statusColor,
+                      background: `color-mix(in srgb, ${statusColor} 12%, transparent)`,
+                    }}
                   >
                     {statusLabel}
                   </span>
@@ -96,22 +98,18 @@ export function MissionSidebar() {
       <div className={styles.footer}>
         <div className={styles.stats}>
           <div className={styles.statRow}>
-            <span className={styles.statLabel}>
-              CPU
-            </span>
+            <span className={styles.statLabel}>CPU</span>
             <span className={styles.statValue}>4.2%</span>
           </div>
           <div className={styles.statRow}>
-            <span className={styles.statLabel}>
-              Ram
-            </span>
+            <span className={styles.statLabel}>Ram</span>
             <span className={styles.statValue}>1.8 GB</span>
           </div>
           <div className={styles.statRow}>
-            <span className={styles.statLabel}>
-              Environment
+            <span className={styles.statLabel}>Environment</span>
+            <span className={styles.statValue} style={{ color: 'var(--accent)' }}>
+              Sandbox Active
             </span>
-            <span className={styles.statValue} style={{ color: 'var(--accent)' }}>Sandbox Active</span>
           </div>
         </div>
 

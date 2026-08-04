@@ -2,57 +2,40 @@ import { useAppSelector } from '@/app/hooks'
 import { Icon } from '@/components/common'
 import styles from './workspace.module.css'
 
+const BUILD_COLORS: Record<string, string> = {
+  idle: '#666',
+  compiling: '#3B82F6',
+  success: '#10B981',
+  error: '#EF4444',
+}
+
 export function TaskStatusBar() {
-  const currentFile = useAppSelector((s) => s.workspaceEditor?.activeFile)
-  const buildStatus = useAppSelector((s) => s.workspaceActivity?.buildStatus || 'idle')
-  const currentPhase = useAppSelector((s) => s.workspaceActivity?.currentPhase || 'planning')
-  const connectionState = useAppSelector((s) => s.unifiedStream?.connectionState || 'idle')
+  const activeFilePath = useAppSelector((s) => s.workspaceEditor?.activeFilePath)
+  const connectionState = useAppSelector((s) => s.unifiedStream?.connectionState ?? 'idle')
+  const collab = useAppSelector((s) => s.workspaceActivity?.collaboration)
 
-  const phaseColors: Record<string, string> = {
-    planning: 'planning',
-    executing: 'executing',
-    validation: 'validation',
-    repair: 'repair',
-    publishing: 'publishing',
-  }
-
-  const buildIcons: Record<string, string> = {
-    idle: 'circle',
-    compiling: 'loader',
-    success: 'checkCircle',
-    error: 'alertCircle',
-  }
-
-  const buildColors: Record<string, string> = {
-    idle: '#666',
-    compiling: '#3B82F6',
-    success: '#10B981',
-    error: '#EF4444',
-  }
+  const phase = collab?.status ?? 'idle'
+  const buildColor = BUILD_COLORS['idle']
 
   return (
     <div className={styles.statusBar}>
       <div className={styles.statusGroup}>
         <Icon name="file" size={14} />
-        <span className={styles.statusLabel}>{currentFile || 'No file selected'}</span>
+        <span className={styles.statusLabel}>{activeFilePath ?? 'No file selected'}</span>
       </div>
 
       <div className={styles.statusDivider} />
 
       <div className={styles.statusGroup}>
-        <Icon name="circle" size={8} />
-        <span className={styles.statusLabel}>Phase: {currentPhase}</span>
+        <Icon name="sparkles" size={8} />
+        <span className={styles.statusLabel}>Phase: {phase}</span>
       </div>
 
       <div className={styles.statusDivider} />
 
       <div className={styles.statusGroup}>
-        <Icon
-          name={buildIcons[buildStatus]}
-          size={14}
-          style={{ color: buildColors[buildStatus] }}
-        />
-        <span className={styles.statusLabel}>{buildStatus}</span>
+        <Icon name="dot" size={14} style={{ color: buildColor }} />
+        <span className={styles.statusLabel}>ready</span>
       </div>
 
       <div className={styles.statusDivider} />

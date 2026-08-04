@@ -60,31 +60,23 @@ export const unifiedStreamBridgeMiddleware: Middleware = (store) => {
 
         case 'repair': {
           const event: RepairSocketEvent = {
-            event: envelope.ev,
-            ...envelope.payload,
-            seq: envelope.seq,
+            event: envelope.ev as RepairSocketEvent['event'],
             ts: envelope.ts,
-            id: envelope.id,
-            phase: envelope.phase,
+            ...(envelope.payload ?? {}),
           }
-          store.dispatch(
-            appendRepairEvent({ sessionId: 'default', event }),
-          )
+          store.dispatch(appendRepairEvent({ sessionId: 'default', event }))
           break
         }
 
         case 'publishing': {
           const event: PublishingSocketEvent = {
-            event: envelope.ev,
-            ...envelope.payload,
-            seq: envelope.seq,
+            v: 1,
+            event: envelope.ev as PublishingSocketEvent['event'],
+            session_id: '',
             ts: envelope.ts,
-            id: envelope.id,
-            phase: envelope.phase,
+            ...(envelope.payload ?? {}),
           }
-          store.dispatch(
-            appendPublishingEvent({ sessionId: 'default', event }),
-          )
+          store.dispatch(appendPublishingEvent({ sessionId: 'default', event }))
           break
         }
 

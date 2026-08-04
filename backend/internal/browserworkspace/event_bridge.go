@@ -377,10 +377,16 @@ func (eb *EventBridge) WrapExecutionPublisher(
 						if eb.fsService != nil {
 							eb.fsService.MarkAIWrite(filePath)
 						}
+						// Include the content the agent wrote so the frontend can
+						// auto-open the file and stream the edit live (v0-style),
+						// without a follow-up fetch.
 						eb.publish(workspaceID, ChFilesystem, "file_modified", map[string]interface{}{
-							"path":   filePath,
-							"source": "ai",
+							"path":    filePath,
+							"source":  "ai",
+							"content": extractContentFromArgs(event.ToolArgs),
 						})
+						// Advisory hint: a file changed — the dev server is likely recompiling
+						eb.notifyPreviewCompiling(workspaceID, filePath)
 					}
 				case "create_file":
 					if filePath != "" {
@@ -388,9 +394,11 @@ func (eb *EventBridge) WrapExecutionPublisher(
 							eb.fsService.MarkAIWrite(filePath)
 						}
 						eb.publish(workspaceID, ChFilesystem, "file_created", map[string]interface{}{
-							"path":   filePath,
-							"source": "ai",
+							"path":    filePath,
+							"source":  "ai",
+							"content": extractContentFromArgs(event.ToolArgs),
 						})
+						eb.notifyPreviewCompiling(workspaceID, filePath)
 					}
 				case "delete_file":
 					if filePath != "" {
@@ -401,6 +409,7 @@ func (eb *EventBridge) WrapExecutionPublisher(
 							"path":   filePath,
 							"source": "ai",
 						})
+						eb.notifyPreviewCompiling(workspaceID, filePath)
 					}
 				case "rename_file":
 					if filePath != "" {
@@ -668,18 +677,40 @@ func (eb *EventBridge) WrapRepairPublisher(
 				"tool_call_id":   payload["tool_call_id"],
 				"attempt_number": payload["attempt_number"],
 			})
-			// Emit precise file change events for repair writes
+			// Emit precise file change events for repair writes + notify preview
 			if success, ok := payload["success"].(bool); ok && success {
 				if tool, ok := payload["tool"].(string); ok {
+					filePath, _ := payload["path"].(string)
+					if filePath == "" {
+						if args, ok := payload["args"].(map[string]interface{}); ok {
+							filePath, _ = args["path"].(string)
+						}
+					}
 					switch tool {
 					case "write_file":
 						eb.publish(workspaceID, ChFilesystem, "file_modified", map[string]interface{}{
+							"path":   filePath,
 							"source": "repair",
 						})
+						if filePath != "" {
+							eb.notifyPreviewCompiling(workspaceID, filePath)
+						}
 					case "create_file":
 						eb.publish(workspaceID, ChFilesystem, "file_created", map[string]interface{}{
+							"path":   filePath,
 							"source": "repair",
 						})
+						if filePath != "" {
+							eb.notifyPreviewCompiling(workspaceID, filePath)
+						}
+					case "delete_file":
+						eb.publish(workspaceID, ChFilesystem, "file_deleted", map[string]interface{}{
+							"path":   filePath,
+							"source": "repair",
+						})
+						if filePath != "" {
+							eb.notifyPreviewCompiling(workspaceID, filePath)
+						}
 					}
 				}
 			}
@@ -784,4 +815,44 @@ func extractPathFromArgs(argsRaw json.RawMessage) string {
 		return ""
 	}
 	return args.Path
+}
+
+// extractContentFromArgs pulls the "content" field from a write/create tool's
+// args so the frontend can render the AI's edit live in the code editor.
+func extractContentFromArgs(argsRaw json.RawMessage) string {
+	if len(argsRaw) == 0 {
+		return ""
+	}
+	var args struct {
+		Content string `json:"content"`
+	}
+	if json.Unmarshal(argsRaw, &args) != nil {
+		return ""
+	}
+	return args.Content
+}
+
+// ── Preview channel forwarding ────────────────────────────────────────────────
+// File changes from the execution / repair phases can trigger a dev-server
+// recompile. The EventBridge intercepts write_file / create_file / delete_file
+// tool results and publishes a `preview_compiling` hint on the preview channel
+// so the browser iframe shows the "Compiling…" overlay immediately — before the
+// dev server actually emits its recompile log line.
+//
+// notifyPreviewCompiling is intentionally a no-op.
+//
+// Previously this emitted preview_compiling events on every file write, which
+// caused the frontend to show the compiling overlay and the LivePreview component
+// to attempt re-starting the dev server for every file change — even when no
+// dev server session existed. The spurious preview_compiling events triggered
+// repeated StartPreview calls from the frontend, each of which ran DetectDevServer
+// (3× test -e commands) and started a new npm process, flooding the logs.
+//
+// The authoritative preview_compiling signal comes from runDevServer parsing the
+// actual dev server stdout. This method is kept as a no-op so callers don't need
+// to be updated, but it no longer emits anything.
+func (eb *EventBridge) notifyPreviewCompiling(workspaceID, filePath string) {
+	// no-op: see comment above
+	_ = workspaceID
+	_ = filePath
 }

@@ -102,6 +102,34 @@ const slice = createSlice({
         f.content = content
       }
     },
+    /**
+     * The AI wrote/created a file. v0-style: auto-open the file, make it the
+     * active tab, and live-update its content so the user watches the edit
+     * happen. If the user has unsaved local edits to that file, don't clobber
+     * them — raise a conflict instead.
+     */
+    aiFileStreamed(
+      state,
+      action: PayloadAction<{ path: string; content: string; language: string }>,
+    ) {
+      const { path, content, language } = action.payload
+      const f = state.openFiles.find((x) => x.path === path)
+      if (!f) {
+        state.openFiles.push({ path, content, language, dirty: false })
+      } else if (f.dirty) {
+        state.conflicts[path] = content
+      } else {
+        f.content = content
+      }
+      // Focus the file the agent is currently editing (unless the user is
+      // mid-edit on a different file they haven't saved).
+      const activeDirty = state.openFiles.find(
+        (x) => x.path === state.activeFilePath,
+      )?.dirty
+      if (!activeDirty) {
+        state.activeFilePath = path
+      }
+    },
     resolveConflict(state, action: PayloadAction<{ path: string; keep: 'mine' | 'theirs' }>) {
       const { path, keep } = action.payload
       const incoming = state.conflicts[path]
@@ -141,6 +169,7 @@ export const {
   updateFileContent,
   setFileContentClean,
   externalFileModified,
+  aiFileStreamed,
   resolveConflict,
   markClean,
   setGitStatus,

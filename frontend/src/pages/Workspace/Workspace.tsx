@@ -1,3 +1,16 @@
+/**
+ * Workspace — v0-style IDE layout
+ *
+ * ┌──────────────────┬─────────────────┬──────────────────────┐
+ * │  Browser Preview │  AI Timeline    │  Monaco Editor       │
+ * │  (collapsible)   │  + File Tree    │  + Bottom panel      │
+ * │                  │  + AI Activity  │  (terminal/output/…) │
+ * └──────────────────┴─────────────────┴──────────────────────┘
+ *
+ * All three panes are resizable. The preview pane is collapsible.
+ * The preview updates automatically when any file changes (WS `preview` channel).
+ * The file tree refreshes in real-time (WS `filesystem` channel).
+ */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Group, Panel, Separator, usePanelRef, type Layout } from 'react-resizable-panels'
@@ -20,6 +33,7 @@ import { OutputPanel } from '@/features/workspace/OutputPanel'
 import { GitPanel } from '@/features/workspace/GitPanel'
 import { DiagnosticsPanel } from '@/features/workspace/DiagnosticsPanel'
 import { AICollabPanel } from '@/features/workspace/AICollabPanel'
+import { LivePreview } from '@/features/workspace/LivePreview'
 import { useMissionPhase } from '@/features/workspace/useMissionPhase'
 import { ROUTES } from '@/constants/routes'
 import styles from './Workspace.module.css'
@@ -48,13 +62,6 @@ function healthColor(status: string | undefined): string {
   return 'var(--danger)'
 }
 
-/**
- * Load a persisted layout, but only apply it when its panel ids exactly match
- * the panels currently rendered. `react-resizable-panels` keys layouts by panel
- * id ({ [id]: flexGrow }); feeding it a layout for a different set of ids (e.g.
- * after the panels are renamed) makes it thrash and can blank the page. When the
- * ids don't line up we drop the stale entry and fall back to panel defaultSize.
- */
 function loadLayout(key: string, expectedIds: string[]): Layout | undefined {
   try {
     const raw = localStorage.getItem(key)
@@ -76,14 +83,13 @@ function loadLayout(key: string, expectedIds: string[]): Layout | undefined {
 function saveLayout(key: string, layout: Layout): void {
   try {
     localStorage.setItem(key, JSON.stringify(layout))
-  } catch {
-    // ignore quota / unavailability
-  }
+  } catch { /* ignore */ }
 }
 
-const COLS_KEY = 'workspace_layout_cols_v2'
-const ROWS_KEY = 'workspace_layout_rows_v2'
-const COLS_IDS = ['explorer', 'center', 'ai']
+// Layout persistence keys — v3 because column IDs changed
+const COLS_KEY = 'workspace_layout_cols_v3'
+const ROWS_KEY = 'workspace_layout_rows_v3'
+const COLS_IDS = ['preview', 'mid', 'editor']
 const ROWS_IDS = ['editor', 'bottom']
 
 export function Workspace() {
@@ -94,24 +100,28 @@ export function Workspace() {
   const navigate = useNavigate()
   const dispatch = useAppDispatch()
 
-  // Mirror the mission's real phase (task + execution + validation) so the IDE
-  // never contradicts the mission page. Falls back gracefully without repo ctx.
   const mission = useMissionPhase(repoId, taskId ?? '')
 
   const [bottomTab, setBottomTab] = useState<BottomTab>('terminal')
-  const [explorerCollapsed, setExplorerCollapsed] = useState(false)
-  const explorerPanel = usePanelRef()
+  const [previewCollapsed, setPreviewCollapsed] = useState(false)
+  const [midCollapsed, setMidCollapsed] = useState(false)
+  const previewPanel = usePanelRef()
+  const midPanel = usePanelRef()
+  const explorerBodyRef = useRef<HTMLDivElement>(null)
+  const [explorerHeight, setExplorerHeight] = useState(200)
 
-  // Persisted pane layouts.
+  // Persisted layouts
   const [colsLayout] = useState<Layout | undefined>(() => loadLayout(COLS_KEY, COLS_IDS))
   const [rowsLayout] = useState<Layout | undefined>(() => loadLayout(ROWS_KEY, ROWS_IDS))
 
-  // Single multiplexed socket for the whole IDE + tab session recovery.
   useWorkspaceSocket(workspaceId)
   useWorkspaceTabs(workspaceId)
 
   const { data: treeData, isLoading: treeLoading } = useGetFileTreeQuery(workspaceId, {
     skip: !workspaceId,
+    // The WS `filesystem` channel invalidates 'WsFiles' so this auto-refetches
+    // on file_created / file_deleted / file_renamed events.
+    refetchOnMountOrArgChange: true,
   })
   const { data: health } = useGetWorkspaceHealthQuery(workspaceId, {
     skip: !workspaceId,
@@ -130,8 +140,8 @@ export function Workspace() {
   const openFiles = useAppSelector((s) => s.workspaceEditor.openFiles)
   const collab = useAppSelector((s) => s.workspaceActivity.collaboration)
   const diagnostics = useAppSelector((s) => s.workspaceActivity.diagnostics)
+  const preview = useAppSelector((s) => s.workspaceActivity.preview)
 
-  // Git decorations for the explorer (path → change kind).
   const decorations = useMemo<GitDecorations>(() => {
     const m = new Map<string, 'staged' | 'modified' | 'untracked'>()
     gitStatus?.untracked?.forEach((p) => m.set(p, 'untracked'))
@@ -140,9 +150,6 @@ export function Workspace() {
     return m
   }, [gitStatus])
 
-  // Measure the explorer body so react-window gets a concrete height.
-  const explorerBodyRef = useRef<HTMLDivElement>(null)
-  const [explorerHeight, setExplorerHeight] = useState(300)
   useLayoutEffect(() => {
     const el = explorerBodyRef.current
     if (!el) return
@@ -154,15 +161,27 @@ export function Workspace() {
     return () => ro.disconnect()
   }, [])
 
-  const toggleExplorer = () => {
-    const p = explorerPanel.current
+  const togglePreview = () => {
+    const p = previewPanel.current
     if (!p) return
     if (p.isCollapsed()) {
       p.expand()
-      setExplorerCollapsed(false)
+      setPreviewCollapsed(false)
     } else {
       p.collapse()
-      setExplorerCollapsed(true)
+      setPreviewCollapsed(true)
+    }
+  }
+
+  const toggleMid = () => {
+    const p = midPanel.current
+    if (!p) return
+    if (p.isCollapsed()) {
+      p.expand()
+      setMidCollapsed(false)
+    } else {
+      p.collapse()
+      setMidCollapsed(true)
     }
   }
 
@@ -173,23 +192,42 @@ export function Workspace() {
     (gitStatus?.staged?.length ?? 0) +
     (gitStatus?.untracked?.length ?? 0)
   const collabActive = collab.status === 'running' || collab.status === 'paused'
-  // Prefer the mission phase for the header/status chrome; fall back to the
-  // agent collaboration status when we don't have repo context.
   const phaseLive = mission.available ? mission.live : collabActive
   const phaseText = mission.available
     ? mission.label
     : collab.label ?? COLLAB_LABEL[collab.status] ?? 'Idle'
   const problemCount = diagnostics.length
 
+  // Preview status badge
+  const previewStatus = preview.status
+  const previewLive = previewStatus === 'ready' || previewStatus === 'compiling'
+
   return (
     <div className={styles.root}>
-      {/* ── Top bar ─────────────────────────────────────────────────────── */}
+      {/* ── Toolbar ──────────────────────────────────────────────────────── */}
       <div className={styles.toolbar}>
         <div className={styles.toolbarLeft}>
-          <button className={styles.iconBtn} onClick={toggleExplorer} title="Toggle Explorer" aria-pressed={!explorerCollapsed}>
-            <Icon name="sidebar" size={15} />
+          <button
+            className={styles.iconBtn}
+            onClick={togglePreview}
+            title={previewCollapsed ? 'Show preview' : 'Hide preview'}
+            aria-pressed={!previewCollapsed}
+          >
+            <Icon name="monitor" size={14} />
           </button>
-          <button className={styles.back} onClick={() => (taskId ? navigate(`/mission/${taskId}`) : navigate(ROUTES.root))} title="Back to mission">
+          <button
+            className={styles.iconBtn}
+            onClick={toggleMid}
+            title={midCollapsed ? 'Show timeline' : 'Hide timeline'}
+            aria-pressed={!midCollapsed}
+          >
+            <Icon name="sidebar" size={14} />
+          </button>
+          <button
+            className={styles.back}
+            onClick={() => (taskId ? navigate(`/mission/${taskId}`) : navigate(ROUTES.root))}
+            title="Back to mission"
+          >
             <Icon name="chevronLeft" size={14} />
           </button>
           <span className={styles.brandMark}>
@@ -217,6 +255,14 @@ export function Workspace() {
         </div>
 
         <div className={styles.toolbarRight}>
+          {/* Preview status */}
+          {previewLive && (
+            <span className={styles.previewBadge} title={`Preview: ${previewStatus}`}>
+              <span className={styles.previewDot}
+                style={{ background: previewStatus === 'compiling' ? 'var(--warning)' : 'var(--success)' }} />
+              {previewStatus === 'compiling' ? 'Compiling' : 'Live Preview'}
+            </span>
+          )}
           <span className={styles.health} title={`container: ${containerStatus ?? 'unknown'}`}>
             <span className={styles.healthDot} style={{ background: healthColor(containerStatus) }} />
             {containerStatus ?? '—'}
@@ -230,49 +276,89 @@ export function Workspace() {
         </div>
       )}
 
-      {/* ── Body: resizable panes ───────────────────────────────────────── */}
+      {/* ── Body: three resizable columns ───────────────────────────────── */}
       <div className={styles.body}>
         <Group
           orientation="horizontal"
-          id="ws-cols"
+          id="ws-cols-v3"
           className={styles.group}
           defaultLayout={colsLayout}
           onLayoutChanged={(l) => saveLayout(COLS_KEY, l)}
         >
-          {/* Explorer (collapsible) */}
+          {/* ── Column 1: Browser Preview ─────────────────────────────── */}
           <Panel
-            id="explorer"
+            id="preview"
             className={styles.pane}
-            panelRef={explorerPanel}
+            panelRef={previewPanel}
             collapsible
             collapsedSize={0}
-            minSize="12"
-            defaultSize="18"
-            onResize={(s) => setExplorerCollapsed(s.asPercentage < 1)}
+            minSize="14"
+            defaultSize="28"
+            onResize={(s) => setPreviewCollapsed(s.asPercentage < 1)}
           >
-            <div className={styles.paneHeader}>
-              <Icon name="folder" size={13} /> <span>Explorer</span>
-            </div>
-            <div ref={explorerBodyRef} className={styles.explorerBody}>
-              {treeLoading ? (
-                <div className={styles.centerFill}><Spinner size={16} /></div>
-              ) : (
-                <FileExplorer workspaceId={workspaceId} height={explorerHeight} decorations={decorations} />
-              )}
-            </div>
-            <div className={styles.gitMini}>
-              <Icon name="branch" size={12} /> {gitStatus?.branch ?? '—'}
-              <span className={styles.gitMiniCount}>{gitCounts} changed</span>
-            </div>
+            <LivePreview
+              workspaceId={workspaceId}
+              collapsed={false}
+              onToggleCollapse={togglePreview}
+            />
           </Panel>
 
           <Separator className={styles.sepV} />
 
-          {/* Center: editor over bottom dev panel */}
-          <Panel id="center" className={styles.pane} minSize="30">
+          {/* ── Column 2: AI Timeline + File Explorer ─────────────────── */}
+          <Panel
+            id="mid"
+            className={styles.pane}
+            panelRef={midPanel}
+            collapsible
+            collapsedSize={0}
+            minSize="14"
+            defaultSize="22"
+            onResize={(s) => setMidCollapsed(s.asPercentage < 1)}
+          >
+            {/* Mid column: file tree top, AI collab bottom */}
+            <Group orientation="vertical" id="ws-mid-rows" className={styles.group}>
+              {/* File explorer */}
+              <Panel id="mid-explorer" className={styles.pane} minSize="20" defaultSize="45">
+                <div className={styles.paneHeader}>
+                  <Icon name="folder" size={13} /> <span>Files</span>
+                  {gitCounts > 0 && (
+                    <span className={styles.tabBadge} style={{ marginLeft: 'auto' }}>{gitCounts}</span>
+                  )}
+                </div>
+                <div ref={explorerBodyRef} className={styles.explorerBody}>
+                  {treeLoading ? (
+                    <div className={styles.centerFill}><Spinner size={16} /></div>
+                  ) : (
+                    <FileExplorer
+                      workspaceId={workspaceId}
+                      height={explorerHeight}
+                      decorations={decorations}
+                    />
+                  )}
+                </div>
+                <div className={styles.gitMini}>
+                  <Icon name="branch" size={12} /> {gitStatus?.branch ?? '—'}
+                  <span className={styles.gitMiniCount}>{gitCounts} changed</span>
+                </div>
+              </Panel>
+
+              <Separator className={styles.sepH} />
+
+              {/* AI Collaboration + controls */}
+              <Panel id="mid-ai" className={styles.pane} minSize="25" defaultSize="55">
+                <AICollabPanel workspaceId={workspaceId} mission={mission} />
+              </Panel>
+            </Group>
+          </Panel>
+
+          <Separator className={styles.sepV} />
+
+          {/* ── Column 3: Monaco editor + bottom dev panel ──────────────── */}
+          <Panel id="editor" className={styles.pane} minSize="30" defaultSize="50">
             <Group
               orientation="vertical"
-              id="ws-rows"
+              id="ws-rows-v3"
               className={styles.group}
               defaultLayout={rowsLayout}
               onLayoutChanged={(l) => saveLayout(ROWS_KEY, l)}
@@ -303,11 +389,12 @@ export function Workspace() {
                   ))}
                 </div>
                 <div className={styles.bottomBody}>
-                  {/* Terminal + Output stay mounted so xterm keeps its buffer. */}
-                  <div className={styles.mount} style={{ display: bottomTab === 'terminal' ? 'block' : 'none' }}>
+                  <div className={styles.mount}
+                    style={{ display: bottomTab === 'terminal' ? 'block' : 'none' }}>
                     <TerminalPanel workspaceId={workspaceId} active={bottomTab === 'terminal'} />
                   </div>
-                  <div className={styles.mount} style={{ display: bottomTab === 'output' ? 'block' : 'none' }}>
+                  <div className={styles.mount}
+                    style={{ display: bottomTab === 'output' ? 'block' : 'none' }}>
                     <OutputPanel active={bottomTab === 'output'} />
                   </div>
                   {bottomTab === 'problems' && <DiagnosticsPanel workspaceId={workspaceId} />}
@@ -316,13 +403,6 @@ export function Workspace() {
                 </div>
               </Panel>
             </Group>
-          </Panel>
-
-          <Separator className={styles.sepV} />
-
-          {/* Right: AI Collaboration */}
-          <Panel id="ai" className={styles.pane} minSize="16" defaultSize="24">
-            <AICollabPanel workspaceId={workspaceId} mission={mission} />
           </Panel>
         </Group>
       </div>
@@ -335,6 +415,12 @@ export function Workspace() {
         </span>
         <span><Icon name="branch" size={11} /> {gitStatus?.branch ?? '—'}</span>
         <span>{gitCounts} changes</span>
+        {previewLive && (
+          <span className={styles.previewStatusBar}>
+            <Icon name="monitor" size={11} />
+            {previewStatus === 'compiling' ? 'Recompiling…' : 'Preview live'}
+          </span>
+        )}
         <div className={styles.toolbarSpacer} />
         <span>{openFiles.length} open</span>
         <span className={`${styles.forgeAi} ${phaseLive ? styles.forgeAiActive : ''}`}>

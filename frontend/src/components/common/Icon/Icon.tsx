@@ -46,6 +46,10 @@ export type IconName =
   | 'stop'
   | 'sparkles'
   | 'folder'
+  | 'monitor'
+  | 'alertCircle'
+  | 'inbox'
+  | 'box'
 
 const PATHS: Record<IconName, string> = {
   dashboard: 'M3 3h7v7H3zM14 3h7v4h-7zM14 10h7v11h-7zM3 14h7v7H3z',
@@ -91,6 +95,10 @@ const PATHS: Record<IconName, string> = {
   sparkles:
     'M12 3l1.7 4.5L18 9l-4.3 1.5L12 15l-1.7-4.5L6 9l4.3-1.5zM18 14l.9 2.3 2.1.7-2.1.7-.9 2.3-.9-2.3-2.1-.7 2.1-.7z',
   folder: 'M3 6a1 1 0 0 1 1-1h5l2 2h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
+  monitor: 'M3 4h18v13H3zM8 21h8M12 17v4',
+  alertCircle: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zM12 8v5M12 16v.01',
+  inbox: 'M4 4h16v10H4zM4 14h4l2 3h4l2-3h4',
+  box: 'M21 8l-9-5-9 5v8l9 5 9-5V8zM3 8l9 5 9-5M12 13v8',
 }
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {

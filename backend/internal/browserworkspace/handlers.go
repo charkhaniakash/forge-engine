@@ -16,6 +16,7 @@ type Handlers struct {
 	gateway         *Gateway
 	fsService       *FilesystemService
 	termService     *TerminalService
+	previewService  *PreviewService
 	wsRepo          *repository.WorkspaceRepository
 	workItemRepo    *repository.WorkItemRepository
 	execRepo        *repository.ExecutionRepository
@@ -47,6 +48,11 @@ func NewHandlers(
 		contextRegistry: contextRegistry,
 		logger:          logger,
 	}
+}
+
+// SetPreviewService wires the preview service after construction.
+func (h *Handlers) SetPreviewService(ps *PreviewService) {
+	h.previewService = ps
 }
 
 // latestExecForWorkspace resolves the workspace's work item and returns the id

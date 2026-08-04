@@ -70,10 +70,14 @@ class ExecutionPipeline:
                 "_agent_token": agent_token,  # read by _get_tool_client in nodes
                 # Convergence and JSON-retry tracking
                 "_iteration": 0,
-                "_max_iterations": 12,
+                "_max_iterations": 20,
                 "_json_retry_count": 0,
                 "_max_json_retries": 2,
-                # Repository state tracking
+                # Repository state tracking — pre-populate from gather_context so
+                # the hash check sees the current file content before any write.
+                # Without this, old_hash is always None on the first write of each
+                # step, causing the identical-content skip to never fire even when
+                # a previous step already wrote the same content.
                 "_file_hashes": {},
                 "_file_cache": {},
                 "_no_progress_write_cycles": 0,
@@ -86,7 +90,7 @@ class ExecutionPipeline:
             final_state: dict = {}
             async for snapshot in execution_graph.astream(
                 initial_state,
-                config={"recursion_limit": 30},
+                config={"recursion_limit": 60},
             ):
                 final_state = snapshot
                 for node_name, update in snapshot.items():
@@ -131,12 +135,18 @@ def _emit_node_events(
     partial updates where expected fields are absent or None.
     """
     events: list[bytes] = []
-    logger.info("_emit_node_events", node_name=node_name, update_type=type(update), update_keys=list(update.keys()) if isinstance(update, dict) else "N/A")
 
     # Guard against None updates from LangGraph
     if update is None:
         logger.warning("_emit_node_events_none_update", node_name=node_name)
         return []
+
+    logger.info(
+        "_emit_node_events",
+        node_name=node_name,
+        update_type=type(update),
+        update_keys=list(update.keys()) if isinstance(update, dict) else "N/A",
+    )
 
     if node_name == "reason":
         new_reasoning = update.get("reasoning") or ""
@@ -152,7 +162,7 @@ def _emit_node_events(
             if last and isinstance(last, dict):
                 tool_req = last.get("request") or {}
                 if tool_req and isinstance(tool_req, dict):
-                    tool_call_id = str(uuid.uuid4())  # real UUID for this event
+                    tool_call_id = str(uuid.uuid4())
                     events.append(event_fn(
                         "tool_call",
                         tool=tool_req.get("tool", ""),
@@ -161,8 +171,9 @@ def _emit_node_events(
                     ))
 
     elif node_name == "receive_result":
+        # node_receive_result now returns {"latest_tool_result": result}, so
+        # we read it from the update directly.
         result = update.get("latest_tool_result")
-        # Guard against None or non-ToolCallResult values from partial updates.
         if result is not None and hasattr(result, "tool"):
             events.append(event_fn(
                 "tool_result",
@@ -173,14 +184,11 @@ def _emit_node_events(
             ))
 
     elif node_name == "check_deviation":
-        # Legacy catch-all → emit as plan_deviation (safest default).
         msg = update.get("deviation") or ""
         if msg:
             events.append(event_fn("plan_deviation", message=msg))
 
     elif node_name in ("plan_deviation", "requires_human", "execution_error"):
-        # Typed terminal nodes — emit the specific event so Go and the
-        # frontend receive the correct semantic category.
         msg = update.get("deviation") or ""
         if msg:
             events.append(event_fn(node_name, message=msg))

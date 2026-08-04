@@ -85,9 +85,13 @@ func (d *DockerSandboxDriver) Provision(ctx context.Context, cfg WorkspaceConfig
 	pidsLimit := int64(cfg.PIDLimit)
 
 	hostConfig := &container.HostConfig{
-		// Network mode: bridge (allows git clone during provisioning).
-		// TODO: Phase 7+ - implement network isolation after clone is complete.
-		NetworkMode: "bridge",
+		// Network mode: configurable via SANDBOX_NETWORK. Defaults to the Docker
+		// "bridge" network (allows git clone during provisioning). When the
+		// backend runs in Docker on a compose network (e.g. "forge-network"),
+		// this MUST match so the backend can reach sandbox containers — the
+		// preview proxy and validation exec both dial the container's bridge IP
+		// directly, and cross-network containers are isolated from each other.
+		NetworkMode: container.NetworkMode(cfg.Network),
 
 		// Resource limits — enforced by the kernel via cgroups.
 		Resources: container.Resources{
@@ -577,7 +581,9 @@ func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg Works
 	pidsLimit := int64(cfg.PIDLimit)
 
 	hostConfig := &container.HostConfig{
-		NetworkMode: "bridge",
+		// Same network policy as Provision — see the note there about matching
+		// the backend's network (SANDBOX_NETWORK) for reachability.
+		NetworkMode: container.NetworkMode(cfg.Network),
 		Resources: container.Resources{
 			NanoCPUs:  nanoCPU,
 			Memory:    memoryBytes,

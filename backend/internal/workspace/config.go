@@ -11,6 +11,13 @@ type Config struct {
 	// SandboxImage is the Docker image used for all workspaces.
 	SandboxImage string
 
+	// Network is the Docker network workspace/validation containers attach to.
+	// Defaults to the default "bridge" network. When the backend itself runs in
+	// Docker (e.g. on a compose-defined network like "forge-network"), this MUST
+	// match the backend's network — otherwise the preview proxy and validation
+	// exec cannot reach the sandbox containers (cross-network isolation).
+	Network string
+
 	// Default resource limits — can be overridden per-workspace in future.
 	DefaultCPULimit       string
 	DefaultMemoryLimitMB  int
@@ -24,7 +31,8 @@ type Config struct {
 // DefaultConfig returns Config populated from environment variables.
 func DefaultConfig() Config {
 	return Config{
-		SandboxImage:          getEnv("SANDBOX_IMAGE", "forge-sandbox:latest"),
+		SandboxImage:          getEnv("SANDBOX_IMAGE", "forge-sandbox-node:latest"),
+		Network:               getEnv("SANDBOX_NETWORK", "bridge"),
 		DefaultCPULimit:       getEnv("SANDBOX_CPU_LIMIT", "1.0"),
 		DefaultMemoryLimitMB:  getEnvInt("SANDBOX_MEMORY_LIMIT_MB", 512),
 		DefaultPIDLimit:       getEnvInt("SANDBOX_PID_LIMIT", 128),

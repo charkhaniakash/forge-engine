@@ -58,6 +58,7 @@ export const baseApi = createApi({
     'WsFiles',
     'WsFileContent',
     'WsGit',
+    'WsPreview',
     'Org',
     'OrgMember',
     'MissionMessages',

@@ -25,7 +25,7 @@ export class UnifiedStreamClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null
   private subscribedChannels: Set<SocketChannel> = new Set()
-  private lastSeq: Record<SocketChannel, number> = {}
+  private lastSeq: Partial<Record<SocketChannel, number>> = {}
 
   constructor(options: UnifiedStreamClientOptions) {
     this.opts = {
@@ -45,7 +45,7 @@ export class UnifiedStreamClient {
     const workspaceId = this.opts.workspaceId
     const token = encodeURIComponent(this.opts.token)
     const wsProtocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const wsHost = process.env.REACT_APP_WEBSOCKET_HOST || window.location.host
+    const wsHost = window.location.host
     const url = `${wsProtocol}://${wsHost}/v1/workspaces/${workspaceId}/stream?token=${token}`
 
     try {

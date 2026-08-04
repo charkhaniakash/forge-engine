@@ -46,7 +46,7 @@ const (
 
 // DefaultSubscriptions are channels every client subscribes to on connect.
 var DefaultSubscriptions = []string{
-	ChSystem, ChFilesystem, ChTerminal, ChDiagnostics, ChAIActivity, ChCollaboration, ChTimeline,
+	ChSystem, ChFilesystem, ChTerminal, ChDiagnostics, ChAIActivity, ChCollaboration, ChTimeline, ChPreview,
 }
 
 // ── Envelope ─────────────────────────────────────────────────────────────────

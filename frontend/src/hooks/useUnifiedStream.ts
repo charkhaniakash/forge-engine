@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
 import { useAuth } from '@/hooks/useAuth'
 import { UnifiedStreamClient } from '@/services/streaming/UnifiedStreamClient'
-import type { SocketChannel, UnifiedStreamEnvelope } from '@/types/websocket'
+import type { SocketChannel } from '@/types/websocket'
 import {
   unifiedStreamEnvelopeReceived,
   unifiedStreamConnectionStateChanged,
@@ -36,9 +36,6 @@ export function useUnifiedStream(
   const clientRef = useRef<UnifiedStreamClient | null>(null)
 
   const connectionState = useAppSelector((s) => s.unifiedStream?.connectionState ?? 'idle')
-  const lastSeqFromSession = useAppSelector(
-    (s) => workspaceId ? s.reconnectSession.sessions[workspaceId]?.lastSeq : undefined,
-  )
 
   // Track connection changes to trigger gap-fill reconnect on recovery
   useEffect(() => {

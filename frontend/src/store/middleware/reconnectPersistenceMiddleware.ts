@@ -1,47 +1,41 @@
 import type { Middleware } from '@reduxjs/toolkit'
-import { updateSessionSeq } from '@/store/slices/reconnectSessionSlice'
-import type { RootState } from '@/app/store'
 
 /**
- * Middleware that automatically persists lastSeq to localStorage on every event.
- * Ensures reconnect can recover even after page reload.
+ * Saves the latest unified-stream seq numbers to localStorage on every
+ * envelope, so reconnect can resume from where it left off across page reloads.
  */
-export const reconnectPersistenceMiddleware: Middleware<{}, RootState> =
+export const reconnectPersistenceMiddleware: Middleware =
   (store) => (next) => (action) => {
     const result = next(action)
 
-    // When an envelope is received, update localStorage with latest seq
-    if (action.type === 'unifiedStream/envelopeReceived') {
-      const state = store.getState()
-      const unifiedStream = state.unifiedStream
-
-      if (unifiedStream.lastSeq) {
-        // Save to localStorage for recovery across page reloads
-        localStorage.setItem(
-          'forge-reconnect-session',
-          JSON.stringify(unifiedStream.lastSeq),
-        )
+    if (
+      typeof action === 'object' &&
+      action !== null &&
+      (action as { type?: string }).type === 'unifiedStream/unifiedStreamEnvelopeReceived'
+    ) {
+      try {
+        const state = store.getState()
+        const lastSeq = state?.unifiedStream?.lastSeqPerChannel
+        if (lastSeq && Object.keys(lastSeq).length > 0) {
+          localStorage.setItem('forge-reconnect-seq', JSON.stringify(lastSeq))
+        }
+      } catch {
+        /* ignore localStorage failures */
       }
     }
 
     return result
   }
 
-/**
- * Retrieve saved lastSeq from localStorage (for recovery after page reload).
- */
-export function loadSavedReconnectSession(): Record<string, number> {
+export function loadSavedReconnectSeq(): Record<string, number> {
   try {
-    const saved = localStorage.getItem('forge-reconnect-session')
-    return saved ? JSON.parse(saved) : {}
+    const raw = localStorage.getItem('forge-reconnect-seq')
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {}
   } catch {
     return {}
   }
 }
 
-/**
- * Clear saved reconnect session (called on logout).
- */
-export function clearSavedReconnectSession(): void {
-  localStorage.removeItem('forge-reconnect-session')
+export function clearSavedReconnectSeq(): void {
+  localStorage.removeItem('forge-reconnect-seq')
 }

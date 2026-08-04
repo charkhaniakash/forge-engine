@@ -120,6 +120,7 @@ func (m *WorkspaceManager) provision(
 	cfg := WorkspaceConfig{
 		WorkspaceID:    ws.ID,
 		Image:          m.cfg.SandboxImage,
+		Network:        m.cfg.Network,
 		CPULimit:       m.cfg.DefaultCPULimit,
 		MemoryLimitMB:  m.cfg.DefaultMemoryLimitMB,
 		PIDLimit:       m.cfg.DefaultPIDLimit,
@@ -693,6 +694,7 @@ func (m *WorkspaceManager) ProvisionValidationContainer(
 		// names never collide if multiple validation runs are in flight.
 		WorkspaceID:    fmt.Sprintf("%s-val-%d", workspaceID[:8], time.Now().UnixNano()/1e6),
 		Image:          sandboxImage,
+		Network:        m.cfg.Network,
 		CPULimit:       m.cfg.DefaultCPULimit,
 		MemoryLimitMB:  m.cfg.DefaultMemoryLimitMB,
 		PIDLimit:       m.cfg.DefaultPIDLimit,

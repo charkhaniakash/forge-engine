@@ -1,70 +1,34 @@
-import { Middleware } from '@reduxjs/toolkit'
-import { aiEventAppended, setCurrentFile, setCurrentPhase } from '@/store/slices/workspaceActivitySlice'
-import { openFile, setActiveFile } from '@/store/slices/workspaceEditorSlice'
+import type { Middleware, UnknownAction } from '@reduxjs/toolkit'
+import { aiEventAppended } from '@/store/slices/workspaceActivitySlice'
+
+function isAction(v: unknown): v is UnknownAction & { payload: unknown } {
+  return typeof v === 'object' && v !== null && 'type' in v
+}
 
 /**
- * Middleware that automatically creates activity events when:
- * - Files are opened/created/edited
- * - Phases transition
- * - Build status changes
+ * Middleware that automatically creates activity events when files are
+ * opened/created/edited inside the workspace editor.
  */
 export const activityTrackingMiddleware: Middleware = (store) => (next) => (action) => {
   const result = next(action)
 
-  // Track file operations
-  if (action.type === 'workspaceEditor/setActiveFile' && action.payload) {
-    const fileName = action.payload.split('/').pop() || action.payload
+  if (!isAction(action)) return result
+
+  // Track file view
+  if (
+    action.type === 'workspaceEditor/setActiveFile' &&
+    typeof action.payload === 'string' &&
+    action.payload
+  ) {
+    const fileName = (action.payload as string).split('/').pop() ?? action.payload as string
     store.dispatch(
       aiEventAppended({
         id: `file-${Date.now()}`,
-        type: 'reading',
+        type: 'tool_call',
         label: `Viewing ${fileName}`,
-        timestamp: Date.now(),
-        details: action.payload,
+        ts: Date.now(),
       }),
     )
-    store.dispatch(setCurrentFile(action.payload))
-  }
-
-  if (action.type === 'workspaceEditor/createFile' && action.payload) {
-    const fileName = action.payload.split('/').pop() || action.payload
-    store.dispatch(
-      aiEventAppended({
-        id: `create-${Date.now()}`,
-        type: 'creating',
-        label: `Creating ${fileName}`,
-        timestamp: Date.now(),
-        details: action.payload,
-      }),
-    )
-  }
-
-  if (action.type === 'workspaceEditor/deleteFile' && action.payload) {
-    const fileName = action.payload.split('/').pop() || action.payload
-    store.dispatch(
-      aiEventAppended({
-        id: `delete-${Date.now()}`,
-        type: 'updating',
-        label: `Deleted ${fileName}`,
-        timestamp: Date.now(),
-        details: action.payload,
-      }),
-    )
-  }
-
-  // Track phase transitions
-  if (action.type === 'unifiedStream/unifiedStreamConnectionStateChanged') {
-    const state = action.payload
-    if (state === 'open') {
-      store.dispatch(
-        aiEventAppended({
-          id: `connect-${Date.now()}`,
-          type: 'success',
-          label: 'WebSocket connected',
-          timestamp: Date.now(),
-        }),
-      )
-    }
   }
 
   return result

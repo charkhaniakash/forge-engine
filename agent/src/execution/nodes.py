@@ -131,10 +131,29 @@ Use these three distinct outcomes ONLY when you genuinely cannot complete the st
 # ── Node: gather_context ──────────────────────────────────────────────────────
 
 async def node_gather_context(state: ExecutionState) -> dict:
-    """Read affected files to populate retrieved_context before reasoning."""
+    """Read affected files to populate retrieved_context before reasoning.
+
+    Also seeds _file_cache and _file_hashes from the gathered content so that
+    subsequent write_file calls can detect unchanged content (old_hash != null)
+    and read_file calls can be served from cache without a round-trip to Go.
+    """
     tool_client = _get_tool_client(state)
     context = await gather_context(state, tool_client)
-    return {"retrieved_context": context}
+
+    file_cache: dict = {}
+    file_hashes: dict = {}
+    for entry in context:
+        if entry.get("exists") and entry.get("content"):
+            path = entry["path"]
+            content = entry["content"]
+            file_cache[path] = content
+            file_hashes[path] = _hash_content(content)
+
+    return {
+        "retrieved_context": context,
+        "_file_cache": file_cache,
+        "_file_hashes": file_hashes,
+    }
 
 
 # ── Node: reason ──────────────────────────────────────────────────────────────
@@ -146,11 +165,13 @@ def _hash_content(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
-def _detect_tool_repetition(tool_history: list[dict], window: int = 4) -> bool:
+def _detect_tool_repetition(tool_history: list[dict], window: int = 6) -> bool:
     """Return True if the last `window` tool calls are identical (same tool + same args).
 
-    This is a fast early-detection heuristic. The authoritative convergence
-    signal is repository-state change tracking (see `_no_progress_write_cycles`).
+    Window of 6 prevents false positives from legitimate patterns like:
+      read_file A → read_file B → read_file A (gathering context across files)
+    while still catching genuine loops where the agent re-reads the same file
+    repeatedly without making progress.
     """
     if len(tool_history) < window:
         return False
@@ -174,9 +195,12 @@ async def _call_llm_for_reason(
     provider = get_chat_provider()
     content_parts: list[str] = []
 
+    # Use a generous max_tokens so large file writes (CSS, JS, etc.) are never
+    # truncated mid-JSON. 16384 tokens ~ 12000 words — enough for full-file
+    # rewrites of large stylesheets, components, or config files.
     async for event in provider.stream(
         messages=messages,
-        payload={},
+        payload={"max_tokens": 16384},
         request_id=f"reason-{ctx.task_execution_id[:8]}-{ctx.step_id}-a{attempt}",
         response_format={"type": "json_object"},
     ):
@@ -365,11 +389,32 @@ async def node_reason(state: ExecutionState) -> dict:
             }
         except (json.JSONDecodeError, ValueError) as e:
             parse_error = str(e)
+            # Detect truncation: if the raw response is long and ends mid-JSON,
+            # the LLM hit max_tokens. Tell it to use smaller file content.
+            is_truncated = (
+                len(raw) > 4000 and
+                ("Expecting ',' delimiter" in parse_error or
+                 "Extra data" in parse_error or
+                 "Unterminated string" in parse_error or
+                 raw.count("{") != raw.count("}"))
+            )
+            if is_truncated:
+                parse_error = (
+                    f"{parse_error}. "
+                    "Your response was TRUNCATED because the file content was too large "
+                    "for a single JSON response. Write the file in SMALLER sections: "
+                    "first write_file with the top portion of the file, then do another "
+                    "write_file with the complete content, or focus on changing only the "
+                    "specific lines that need modification rather than rewriting the "
+                    "entire file."
+                )
             logger.warning(
                 "node_reason_json_parse_failed",
                 step_id=ctx.step_id,
                 attempt=attempt,
-                error=parse_error,
+                error=str(e),
+                is_truncated=is_truncated,
+                raw_length=len(raw),
                 raw_preview=raw[:200],
             )
             attempt += 1
@@ -453,7 +498,6 @@ async def node_call_tool(state: ExecutionState) -> dict:
                 "latest_tool_result": cached_result,
                 "_pending_action": None,
             }
-
     # ── Fix 2: identical-content skip for write / create ─────────────────────
     if tool_name in ("write_file", "create_file"):
         path = tool_args.get("path", "")
@@ -555,6 +599,27 @@ async def node_call_tool(state: ExecutionState) -> dict:
                 new_no_progress = no_progress_cycles + 1
             updates["_no_progress_write_cycles"] = new_no_progress
 
+        elif tool_name == "read_file":
+            # Cache the read content so repeated reads of the same file are free.
+            # This is the primary fix for the read-loop bug: once the LLM reads a
+            # file, subsequent read_file calls for the same path return instantly
+            # from cache, so the tool_history grows but the content is stable.
+            path = tool_args.get("path", "")
+            content_val = result.result or {}
+            if isinstance(content_val, dict):
+                content_str = content_val.get("content", "")
+            else:
+                content_str = str(content_val)
+            if path and content_str:
+                file_cache[path] = content_str
+                updates["_file_cache"] = file_cache
+                logger.info(
+                    "node_call_tool_read_cached",
+                    step_id=ctx.step_id,
+                    path=path,
+                    content_len=len(content_str),
+                )
+
         elif tool_name in ("delete_file", "rename_file"):
             # Invalidate cache for affected paths.
             path = tool_args.get("path", tool_args.get("old_path", ""))
@@ -573,7 +638,14 @@ async def node_call_tool(state: ExecutionState) -> dict:
 # ── Node: receive_result ──────────────────────────────────────────────────────
 
 async def node_receive_result(state: ExecutionState) -> dict:
-    """Process the tool result — no LLM call, just routing logic."""
+    """Process the tool result — no LLM call, just routing logic.
+
+    Returns the latest_tool_result explicitly so the LangGraph snapshot always
+    has a non-empty update for this node, which ensures _emit_node_events can
+    emit the tool_result event correctly (it reads from the update dict).
+    Without this, the snapshot is `{"receive_result": {}}` and the pipeline
+    logs `_emit_node_events_none_update`, dropping the tool_result stream event.
+    """
     result: ToolCallResult | None = state.get("latest_tool_result")
     if result and not result.success:
         logger.warning(
@@ -582,8 +654,9 @@ async def node_receive_result(state: ExecutionState) -> dict:
             error=result.error,
             step_id=state["ctx"].step_id,
         )
-    # Routing happens in edges — this node is a pass-through for state.
-    return {}
+    # Return the result explicitly so the snapshot update is non-empty.
+    # This keeps the tool_result event visible to the pipeline emitter.
+    return {"latest_tool_result": result} if result is not None else {}
 
 
 # ── Terminal nodes ────────────────────────────────────────────────────────────

@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge, ConnectionStatus } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
-import { useOptimisticMutation } from '@/hooks/useOptimisticMutation'
 import { AIActivityPanel } from '@/features/workspace/AIActivityPanel'
 import { TaskStatusBar } from '@/features/workspace/TaskStatusBar'
 import { LivePreview } from '@/features/workspace/LivePreview'
+import { CodeEditor } from '@/features/workspace/CodeEditor'
 import { FileExplorer } from '@/features/workspace/FileExplorer'
+import { useWorkspaceSocket } from '@/hooks/useWorkspaceSocket'
 import { MissionHero } from '@/features/task-workspace/MissionHero'
 import { useRepairStream } from '@/features/task-workspace/useRepairStream'
 import {
@@ -40,7 +41,8 @@ import {
   useStartValidationMutation,
 } from '@/services/api/validationApi'
 import { useGetRepairSessionByTaskQuery } from '@/services/api/repairApi'
-import { useStopExecutionMutation } from '@/services/api/workspaceEditorApi'
+import { useStopExecutionMutation, useGetFileTreeQuery } from '@/services/api/workspaceEditorApi'
+import { setFileTree } from '@/store/slices/workspaceEditorSlice'
 import {
   useGetWorkspaceQuery,
   useProvisionWorkspaceMutation,
@@ -57,6 +59,12 @@ import styles from './TaskWorkspace.module.css'
 
 const EXEC_LIVE = new Set(['pending', 'running'])
 const STORAGE_PREFIX = 'forge-turn-artifacts'
+// Stable empty array — returning a fresh `[]` from a useAppSelector on every
+// evaluation creates a new reference each render, which flows into useMemo
+// deps → effect deps → setState → re-render → new reference… an infinite
+// "Maximum update depth exceeded" loop. A module-level constant keeps the
+// reference identical so empty streams don't trigger re-renders.
+const NO_EVENTS: never[] = []
 
 function loadStoredArtifacts(taskId: string): Record<number, TurnArtifacts> {
   try {
@@ -120,6 +128,24 @@ export function TaskWorkspace() {
     { repoId, taskId },
     { skip: !repoId || !taskId },
   )
+
+  // Connect the workspace socket for THIS page so the embedded code editor
+  // receives the agent's live file edits (aiFileStreamed) and opens/streams
+  // them in real time — v0-style — without navigating to the separate IDE page.
+  // The hook no-ops until a workspace id exists.
+  useWorkspaceSocket(workspace?.id ?? '')
+
+  // Right panel: live code editor (default, v0-style) vs. running-app preview.
+  const [rightTab, setRightTab] = useState<'code' | 'preview'>('code')
+
+  // Auto-run provisions the workspace server-side — the mount-time query above
+  // predates it (and 404s, leaving `workspace` null). Refetch the instant the
+  // execution phase begins so the Live Preview gets a real workspace ID.
+  const prevExecLive = useRef(false)
+  useEffect(() => {
+    if (execLive && !prevExecLive.current) refetchWorkspace()
+    prevExecLive.current = execLive
+  }, [execLive, refetchWorkspace])
 
   // Phase 10 — publishing. Session id bootstraps the WebSocket; live progress
   // comes over usePublishingStream, not polling.
@@ -199,14 +225,14 @@ export function TaskWorkspace() {
   useRepairStream(repairSession?.id, Boolean(repairSession))
   usePublishingStream(publishSession?.id, publishActive)
 
-  const planEvents = useAppSelector((s) => (taskId ? s.stream.planning[taskId]?.events ?? [] : []))
-  const execEvents = useAppSelector((s) => (taskId ? s.stream.execution[taskId]?.events ?? [] : []))
-  const valEvents = useAppSelector((s) => (taskId ? s.stream.validation[taskId]?.events ?? [] : []))
+  const planEvents = useAppSelector((s) => (taskId ? s.stream.planning[taskId]?.events ?? NO_EVENTS : NO_EVENTS))
+  const execEvents = useAppSelector((s) => (taskId ? s.stream.execution[taskId]?.events ?? NO_EVENTS : NO_EVENTS))
+  const valEvents = useAppSelector((s) => (taskId ? s.stream.validation[taskId]?.events ?? NO_EVENTS : NO_EVENTS))
   const repairEvents = useAppSelector((s) =>
-    repairSession?.id ? s.stream.repair[repairSession.id]?.events ?? [] : [],
+    repairSession?.id ? s.stream.repair[repairSession.id]?.events ?? NO_EVENTS : NO_EVENTS,
   )
   const pubEvents = useAppSelector((s) =>
-    publishSession?.id ? s.stream.publishing[publishSession.id]?.events ?? [] : [],
+    publishSession?.id ? s.stream.publishing[publishSession.id]?.events ?? NO_EVENTS : NO_EVENTS,
   )
 
   // React only to the COMMITTED terminal events the backend emits after it has
@@ -227,8 +253,11 @@ export function TaskWorkspace() {
       refetchExec()
       refetchDiffs()
       refetchTask()
+      // Belt-and-suspenders: re-query the workspace on execution events too, in
+      // case the rising-edge refetch landed before the workspace row committed.
+      refetchWorkspace()
     }
-  }, [lastExec, execEvents.length, refetchExec, refetchDiffs, refetchTask])
+  }, [lastExec, execEvents.length, refetchExec, refetchDiffs, refetchTask, refetchWorkspace])
 
   const lastVal = valEvents[valEvents.length - 1]?.kind
   useEffect(() => {
@@ -357,6 +386,15 @@ export function TaskWorkspace() {
         if (pubTime >= boundary || (pubLive && pubTime === 0)) snapshot.publishingSession = publishSession
       }
 
+      // Bail out if the snapshot for this turn is unchanged. Without this, the
+      // effect always returns a NEW object → re-render → its array deps
+      // (fileChanges, validationStages, …) are recomputed as new references →
+      // effect fires again → infinite "Maximum update depth exceeded" loop.
+      const existing = prev[currentTurn]
+      if (existing && JSON.stringify(existing) === JSON.stringify(snapshot)) {
+        return prev
+      }
+
       const next = { ...prev, [currentTurn]: snapshot }
       saveStoredArtifacts(taskId, next)
       return next
@@ -482,6 +520,18 @@ export function TaskWorkspace() {
   }
 
   const dispatch = useAppDispatch()
+
+  // Load the workspace file tree into the editor slice so the embedded
+  // FileExplorer shows files (clickable → opens in the right-side CodeEditor).
+  // Without this the tree is empty on the mission page and nothing can be
+  // selected. Refetches automatically on WS 'WsFiles' invalidation (agent edits).
+  const { data: fileTreeData } = useGetFileTreeQuery(workspace?.id ?? '', {
+    skip: !workspace?.id,
+    refetchOnMountOrArgChange: true,
+  })
+  useEffect(() => {
+    if (fileTreeData?.tree) dispatch(setFileTree(fileTreeData.tree))
+  }, [fileTreeData, dispatch])
 
   // Re-plan = start a completely fresh cycle. The backend wipes the previous
   // run's artifacts (execution/diffs/validation/repair/publishing); here we
@@ -944,7 +994,10 @@ export function TaskWorkspace() {
             <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
               Files
             </div>
-            <FileExplorer />
+            <FileExplorer
+              workspaceId={workspace?.id ?? ''}
+              height={300}
+            />
           </div>
         </div>
 
@@ -971,9 +1024,65 @@ export function TaskWorkspace() {
           />
         </div>
 
-        {/* Right: Live Preview */}
-        <div style={{ width: '400px', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <LivePreview />
+        {/* Right: embedded VS Code-style editor (default) + running-app preview,
+            toggled by tabs — v0-style, no navigation to a separate IDE page.
+            The editor streams the agent's file edits live via aiFileStreamed. */}
+        <div style={{ width: '480px', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-base)' }}>
+          {workspace?.id ? (
+            <>
+              {/* Tab strip */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', borderBottom: '1px solid var(--border-subtle)' }}>
+                <button
+                  onClick={() => setRightTab('code')}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', fontSize: 12,
+                    borderRadius: 6, border: 'none', cursor: 'pointer',
+                    background: rightTab === 'code' ? 'var(--surface-raised)' : 'transparent',
+                    color: rightTab === 'code' ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                    fontWeight: rightTab === 'code' ? 600 : 500,
+                  }}
+                >
+                  <Icon name="code" size={13} /> Code
+                </button>
+                <button
+                  onClick={() => setRightTab('preview')}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', fontSize: 12,
+                    borderRadius: 6, border: 'none', cursor: 'pointer',
+                    background: rightTab === 'preview' ? 'var(--surface-raised)' : 'transparent',
+                    color: rightTab === 'preview' ? 'var(--text-primary)' : 'var(--text-tertiary)',
+                    fontWeight: rightTab === 'preview' ? 600 : 500,
+                  }}
+                >
+                  <Icon name="monitor" size={13} /> Preview
+                </button>
+              </div>
+              {/* Both stay mounted so switching tabs preserves state; only the
+                  active one is shown. */}
+              <div style={{ flex: 1, minHeight: 0, display: rightTab === 'code' ? 'flex' : 'none', flexDirection: 'column' }}>
+                <CodeEditor workspaceId={workspace.id} />
+              </div>
+              <div style={{ flex: 1, minHeight: 0, display: rightTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
+                <LivePreview workspaceId={workspace.id} />
+              </div>
+            </>
+          ) : (
+            <div
+              style={{
+                flex: 1, display: 'flex', flexDirection: 'column', gap: 8,
+                alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+                padding: 16, color: 'var(--text-tertiary)', fontSize: 12,
+              }}
+            >
+              <Icon name="code" size={20} />
+              <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>No workspace yet</span>
+              <span style={{ maxWidth: 240, lineHeight: 1.5 }}>
+                {taskAutoRun || status === 'planning' || status === 'draft'
+                  ? 'Forge is preparing the workspace — code will stream in here as the agent edits files.'
+                  : 'Approve the plan and run it to provision the workspace.'}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

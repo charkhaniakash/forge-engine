@@ -1,4 +1,4 @@
-import { configureStore } from '@reduxjs/toolkit'
+import { configureStore, type ThunkAction, type UnknownAction } from '@reduxjs/toolkit'
 import { baseApi } from '@/services/api/baseApi'
 import { websocketMiddleware } from '@/store/middleware/websocketMiddleware'
 import { unifiedStreamBridgeMiddleware } from '@/store/middleware/unifiedStreamBridgeMiddleware'
@@ -29,21 +29,24 @@ import '@/services/api/repairApi'
 import '@/services/api/publishingApi'
 import '@/services/api/workspaceEditorApi'
 
+const reducer = {
+  [baseApi.reducerPath]: baseApi.reducer,
+  auth: authReducer,
+  ui: uiReducer,
+  notifications: notificationReducer,
+  websocket: websocketReducer,
+  stream: streamReducer,
+  unifiedStream: unifiedStreamReducer,
+  reconnectSession: reconnectSessionReducer,
+  optimistic: optimisticReducer,
+  workspaceEditor: workspaceEditorReducer,
+  workspaceTerminal: workspaceTerminalReducer,
+  workspaceActivity: workspaceActivityReducer,
+}
+
+// Build store with explicit typing to avoid circular reference
 export const store = configureStore({
-  reducer: {
-    [baseApi.reducerPath]: baseApi.reducer,
-    auth: authReducer,
-    ui: uiReducer,
-    notifications: notificationReducer,
-    websocket: websocketReducer,
-    stream: streamReducer,
-    unifiedStream: unifiedStreamReducer,
-    reconnectSession: reconnectSessionReducer,
-    optimistic: optimisticReducer,
-    workspaceEditor: workspaceEditorReducer,
-    workspaceTerminal: workspaceTerminalReducer,
-    workspaceActivity: workspaceActivityReducer,
-  },
+  reducer,
   middleware: (getDefaultMiddleware) =>
     getDefaultMiddleware().concat(
       baseApi.middleware,
@@ -54,5 +57,13 @@ export const store = configureStore({
     ),
 })
 
-export type RootState = ReturnType<typeof store.getState>
+export type RootState = {
+  [K in keyof typeof reducer]: ReturnType<typeof reducer[K]>
+}
 export type AppDispatch = typeof store.dispatch
+export type AppThunk<ReturnType = void> = ThunkAction<
+  ReturnType,
+  RootState,
+  unknown,
+  UnknownAction
+>

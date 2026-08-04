@@ -11,6 +11,10 @@ import {
 import { workspaceSocket } from '@/services/workspace/WorkspaceSocket'
 import styles from './workspace.module.css'
 
+// Stable empty array — `?? []` inside a selector creates a new reference every
+// render, forcing re-renders on every store dispatch even when idle.
+const NO_OUTPUT: string[] = []
+
 /**
  * xterm.js terminal wired to the workspace container over the multiplexed
  * socket. The backend session is created LAZILY — only once the panel is
@@ -31,10 +35,10 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
   const [closeTerminal] = useCloseTerminalMutation()
   const activeTerminalId = useAppSelector((s) => s.workspaceTerminal.activeTerminalId)
   const output = useAppSelector((s) =>
-    activeTerminalId ? s.workspaceTerminal.output[activeTerminalId] ?? [] : [],
+    activeTerminalId ? s.workspaceTerminal.output[activeTerminalId] ?? NO_OUTPUT : NO_OUTPUT,
   )
   console.log('[TerminalPanel] activeTerminalId:', activeTerminalId, 'output length:', output.length)
-  const agentOutput = useAppSelector((s) => s.workspaceTerminal.output['agent'] ?? [])
+  const agentOutput = useAppSelector((s) => s.workspaceTerminal.output['agent'] ?? NO_OUTPUT)
   const agentWrittenRef = useRef(0)
 
   // Boot xterm + backend session once, only when the panel is visible & sized.

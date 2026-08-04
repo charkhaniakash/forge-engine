@@ -40,10 +40,11 @@ export function EventTimeline({
     return sorted.map((event, idx) => {
       const metadata = extractEventMetadata(event.raw || {})
       const isPhaseEnd = isPhaseTransition(event.kind)
-      const tone = eventTone(metadata.phase || '', event.kind)
-      
-      // Format: "Execution #42 · 14:30:45" or "execution_step · 14:30:45"
-      const timeStr = metadata.formattedTime ? ` · ${metadata.formattedTime}` : ''
+      const rawTone = eventTone(metadata.phase || '', event.kind)
+      // eventTone returns the full union; Timeline.Tone = Tone from constants/status
+      // which includes 'success'|'warning'|'danger'|'info'|'neutral'|'accent'
+      // Map 'error' → 'danger' since Tone doesn't include 'error'
+      const tone = (rawTone === 'error' ? 'danger' : rawTone) as import('@/constants/status').Tone
       const seqStr = metadata.seq !== undefined ? ` #${metadata.seq}` : ''
       const title = `${event.label || event.kind}${seqStr}`
       

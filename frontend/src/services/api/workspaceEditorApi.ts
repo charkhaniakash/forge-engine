@@ -7,6 +7,16 @@ import type {
   WorkspaceHealth,
 } from '@/types/workspaceEditor'
 
+export interface PreviewSession {
+  id: string
+  workspace_id: string
+  port: number
+  command: string[]
+  status: 'idle' | 'starting' | 'compiling' | 'ready' | 'error' | 'stopped'
+  url: string
+  started_at: string
+}
+
 /**
  * Phase 10B browser-IDE REST endpoints. Real-time data (file changes, terminal
  * output, timeline, …) arrives over the multiplexed WebSocket — these endpoints
@@ -88,6 +98,29 @@ export const workspaceEditorApi = baseApi.injectEndpoints({
         method: 'POST',
       }),
     }),
+    // ── Preview (embedded dev-server) ───────────────────────────────────────
+    getPreviewStatus: builder.query<PreviewSession | { status: string }, string>({
+      query: (workspaceId) => `/workspace/${workspaceId}/preview`,
+      providesTags: ['WsPreview'],
+    }),
+    startPreview: builder.mutation<
+      PreviewSession,
+      { workspaceId: string; command?: string[]; port?: number }
+    >({
+      query: ({ workspaceId, command, port }) => ({
+        url: `/workspace/${workspaceId}/preview/start`,
+        method: 'POST',
+        body: { command, port },
+      }),
+      invalidatesTags: ['WsPreview'],
+    }),
+    stopPreview: builder.mutation<{ stopped: boolean }, string>({
+      query: (workspaceId) => ({
+        url: `/workspace/${workspaceId}/preview`,
+        method: 'DELETE',
+      }),
+      invalidatesTags: ['WsPreview'],
+    }),
   }),
 })
 
@@ -112,4 +145,7 @@ export const {
   usePauseExecutionMutation,
   useResumeExecutionMutation,
   useStopExecutionMutation,
+  useGetPreviewStatusQuery,
+  useStartPreviewMutation,
+  useStopPreviewMutation,
 } = workspaceEditorApi

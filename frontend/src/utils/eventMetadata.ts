@@ -152,7 +152,7 @@ export function isPhaseTransition(eventType: string): boolean {
  * Assign a visual tone/color to an event based on phase and type.
  */
 export function eventTone(
-  phase: string,
+  _phase: string,
   eventType: string,
 ): 'success' | 'warning' | 'error' | 'info' | 'neutral' {
   if (eventType.includes('error') || eventType.includes('failed')) return 'error'

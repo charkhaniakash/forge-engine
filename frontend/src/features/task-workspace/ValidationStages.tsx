@@ -104,7 +104,7 @@ function StageSummary({ stages }: { stages: ValidationStageVM[] }) {
   )
 }
 
-export function ValidationStages({ stages, title = '' }: ValidationStagesProps) {
+export function ValidationStages({ stages, title: _title = '' }: ValidationStagesProps) {
   const [open, setOpen] = useState<string | null>(() => {
     const running = stages.find((s) => s.state === 'active')
     const issues = stages.find((s) => s.state === 'failed')

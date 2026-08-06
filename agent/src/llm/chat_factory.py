@@ -46,10 +46,14 @@ def get_chat_provider() -> ChatProvider:
         from src.llm.openrouter_chat import OpenRouterChatProvider
         _instance = OpenRouterChatProvider()
 
+    elif provider == "tokenrouter":
+        from src.llm.tokenrouter_chat import TokenRouterChatProvider
+        _instance = TokenRouterChatProvider()
+
     else:
         raise ValueError(
             f"Unknown CHAT__PROVIDER '{provider}'. "
-            "Supported values: openai, gemini, anthropic, ollama, groq, openrouter"
+            "Supported values: openai, gemini, anthropic, ollama, groq, openrouter, tokenrouter"
         )
 
     return _instance

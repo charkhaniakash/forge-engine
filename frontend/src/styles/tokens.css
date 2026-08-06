@@ -11,6 +11,7 @@
   color-scheme: dark;
 
   /* ── Surfaces (low → high elevation) ───────────────────────────────── */
+  --background: #0A0A0A;
   --surface-base: #0A0A0A; /* app background */
   --surface-1: #111113; /* cards, panels */
   --surface-2: #181920; /* raised / hover */
@@ -32,6 +33,8 @@
   --text-inverse: #050507;
   --text-on-accent: #050507;
   --text-on-primary: #050507;
+  --muted: #12131A;
+  --muted-foreground: #71717A;
   --foreground: #EDEDED;
   --muted-foreground: #71717A;
 
@@ -78,6 +81,7 @@
   color-scheme: light;
 
   /* ── Surfaces ─────────────────────────────────────────────────────── */
+  --background: #F7F9FB;
   --surface-base: #F7F9FB;
   --surface-1: #FFFFFF;
   --surface-2: #F2F4F6;
@@ -105,6 +109,7 @@
   --text-on-accent: #FFFFFF;
   --text-on-primary: #191C1E;
   --foreground: #191C1E;
+  --muted: #ECEEF0;
   --muted-foreground: #737688;
 
   /* ── Brand / accent — BLUE ────────────────────────────────────────– */

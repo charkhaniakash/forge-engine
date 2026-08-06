@@ -173,6 +173,10 @@
   --sidebar-width-collapsed: 56px;
   --bottom-panel-height: 280px;
 
+  /* ── Surface aliases (for backward-compat with components that reference these) */
+  --surface-raised: var(--surface-2);
+  --surface-elevated: var(--surface-1);
+
   /* ── Motion ────────────────────────────────────────────────────────── */
   --duration-fast: 120ms;
   --duration-normal: 200ms;

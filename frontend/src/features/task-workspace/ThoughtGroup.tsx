@@ -10,11 +10,8 @@ export interface ThoughtGroupProps {
 
 /** A burst of consecutive reasoning/tool-use events shown inline as steps. */
 export function ThoughtGroup({ group, isLive }: ThoughtGroupProps) {
-  const verb = group.hasToolActivity ? 'Working' : 'Exploring'
+  const verb = group.hasToolActivity ? 'Working' : 'Thinking'
   const duration = group.durationMs != null ? formatDuration(group.durationMs) : null
-  const label = duration
-    ? `${verb} · ${duration}`
-    : verb
 
   return (
     <div className={`${styles.group} ${isLive ? styles.live : ''}`}>
@@ -28,7 +25,10 @@ export function ThoughtGroup({ group, isLive }: ThoughtGroupProps) {
             </svg>
           )}
         </span>
-        <span className={styles.label}>{label}</span>
+        <span className={styles.label}>{verb}</span>
+        {duration && !isLive && (
+          <span className={styles.durationChip}>{duration}</span>
+        )}
       </div>
       <div className={styles.steps}>
         {group.events.map((ev) => <CompactStep key={ev.id} ev={ev} />)}

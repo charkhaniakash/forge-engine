@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge, ConnectionStatus } from '@/components/common'
+import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
 import { AIActivityPanel } from '@/features/workspace/AIActivityPanel'
 import { TaskStatusBar } from '@/features/workspace/TaskStatusBar'
@@ -54,7 +54,7 @@ import {
 import { usePublishingStream } from '@/features/task-workspace/usePublishingStream'
 import { loadPlanMode, savePlanMode } from '@/features/task-workspace/planMode'
 import { WORK_ITEM_STATUS } from '@/constants/status'
-import { ROUTES, routeTo } from '@/constants/routes'
+import { ROUTES } from '@/constants/routes'
 import styles from './TaskWorkspace.module.css'
 
 const EXEC_LIVE = new Set(['pending', 'running'])
@@ -65,6 +65,7 @@ const STORAGE_PREFIX = 'forge-turn-artifacts'
 // "Maximum update depth exceeded" loop. A module-level constant keeps the
 // reference identical so empty streams don't trigger re-renders.
 const NO_EVENTS: never[] = []
+const NO_DIFFS: never[] = []
 
 function loadStoredArtifacts(taskId: string): Record<number, TurnArtifacts> {
   try {
@@ -108,10 +109,13 @@ export function TaskWorkspace() {
   const taskExecutionId = execution?.id ?? ''
   const execLive = EXEC_LIVE.has(execution?.status ?? '')
 
-  const { data: diffs = [], refetch: refetchDiffs } = useGetExecutionDiffsQuery(
+  const { data: diffsData, refetch: refetchDiffs } = useGetExecutionDiffsQuery(
     { repoId, taskId },
     { skip: !execution },
   )
+  // Stable reference — the inline `= []` default creates a new array ref on
+  // every render when the query is skipped, making useMemo deps unstable.
+  const diffs = diffsData ?? NO_DIFFS
 
   const { data: valSnap, refetch: refetchVal } = useGetValidationQuery(
     { repoId, taskId },
@@ -251,7 +255,9 @@ export function TaskWorkspace() {
   useEffect(() => {
     if (lastExec && ['step_complete', 'exec_complete', 'error', 'execution_error'].includes(lastExec)) {
       refetchExec()
-      refetchDiffs()
+      // Guard: refetchDiffs throws "query has not been started yet" when the
+      // diffs query is still skipped (execution was null at subscribe time).
+      if (execution) refetchDiffs()
       refetchTask()
       // Belt-and-suspenders: re-query the workspace on execution events too, in
       // case the rising-edge refetch landed before the workspace row committed.
@@ -316,6 +322,14 @@ export function TaskWorkspace() {
   const [turnArtifacts, setTurnArtifacts] = useState<Record<number, TurnArtifacts>>(
     () => loadStoredArtifacts(taskId),
   )
+  // Mutable ref mirrors the state so the snapshot effect can read the current
+  // value synchronously (without capturing stale state in the closure) and
+  // compare before ever calling setTurnArtifacts — breaking the render loop.
+  const turnArtifactsRef = useRef<Record<number, TurnArtifacts>>(turnArtifacts)
+  // Tracks the last JSON we committed per-turn so bail-out works even when
+  // prev[currentTurn] is undefined (first render for a new turn).
+  const lastSnapshotKeyRef = useRef<Record<number, string>>({})
+
   const currentTurn = useMemo(() => {
     const maxTurn = (messagesData?.messages ?? []).reduce(
       (mx, m) => Math.max(mx, m.turn_number),
@@ -346,60 +360,69 @@ export function TaskWorkspace() {
 
   // Snapshot current artifacts whenever they change, keyed by the current turn.
   // Persists to localStorage so the full conversation survives page refresh.
+  //
+  // Root cause of "Maximum update depth exceeded":
+  //   1. The old bail-out was `if (existing && ...)` — skipped when existing
+  //      is undefined (first render for a new turn), always setting new state.
+  //   2. `const { data: diffs = [] }` created a new [] ref every render when
+  //      the query was skipped, making fileChanges unstable and re-firing the
+  //      effect after every render triggered by the setState call above.
+  //
+  // Fix: build the snapshot outside setTurnArtifacts, compare via a ref that
+  // is keyed per-turn (works even when there is no prior snapshot), and only
+  // call setTurnArtifacts when the content actually changed.
   useEffect(() => {
-    setTurnArtifacts((prev) => {
-      const boundary = turnBoundaryCache[currentTurn] ?? 0
-      const snapshot = { ...(prev[currentTurn] ?? { fileChanges: [], validationStages: [], repairAttempts: [], publishingSession: null }) }
+    const boundary = turnBoundaryCache[currentTurn] ?? 0
+    const prevTurn = turnArtifactsRef.current[currentTurn] ?? {
+      fileChanges: [],
+      validationStages: [],
+      repairAttempts: [],
+      publishingSession: null,
+    }
+    const snapshot: TurnArtifacts = { ...prevTurn }
 
-      // Plan: only cache if it was created after this turn started
-      if (plan) {
-        const planTime = plan.created_at ? new Date(plan.created_at).getTime() : 0
-        if (planTime >= boundary) snapshot.plan = plan
+    if (plan) {
+      const planTime = plan.created_at ? new Date(plan.created_at).getTime() : 0
+      if (planTime >= boundary) snapshot.plan = plan
+    }
+    if (fileChanges.length > 0) {
+      const execTime = execution?.started_at ? new Date(execution.started_at).getTime() : 0
+      if (execTime >= boundary || (execLive && execTime === 0)) snapshot.fileChanges = fileChanges
+    }
+    if (validationStages.length > 0) {
+      const valTime = valRun?.created_at ? new Date(valRun.created_at).getTime() : 0
+      if (valTime >= boundary || (valLiveState && valTime === 0)) {
+        snapshot.validationStages = validationStages
+        snapshot.validationOverall = valRun?.overall_result
       }
-      // File changes: only cache if execution started after this turn
-      // Fallback: if execution is actively running, assume data belongs to current turn
-      if (fileChanges.length > 0) {
-        const execTime = execution?.started_at ? new Date(execution.started_at).getTime() : 0
-        if (execTime >= boundary || (execLive && execTime === 0)) snapshot.fileChanges = fileChanges
-      }
-      // Validation: only cache if validation run started after this turn
-      // Fallback: if validation is actively streaming, assume data belongs to current turn
-      if (validationStages.length > 0) {
-        const valTime = valRun?.created_at ? new Date(valRun.created_at).getTime() : 0
-        if (valTime >= boundary || (valLiveState && valTime === 0)) {
-          snapshot.validationStages = validationStages
-          snapshot.validationOverall = valRun?.overall_result
-        }
-      }
-      // Repair: only cache if repair session started after this turn
-      // Fallback: if repair is actively running, assume data belongs to current turn
-      if (repairAttempts.length > 0) {
-        const repairTime = repairSession?.created_at ? new Date(repairSession.created_at).getTime() : 0
-        const repairLive = repairSession?.status === 'running'
-        if (repairTime >= boundary || (repairLive && repairTime === 0)) snapshot.repairAttempts = repairAttempts
-      }
-      // Publishing: only cache if publish session started after this turn
-      // Fallback: if publishing is actively running, assume data belongs to current turn
-      if (publishSession) {
-        const pubTime = publishSession.created_at ? new Date(publishSession.created_at).getTime() : 0
-        const pubLive = publishActive
-        if (pubTime >= boundary || (pubLive && pubTime === 0)) snapshot.publishingSession = publishSession
-      }
+    }
+    if (repairAttempts.length > 0) {
+      const repairTime = repairSession?.created_at ? new Date(repairSession.created_at).getTime() : 0
+      const repairLive = repairSession?.status === 'running'
+      if (repairTime >= boundary || (repairLive && repairTime === 0)) snapshot.repairAttempts = repairAttempts
+    }
+    if (publishSession) {
+      const pubTime = publishSession.created_at ? new Date(publishSession.created_at).getTime() : 0
+      if (pubTime >= boundary || (publishActive && pubTime === 0)) snapshot.publishingSession = publishSession
+    }
 
-      // Bail out if the snapshot for this turn is unchanged. Without this, the
-      // effect always returns a NEW object → re-render → its array deps
-      // (fileChanges, validationStages, …) are recomputed as new references →
-      // effect fires again → infinite "Maximum update depth exceeded" loop.
-      const existing = prev[currentTurn]
-      if (existing && JSON.stringify(existing) === JSON.stringify(snapshot)) {
-        return prev
-      }
+    const key = JSON.stringify(snapshot)
+    if (lastSnapshotKeyRef.current[currentTurn] === key) return
 
-      const next = { ...prev, [currentTurn]: snapshot }
-      saveStoredArtifacts(taskId, next)
-      return next
-    })
-  }, [currentTurn, turnBoundaryCache, plan, fileChanges, validationStages, valRun?.overall_result, repairAttempts, publishSession, execution?.started_at, valRun?.created_at, repairSession?.created_at, publishSession?.created_at, taskId])
+    lastSnapshotKeyRef.current[currentTurn] = key
+    const next = { ...turnArtifactsRef.current, [currentTurn]: snapshot }
+    turnArtifactsRef.current = next
+    saveStoredArtifacts(taskId, next)
+    setTurnArtifacts(next)
+  }, [
+    currentTurn, turnBoundaryCache, plan, fileChanges, validationStages,
+    valRun?.overall_result, repairAttempts, publishSession,
+    execution?.started_at, execLive,
+    valRun?.created_at, valLiveState,
+    repairSession?.created_at, repairSession?.status,
+    publishSession?.created_at, publishActive,
+    taskId,
+  ])
 
   const conversation = useMemo(
     () =>
@@ -547,13 +570,15 @@ export function TaskWorkspace() {
     setReplanConfirmOpen(false)
     if (ok === false) return
     setTurnArtifacts({})
+    turnArtifactsRef.current = {}
+    lastSnapshotKeyRef.current = {}
     localStorage.removeItem(`${STORAGE_PREFIX}-${taskId}`)
     if (taskId) dispatch(taskStreamsReset(taskId))
     if (publishSession?.id) dispatch(clearPublishingEvents(publishSession.id))
     if (repairSession?.id) dispatch(clearRepairEvents(repairSession.id))
     refetchTask()
     refetchExec()
-    refetchDiffs()
+    if (execution) refetchDiffs()
     refetchVal()
     refetchRepair()
     refetchPublish()
@@ -804,31 +829,24 @@ export function TaskWorkspace() {
         <button className={styles.back} onClick={() => navigate(ROUTES.root)}>
           <Icon name="chevronLeft" size={14} />
         </button>
-        <span className={styles.crumb}>WORKSPACE / {taskId.slice(0, 8).toUpperCase()}</span>
+        <span className={styles.crumb}>Mission</span>
         <span className={styles.headerDivider} />
-        <Icon name="git" size={13} className={styles.headerGitIcon} />
+        <Icon name="git" size={12} className={styles.headerGitIcon} />
         <span className={styles.headerRepoName}>{repoId ? `repo-${repoId.slice(0, 6)}` : 'No repo'}</span>
       </div>
       <div className={styles.headerRight}>
-        <ConnectionStatus />
-        {live && (
+        {/* Task phase indicator — derived from what the component already knows,
+            never reads from a stale Redux slice that's never updated here */}
+        {live ? (
           <span className={styles.headerLive}>
             <span className={styles.liveDot}><span /></span>
-            {liveHint ?? 'live'}
+            {liveHint ?? 'Live'}
           </span>
-        )}
-        <span className={styles.headerGpu}>GPU: H100 Node 4</span>
-        <div className={styles.headerGpuDot} />
-        {workspace && (workspace.status === 'ready' || workspace.status === 'executing') && (
-          <Button
-            size="sm"
-            variant="secondary"
-            leadingIcon={<Icon name="code" size={14} />}
-            onClick={() => navigate(routeTo.workspaceEditor(workspace.id, taskId, repoId))}
-          >
-            Open IDE
-          </Button>
-        )}
+        ) : missionDone ? (
+          <span className={styles.headerDoneChip}>✓ Complete</span>
+        ) : missionFailed ? (
+          <span className={styles.headerFailChip}>✗ Failed</span>
+        ) : null}
       </div>
     </div>
   )
@@ -972,37 +990,50 @@ export function TaskWorkspace() {
     </>
   )
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100%' }}>
-      {/* Status Bar - Always visible at top */}
-      <TaskStatusBar />
+  const trailingMessages = (() => {
+    const serverMsgs = (messagesData?.messages ?? [])
+      .filter((m) => m.role === 'user' && m.turn_number > 1)
+      .map((m) => m.content)
+    const serverSet = new Set(serverMsgs)
+    return sentRefinements.filter((r) => !serverSet.has(r))
+  })()
 
-      {/* Main Content Area */}
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100%', overflow: 'hidden' }}>
+      {/* Main 3-column workspace */}
       <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: '1px', background: 'var(--border-subtle)' }}>
-        {/* Left: Activity Panel + File Explorer */}
-        <div style={{ display: 'flex', flexDirection: 'column', width: '280px', minHeight: 0, background: 'var(--surface-base)' }}>
-          {/* Activity Feed */}
-          <div style={{ flex: '1 1 40%', minHeight: 0, borderBottom: '1px solid var(--border-subtle)' }}>
-            <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
-              AI Activity
+
+        {/* ── Column 1: AI Activity + File Explorer (260px) ──────────────── */}
+        <div style={{ display: 'flex', flexDirection: 'column', width: '260px', minHeight: 0, background: 'var(--surface-base)', flexShrink: 0 }}>
+
+          {/* AI Activity */}
+          <div style={{ flex: '0 1 45%', minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: '1px solid var(--border-subtle)' }}>
+            <div className={styles.sectionHeader}>
+              <Icon name="sparkles" size={11} className={styles.sectionHeaderIcon} />
+              Activity
             </div>
-            <AIActivityPanel />
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <AIActivityPanel />
+            </div>
           </div>
 
           {/* File Explorer */}
-          <div style={{ flex: '1 1 60%', minHeight: 0 }}>
-            <div style={{ padding: '8px 12px', fontSize: '11px', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text-tertiary)', borderBottom: '1px solid var(--border-subtle)' }}>
+          <div style={{ flex: '1 1 55%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <div className={styles.sectionHeader}>
+              <Icon name="file" size={11} className={styles.sectionHeaderIcon} />
               Files
             </div>
-            <FileExplorer
-              workspaceId={workspace?.id ?? ''}
-              height={300}
-            />
+            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+              <FileExplorer
+                workspaceId={workspace?.id ?? ''}
+                height={600}
+              />
+            </div>
           </div>
         </div>
 
-        {/* Center: Main Mission Thread */}
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+        {/* ── Column 2: Mission Thread (flex center) ──────────────────────── */}
+        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <MissionThread
             header={header}
             hero={hero}
@@ -1012,53 +1043,34 @@ export function TaskWorkspace() {
             live={live}
             planActions={planActions}
             actionRow={actionRow}
-            trailingMessages={(() => {
-              const serverMsgs = (messagesData?.messages ?? [])
-                .filter((m) => m.role === 'user' && m.turn_number > 1)
-                .map((m) => m.content)
-              const serverSet = new Set(serverMsgs)
-              const pending = sentRefinements.filter((r) => !serverSet.has(r))
-              return pending
-            })()}
+            trailingMessages={trailingMessages}
             composer={composer}
           />
         </div>
 
-        {/* Right: embedded VS Code-style editor (default) + running-app preview,
-            toggled by tabs — v0-style, no navigation to a separate IDE page.
-            The editor streams the agent's file edits live via aiFileStreamed. */}
-        <div style={{ width: '480px', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-base)' }}>
+        {/* ── Column 3: Code Editor + Preview (520px) ─────────────────────── */}
+        <div style={{ width: '520px', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-base)', flexShrink: 0 }}>
           {workspace?.id ? (
             <>
-              {/* Tab strip */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', borderBottom: '1px solid var(--border-subtle)' }}>
+              {/* Tab strip — proper CSS module classes so active state renders */}
+              <div className={styles.rightTabStrip}>
                 <button
+                  className={`${styles.rightTab} ${rightTab === 'code' ? styles.rightTabActive : ''}`}
                   onClick={() => setRightTab('code')}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', fontSize: 12,
-                    borderRadius: 6, border: 'none', cursor: 'pointer',
-                    background: rightTab === 'code' ? 'var(--surface-raised)' : 'transparent',
-                    color: rightTab === 'code' ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                    fontWeight: rightTab === 'code' ? 600 : 500,
-                  }}
                 >
-                  <Icon name="code" size={13} /> Code
+                  <Icon name="code" size={12} />
+                  Code
                 </button>
                 <button
+                  className={`${styles.rightTab} ${rightTab === 'preview' ? styles.rightTabActive : ''}`}
                   onClick={() => setRightTab('preview')}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', fontSize: 12,
-                    borderRadius: 6, border: 'none', cursor: 'pointer',
-                    background: rightTab === 'preview' ? 'var(--surface-raised)' : 'transparent',
-                    color: rightTab === 'preview' ? 'var(--text-primary)' : 'var(--text-tertiary)',
-                    fontWeight: rightTab === 'preview' ? 600 : 500,
-                  }}
                 >
-                  <Icon name="monitor" size={13} /> Preview
+                  <Icon name="monitor" size={12} />
+                  Preview
                 </button>
               </div>
-              {/* Both stay mounted so switching tabs preserves state; only the
-                  active one is shown. */}
+
+              {/* Panels stay mounted so switching tabs preserves editor/iframe state */}
               <div style={{ flex: 1, minHeight: 0, display: rightTab === 'code' ? 'flex' : 'none', flexDirection: 'column' }}>
                 <CodeEditor workspaceId={workspace.id} />
               </div>
@@ -1067,24 +1079,34 @@ export function TaskWorkspace() {
               </div>
             </>
           ) : (
-            <div
-              style={{
-                flex: 1, display: 'flex', flexDirection: 'column', gap: 8,
-                alignItems: 'center', justifyContent: 'center', textAlign: 'center',
-                padding: 16, color: 'var(--text-tertiary)', fontSize: 12,
-              }}
-            >
-              <Icon name="code" size={20} />
-              <span style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>No workspace yet</span>
-              <span style={{ maxWidth: 240, lineHeight: 1.5 }}>
-                {taskAutoRun || status === 'planning' || status === 'draft'
-                  ? 'Forge is preparing the workspace — code will stream in here as the agent edits files.'
-                  : 'Approve the plan and run it to provision the workspace.'}
-              </span>
-            </div>
+            <>
+              {/* Tab strip even when no workspace — keeps layout stable */}
+              <div className={styles.rightTabStrip}>
+                <button className={`${styles.rightTab} ${styles.rightTabActive}`}>
+                  <Icon name="code" size={12} />
+                  Code
+                </button>
+                <button className={styles.rightTab}>
+                  <Icon name="monitor" size={12} />
+                  Preview
+                </button>
+              </div>
+              <div className={styles.rightPanelEmpty}>
+                <Icon name="code" size={24} />
+                <p className={styles.rightPanelEmptyTitle}>No workspace yet</p>
+                <p className={styles.rightPanelEmptyDesc}>
+                  {taskAutoRun || status === 'planning' || status === 'draft'
+                    ? 'Forge is preparing the workspace — code will appear here as the agent edits files.'
+                    : 'Approve the plan and run it. Code will stream in here as the agent works.'}
+                </p>
+              </div>
+            </>
           )}
         </div>
       </div>
+
+      {/* VS Code-style status bar — at the bottom, always visible */}
+      <TaskStatusBar livePhase={livePhase} isLive={live} />
 
       <ConfirmDialog
         open={replanConfirmOpen}

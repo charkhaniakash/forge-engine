@@ -2,28 +2,51 @@
   display: flex;
   align-items: flex-start;
   gap: var(--space-3);
-  padding: var(--space-4) var(--space-5);
+  padding: var(--space-3) var(--space-4);
   background: var(--surface-1);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-sm);
-  transition: border-color var(--duration-normal) var(--ease),
-    box-shadow var(--duration-normal) var(--ease);
-}
-.tone_active {
-  border-color: var(--accent-border);
-}
-.tone_success {
-  border-color: rgba(63, 185, 80, 0.35);
-}
-.tone_danger {
-  border-color: rgba(248, 81, 73, 0.35);
+  transition:
+    border-color var(--duration-normal) var(--ease),
+    box-shadow var(--duration-normal) var(--ease),
+    background var(--duration-normal) var(--ease);
 }
 
-/* ── Left avatar / icon ────────────────────────────────────────────────── */
+.tone_active {
+  border-color: var(--accent-border);
+  background: linear-gradient(
+    135deg,
+    rgba(0, 255, 102, 0.04) 0%,
+    var(--surface-1) 60%
+  );
+  box-shadow: var(--shadow-sm), 0 0 0 1px var(--accent-border) inset;
+}
+
+.tone_success {
+  border-color: rgba(63, 185, 80, 0.35);
+  background: linear-gradient(
+    135deg,
+    rgba(63, 185, 80, 0.06) 0%,
+    var(--surface-1) 60%
+  );
+}
+
+.tone_danger {
+  border-color: rgba(248, 81, 73, 0.35);
+  background: linear-gradient(
+    135deg,
+    rgba(248, 81, 73, 0.05) 0%,
+    var(--surface-1) 60%
+  );
+}
+
+/* ── Left avatar / icon ──────────────────────────────────────────────── */
 .left {
   flex-shrink: 0;
+  padding-top: 2px;
 }
+
 .avatar {
   width: 32px;
   height: 32px;
@@ -34,19 +57,26 @@
   align-items: center;
   justify-content: center;
   color: var(--accent);
+  transition: box-shadow var(--duration-normal) var(--ease);
 }
 
-/* ── Body ────────────────────────────────────────────────────────────────── */
+.tone_active .avatar {
+  box-shadow: 0 0 0 4px rgba(0, 255, 102, 0.08);
+}
+
+/* ── Body ──────────────────────────────────────────────────────────── */
 .body {
   flex: 1 1 auto;
   min-width: 0;
 }
+
 .titleRow {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin-bottom: var(--space-1);
+  margin-bottom: 3px;
 }
+
 .title {
   font-size: var(--text-base);
   font-weight: var(--font-semibold);
@@ -55,50 +85,81 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
 .liveDot {
   width: 7px;
   height: 7px;
   border-radius: var(--radius-full);
   background: var(--accent);
   flex-shrink: 0;
-  animation: hero-dot 1.2s ease infinite;
+  animation: hero-dot 1.4s ease infinite;
 }
+
 @keyframes hero-dot {
-  0%, 100% { box-shadow: 0 0 0 0 var(--accent-subtle); opacity: 1; }
-  50% { box-shadow: 0 0 0 5px transparent; opacity: 0.5; }
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(0, 255, 102, 0.5);
+    opacity: 1;
+  }
+  60% {
+    box-shadow: 0 0 0 6px rgba(0, 255, 102, 0);
+    opacity: 0.7;
+  }
 }
+
 .subtitle {
   margin: 0;
   font-size: var(--text-sm);
   color: var(--text-secondary);
   line-height: var(--leading-normal);
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
-/* ── Thin progress bar ─────────────────────────────────────────────────── */
+/* ── Thin progress bar ─────────────────────────────────────────────── */
 .progressBar {
-  margin-top: var(--space-2);
+  margin-top: 8px;
   height: 3px;
   background: var(--border-subtle);
   border-radius: var(--radius-full);
   overflow: hidden;
 }
+
 .progressFill {
   height: 100%;
   background: var(--accent);
   border-radius: var(--radius-full);
-  transition: width var(--duration-normal) var(--ease);
+  transition: width 600ms var(--ease);
+  position: relative;
 }
-.tone_success .progressFill { background: var(--success); }
-.tone_danger .progressFill { background: var(--danger); }
 
+/* Shimmer on active progress */
+.tone_active .progressFill::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 40px;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.4), transparent);
+  animation: progress-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes progress-shimmer {
+  0%   { transform: translateX(40px); opacity: 0; }
+  30%  { opacity: 1; }
+  100% { transform: translateX(-200px); opacity: 0; }
+}
+
+.tone_success .progressFill { background: var(--success); }
+.tone_danger .progressFill  { background: var(--danger); }
+
+/* ── Right slot ────────────────────────────────────────────────────── */
 .right {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   flex-shrink: 0;
   margin-top: 2px;
 }

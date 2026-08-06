@@ -171,13 +171,14 @@
   border: 1px solid;
   border-radius: 10px;
   overflow: hidden;
-  background: var(--secondary, #0D0E12);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  background: var(--surface-1, #0D0E12);
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--duration-normal) var(--ease),
+    box-shadow var(--duration-normal) var(--ease);
 }
 
 .phaseCard:hover {
-  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
 }
 
 /* ── Card header ──────────────────────────────────────────────────────── */
@@ -473,37 +474,38 @@
 .userMessageRow {
   display: flex;
   justify-content: flex-end;
-  padding: 8px 0;
+  padding: 10px 0;
 }
 
 .userBubble {
-  max-width: 75%;
+  max-width: 78%;
   background: rgba(0, 255, 102, 0.06);
-  border: 1px solid rgba(0, 255, 102, 0.15);
-  border-radius: 14px;
+  border: 1px solid rgba(0, 255, 102, 0.18);
+  border-radius: 16px;
   border-bottom-right-radius: 4px;
-  padding: 12px 16px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  transition: box-shadow 0.15s ease;
-  animation: fadeIn 0.35s ease-out;
+  padding: 11px 15px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 255, 102, 0.06) inset;
+  transition: box-shadow var(--duration-normal) var(--ease);
+  animation: fadeIn 0.3s ease-out;
 }
 
 .userBubble:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(0, 255, 102, 0.1) inset;
 }
 
 .userBubbleText {
-  color: var(--foreground, #E4E4E7);
-  font-size: 14px;
+  color: var(--text-primary, #E4E4E7);
+  font-size: 13px;
   font-family: var(--font-sans, Inter, sans-serif);
   white-space: pre-wrap;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .userBubbleMeta {
-  margin-top: 8px;
-  font-size: 11px;
-  color: var(--muted-foreground, #71717A);
+  margin-top: 7px;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: rgba(0, 255, 102, 0.4);
   text-align: right;
 }
 
@@ -511,35 +513,38 @@
 .thinkingRow {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: 8px;
   padding: 8px 0;
 }
 
 .thinkingLabel {
-  font-size: 13px;
-  color: var(--muted-foreground, #71717A);
+  font-size: 12px;
+  color: var(--text-tertiary, #71717A);
   font-family: var(--font-sans, Inter, sans-serif);
   font-style: italic;
 }
 
 .thinkingDots {
   display: inline-flex;
-  gap: 1px;
+  gap: 3px;
+  align-items: center;
 }
 
 .dot1, .dot2, .dot3 {
-  font-size: 18px;
-  color: var(--muted-foreground, #71717A);
-  line-height: 1;
-  animation: dotBounce 1.4s ease-in-out infinite;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-tertiary, #71717A);
+  display: inline-block;
+  animation: dotFade 1.4s ease-in-out infinite;
 }
 
 .dot2 { animation-delay: 0.2s; }
 .dot3 { animation-delay: 0.4s; }
 
-@keyframes dotBounce {
-  0%, 80%, 100% { transform: translateY(0); }
-  40% { transform: translateY(-3px); }
+@keyframes dotFade {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40%            { opacity: 1;   transform: scale(1.1); }
 }
 
 /* ── Turn separator (between follow-ups) ──────────────────────────────── */
@@ -581,12 +586,14 @@
 .actionRow {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
-  margin-top: 8px;
-  padding: 16px;
-  background: var(--secondary, #0D0E12);
-  border: 1px solid var(--border, #1F212E);
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 14px 16px;
+  background: var(--surface-1, #0D0E12);
+  border: 1px solid var(--border-default, #1F212E);
   border-radius: 10px;
+  box-shadow: var(--shadow-sm);
 }
 
 /* ── Repair stack — inline list of RepairAttemptCards, no outer shell ── */

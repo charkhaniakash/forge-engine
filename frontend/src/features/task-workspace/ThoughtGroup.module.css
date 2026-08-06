@@ -1,51 +1,82 @@
 .group {
-  margin-bottom: 4px;
+  margin-bottom: 6px;
   padding: 8px 10px;
   background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.05);
   border-radius: 8px;
-  transition: border-color 0.2s ease, background 0.2s ease;
+  transition: border-color var(--duration-normal) var(--ease),
+    background var(--duration-normal) var(--ease);
 }
+
+/* Live group: subtle cyan accent */
 .live {
-  border-color: rgba(0, 229, 255, 0.15);
+  border-color: rgba(0, 229, 255, 0.18);
   background: rgba(0, 229, 255, 0.03);
 }
+
 .header {
   display: flex;
   align-items: center;
   gap: 7px;
   margin-bottom: 6px;
   padding-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
+
 .badge {
   flex-shrink: 0;
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
 }
+
+/* Animated dot while live */
 .spinnerDot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #00E5FF;
-  opacity: 0.7;
-  animation: breathe 1.8s ease-in-out infinite;
+  background: var(--info);
+  display: block;
+  animation: breathe 1.6s ease-in-out infinite;
 }
+
 @keyframes breathe {
-  0%, 100% { opacity: 0.3; transform: scale(0.85); }
-  50% { opacity: 0.8; transform: scale(1.1); }
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50%       { opacity: 0.9;  transform: scale(1.1); }
 }
+
 .checkIcon {
   flex-shrink: 0;
-  opacity: 0.6;
+  opacity: 0.5;
 }
+
 .label {
   font-size: 10px;
   font-weight: 600;
-  color: rgba(255, 255, 255, 0.35);
+  color: rgba(255, 255, 255, 0.3);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
+  flex: 1;
 }
+
+.live .label {
+  color: var(--info);
+  opacity: 0.8;
+}
+
+.durationChip {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  flex-shrink: 0;
+}
+
 .steps {
   display: flex;
   flex-direction: column;

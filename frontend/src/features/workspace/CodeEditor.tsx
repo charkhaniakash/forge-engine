@@ -50,49 +50,60 @@ export function CodeEditor({ workspaceId }: { workspaceId: string }) {
 
   return (
     <div className={styles.root}>
+      {/* Tab bar */}
       <div className={styles.tabs}>
-        {openFiles.map((f) => {
-          const name = f.path.split('/').pop() ?? f.path
-          const isActive = f.path === activePath
-          return (
-            <div
-              key={f.path}
-              className={`${styles.tab} ${isActive ? styles.tabActive : ''}`}
-              onClick={() => dispatch(setActiveFile(f.path))}
-              title={f.path}
-            >
-              <span className={styles.tabName}>{name}</span>
-              {f.dirty && <span className={styles.dirtyDot} aria-label="unsaved" />}
-              <button
-                className={styles.close}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  dispatch(closeFile(f.path))
-                }}
-                aria-label={`Close ${name}`}
+        {openFiles.length === 0 ? (
+          <span className={styles.noFilesHint}>No files open — click a file to open it</span>
+        ) : (
+          openFiles.map((f) => {
+            const name = f.path.split('/').pop() ?? f.path
+            const isActive = f.path === activePath
+            return (
+              <div
+                key={f.path}
+                className={`${styles.tab} ${isActive ? styles.tabActive : ''}`}
+                onClick={() => dispatch(setActiveFile(f.path))}
+                title={f.path}
               >
-                <Icon name="x" size={11} />
-              </button>
-            </div>
-          )
-        })}
+                <span className={styles.tabName}>{name}</span>
+                {f.dirty && <span className={styles.dirtyDot} aria-label="unsaved" />}
+                <button
+                  className={styles.close}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    dispatch(closeFile(f.path))
+                  }}
+                  aria-label={`Close ${name}`}
+                >
+                  <Icon name="x" size={10} />
+                </button>
+              </div>
+            )
+          })
+        )}
       </div>
 
+      {/* Conflict banner */}
       {inConflict && active && (
         <div className={styles.conflict}>
-          <Icon name="alert" size={14} />
-          <span>
-            This file was changed by the agent while you had unsaved edits.
-          </span>
-          <button className={styles.conflictBtn} onClick={() => dispatch(resolveConflict({ path: active.path, keep: 'theirs' }))}>
-            Use agent’s version
+          <Icon name="alert" size={13} />
+          <span>File changed by agent while you had unsaved edits.</span>
+          <button
+            className={styles.conflictBtn}
+            onClick={() => dispatch(resolveConflict({ path: active.path, keep: 'theirs' }))}
+          >
+            Use agent's version
           </button>
-          <button className={styles.conflictBtnGhost} onClick={() => dispatch(resolveConflict({ path: active.path, keep: 'mine' }))}>
+          <button
+            className={styles.conflictBtnGhost}
+            onClick={() => dispatch(resolveConflict({ path: active.path, keep: 'mine' }))}
+          >
             Keep mine
           </button>
         </div>
       )}
 
+      {/* Editor or placeholder */}
       <div className={styles.editor}>
         {active ? (
           <Editor
@@ -108,16 +119,24 @@ export function CodeEditor({ workspaceId }: { workspaceId: string }) {
             options={{
               minimap: { enabled: false },
               fontSize: 13,
+              lineHeight: 20,
               automaticLayout: true,
               scrollBeyondLastLine: false,
               tabSize: 2,
               readOnly: saving,
+              renderLineHighlight: 'line',
+              smoothScrolling: true,
+              cursorBlinking: 'smooth',
+              fontLigatures: true,
             }}
           />
         ) : (
           <div className={styles.placeholder}>
             <Icon name="code" size={28} />
-            <p>Select a file to start editing</p>
+            <p className={styles.placeholderTitle}>No file open</p>
+            <p className={styles.placeholderHint}>
+              Select a file from the explorer, or wait for the agent to start editing
+            </p>
           </div>
         )}
       </div>

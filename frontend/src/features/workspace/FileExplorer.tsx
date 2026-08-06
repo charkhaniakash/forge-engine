@@ -263,7 +263,16 @@ export function FileExplorer({
   )
 
   if (!fileTree || rows.length === 0) {
-    return <div className={styles.empty}>No files</div>
+    return (
+      <div className={styles.empty} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 8, padding: 16, textAlign: 'center' }}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity={0.4}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+        </svg>
+        <span style={{ fontSize: 11, lineHeight: 1.5, maxWidth: 160, opacity: 0.6 }}>
+          {!workspaceId ? 'No workspace yet' : 'No files found in workspace'}
+        </span>
+      </div>
+    )
   }
 
   return (

@@ -36,13 +36,13 @@
   --muted-foreground: #71717A;
 
   /* ── Brand / accent ────────────────────────────────────────────────── */
-  --accent: #00E56B;
-  --primary: #00E56B;
-  --accent-hover: #00CC52;
-  --accent-active: #00B849;
-  --accent-subtle: rgba(0, 229, 107, 0.10);
-  --accent-dim: rgba(0, 229, 107, 0.10);
-  --accent-border: rgba(0, 229, 107, 0.25);
+  --accent: #0041C8;
+  --primary: #0041C8;
+  --accent-hover: #0036A3;
+  --accent-active: #002A7A;
+  --accent-subtle: rgba(0, 65, 200, 0.10);
+  --accent-dim: rgba(0, 65, 200, 0.10);
+  --accent-border: rgba(0, 65, 200, 0.25);
 
   --tertiary: #00E5FF;
   --tertiary-subtle: rgba(0, 229, 255, 0.10);
@@ -66,11 +66,10 @@
   --diff-del-fg: #EF4444;
   --diff-hunk-fg: #3B82F6;
 
-  /* ── Shadows ───────────────────────────────────────────────────────── */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
-  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.55);
-  --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.6);
+  /* ── Overlay helper vars for dark theme ─────────────────────────── */
+  --overlay-light: rgba(255, 255, 255, 0.08);
+  --overlay-lighter: rgba(255, 255, 255, 0.04);
+  --overlay-separator: rgba(255, 255, 255, 0.06);
 
   --focus-ring: 0 0 0 2px var(--surface-base), 0 0 0 4px var(--accent);
 }
@@ -143,6 +142,11 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
   --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.16);
+
+  /* ── Overlay helper vars for light theme ────────────────────────────– */
+  --overlay-light: rgba(0, 0, 0, 0.04);
+  --overlay-lighter: rgba(0, 0, 0, 0.02);
+  --overlay-separator: rgba(0, 0, 0, 0.06);
 }
 
 :root {

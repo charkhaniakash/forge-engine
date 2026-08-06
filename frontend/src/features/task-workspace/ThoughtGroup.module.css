@@ -8,12 +8,12 @@
 }
 
 .group:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--overlay-lighter);
 }
 
 /* Live group: subtle accent */
 .live {
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--overlay-lighter);
 }
 
 /* Icon dot: 16px flex container */
@@ -103,8 +103,8 @@
   border-radius: 4px;
   font-size: 11px;
   font-family: var(--font-mono);
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border);
+  background: var(--overlay-light);
   color: var(--text-secondary);
 }
 

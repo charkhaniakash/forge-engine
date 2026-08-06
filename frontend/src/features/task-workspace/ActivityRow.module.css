@@ -10,7 +10,7 @@
   transition: background 0.15s ease;
 }
 .row:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--overlay-lighter);
 }
 .marker {
   flex-shrink: 0;
@@ -43,7 +43,7 @@
   color: #38BDF8;
 }
 .tone_success .title {
-  color: #00FF66;
+  color: var(--accent);
 }
 .tone_warning .title {
   color: #F59E0B;
@@ -66,7 +66,7 @@
 
 .outcomeOk {
   flex-shrink: 0;
-  color: #00FF66;
+  color: var(--accent);
   opacity: 0.7;
 }
 .outcomeWarn {
@@ -115,7 +115,7 @@
   opacity: 0.5;
 }
 .compactOk {
-  color: #00FF66;
+  color: var(--accent);
   opacity: 0.6;
 }
 .compactBody {

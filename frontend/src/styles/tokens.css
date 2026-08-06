@@ -11,54 +11,60 @@
   color-scheme: dark;
 
   /* ── Surfaces (low → high elevation) ───────────────────────────────── */
-  --surface-base: #050507; /* app background */
-  --surface-1: #0D0E12; /* cards, panels */
-  --surface-2: #12131A; /* raised / hover */
-  --surface-3: #1F212E; /* popovers, menus */
+  --surface-base: #0A0A0A; /* app background */
+  --surface-1: #111113; /* cards, panels */
+  --surface-2: #181920; /* raised / hover */
+  --surface-3: #1E2028; /* popovers, menus */
   --surface-inset: #0D0E12; /* code / log backgrounds */
   --surface-overlay: rgba(0, 0, 0, 0.6); /* modal scrim */
 
   /* ── Borders ───────────────────────────────────────────────────────── */
-  --border-subtle: #1F212E;
-  --border-default: #1F212E;
+  --border: rgba(255, 255, 255, 0.07);
+  --border-default: rgba(255, 255, 255, 0.07);
+  --border-subtle: rgba(255, 255, 255, 0.04);
   --border-strong: #333B46;
+  --border-focus: rgba(0, 229, 107, 0.40);
 
   /* ── Text ──────────────────────────────────────────────────────────── */
-  --text-primary: #E4E4E7;
-  --text-secondary: #9AA4B2;
-  --text-tertiary: #71717A;
+  --text-primary: #EDEDED;
+  --text-secondary: #A1A1AA;
+  --text-tertiary: #52525B;
   --text-inverse: #050507;
   --text-on-accent: #050507;
   --text-on-primary: #050507;
+  --foreground: #EDEDED;
+  --muted-foreground: #71717A;
 
   /* ── Brand / accent ────────────────────────────────────────────────── */
-  --accent: #00FF66;
-  --accent-hover: #00E55C;
-  --accent-active: #00CC52;
-  --accent-subtle: rgba(0, 255, 102, 0.10);
-  --accent-border: rgba(0, 255, 102, 0.25);
+  --accent: #00E56B;
+  --primary: #00E56B;
+  --accent-hover: #00CC52;
+  --accent-active: #00B849;
+  --accent-subtle: rgba(0, 229, 107, 0.10);
+  --accent-dim: rgba(0, 229, 107, 0.10);
+  --accent-border: rgba(0, 229, 107, 0.25);
 
   --tertiary: #00E5FF;
   --tertiary-subtle: rgba(0, 229, 255, 0.10);
 
   /* ── Status ramp (fg + subtle bg) ──────────────────────────────────── */
-  --success: #00FF66;
-  --success-subtle: rgba(0, 255, 102, 0.15);
-  --warning: #D29922;
-  --warning-subtle: rgba(210, 153, 34, 0.15);
+  --success: #22C55E;
+  --success-subtle: rgba(34, 197, 94, 0.15);
+  --warning: #EAB308;
+  --warning-subtle: rgba(234, 179, 8, 0.15);
   --danger: #EF4444;
   --danger-subtle: rgba(239, 68, 68, 0.15);
-  --info: #00E5FF;
-  --info-subtle: rgba(0, 229, 255, 0.15);
+  --info: #3B82F6;
+  --info-subtle: rgba(59, 130, 246, 0.15);
   --neutral: #71717A;
   --neutral-subtle: rgba(113, 113, 122, 0.15);
 
   /* ── Diff colours ──────────────────────────────────────────────────── */
-  --diff-add-bg: rgba(0, 255, 102, 0.15);
-  --diff-add-fg: #00FF66;
+  --diff-add-bg: rgba(34, 197, 94, 0.15);
+  --diff-add-fg: #22C55E;
   --diff-del-bg: rgba(239, 68, 68, 0.15);
   --diff-del-fg: #EF4444;
-  --diff-hunk-fg: #00E5FF;
+  --diff-hunk-fg: #3B82F6;
 
   /* ── Shadows ───────────────────────────────────────────────────────── */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
@@ -124,11 +130,9 @@
 
 :root {
   /* ── Typography ────────────────────────────────────────────────────── */
-  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica,
-    Arial, sans-serif;
-  --font-heading: 'Fira Code', 'SF Mono', SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', SFMono-Regular,
-    Menlo, Consolas, monospace;
+  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-heading: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
 
   --text-xs: 11px;
   --text-sm: 12px;

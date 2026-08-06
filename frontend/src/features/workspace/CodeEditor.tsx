@@ -14,7 +14,12 @@ import { useWriteFileMutation } from '@/services/api/workspaceEditorApi'
 import { useToast } from '@/hooks/useToast'
 import styles from './CodeEditor.module.css'
 
-export function CodeEditor({ workspaceId }: { workspaceId: string }) {
+export interface CodeEditorProps {
+  workspaceId: string
+  fileExplorer?: React.ReactNode
+}
+
+export function CodeEditor({ workspaceId, fileExplorer }: CodeEditorProps) {
   const dispatch = useAppDispatch()
   const toast = useToast()
   const openFiles = useAppSelector((s) => s.workspaceEditor.openFiles)
@@ -49,7 +54,15 @@ export function CodeEditor({ workspaceId }: { workspaceId: string }) {
   }, [save])
 
   return (
-    <div className={styles.root}>
+    <div className={styles.codePanel}>
+      {/* File explorer rail — 32px collapsed, expands on hover */}
+      {fileExplorer && (
+        <div className={styles.treeRail}>
+          {fileExplorer}
+        </div>
+      )}
+      {/* Editor column */}
+      <div className={styles.editorCol}>
       {/* Tab bar */}
       <div className={styles.tabs}>
         {openFiles.length === 0 ? (
@@ -139,6 +152,7 @@ export function CodeEditor({ workspaceId }: { workspaceId: string }) {
             </p>
           </div>
         )}
+      </div>
       </div>
     </div>
   )

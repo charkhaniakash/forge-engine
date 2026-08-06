@@ -1,3 +1,29 @@
+.codePanel {
+  display: flex;
+  height: 100%;
+  overflow: hidden;
+}
+
+.treeRail {
+  width: 32px;
+  flex-shrink: 0;
+  overflow: hidden;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+  transition: width 0.18s ease;
+}
+
+.codePanel:hover .treeRail {
+  width: 200px;
+}
+
+.editorCol {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 .root {
   display: flex;
   flex-direction: column;

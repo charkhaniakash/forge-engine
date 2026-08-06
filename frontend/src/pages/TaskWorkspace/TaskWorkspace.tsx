@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Button, ConfirmDialog, EmptyState, Icon, Spinner, StatusBadge } from '@/components/common'
 import { MissionThread } from '@/features/task-workspace'
-import { AIActivityPanel } from '@/features/workspace/AIActivityPanel'
 import { TaskStatusBar } from '@/features/workspace/TaskStatusBar'
 import { LivePreview } from '@/features/workspace/LivePreview'
 import { CodeEditor } from '@/features/workspace/CodeEditor'
@@ -999,44 +998,16 @@ export function TaskWorkspace() {
   })()
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', width: '100%', overflow: 'hidden' }}>
-      {/* Main 3-column workspace */}
-      <div style={{ display: 'flex', flex: 1, minHeight: 0, gap: '1px', background: 'var(--border-subtle)' }}>
-
-        {/* ── Column 1: AI Activity + File Explorer (260px) ──────────────── */}
-        <div style={{ display: 'flex', flexDirection: 'column', width: '260px', minHeight: 0, background: 'var(--surface-base)', flexShrink: 0 }}>
-
-          {/* AI Activity */}
-          <div style={{ flex: '0 1 45%', minHeight: 0, display: 'flex', flexDirection: 'column', borderBottom: '1px solid var(--border-subtle)' }}>
-            <div className={styles.sectionHeader}>
-              <Icon name="sparkles" size={11} className={styles.sectionHeaderIcon} />
-              Activity
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-              <AIActivityPanel />
-            </div>
-          </div>
-
-          {/* File Explorer */}
-          <div style={{ flex: '1 1 55%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-            <div className={styles.sectionHeader}>
-              <Icon name="file" size={11} className={styles.sectionHeaderIcon} />
-              Files
-            </div>
-            <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-              <FileExplorer
-                workspaceId={workspace?.id ?? ''}
-                height={600}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* ── Column 2: Mission Thread (flex center) ──────────────────────── */}
-        <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div className={styles.root}>
+      {/* Header */}
+      {header}
+      
+      {/* Main 2-column workspace body */}
+      <div className={styles.body}>
+        {/* Left: Mission Thread (~44%) */}
+        <div className={styles.left}>
           <MissionThread
-            header={header}
-            hero={hero}
+            header={hero}
             entries={conversation.filter(
               (e) => e.type !== 'intent' && !(taskAutoRun && e.type === 'plan'),
             )}
@@ -1048,8 +1019,8 @@ export function TaskWorkspace() {
           />
         </div>
 
-        {/* ── Column 3: Code Editor + Preview (520px) ─────────────────────── */}
-        <div style={{ width: '520px', minHeight: 0, display: 'flex', flexDirection: 'column', background: 'var(--surface-base)', flexShrink: 0 }}>
+        {/* Right: Code Editor (~56%) */}
+        <div className={styles.right}>
           {workspace?.id ? (
             <>
               {/* Tab strip — proper CSS module classes so active state renders */}
@@ -1072,7 +1043,7 @@ export function TaskWorkspace() {
 
               {/* Panels stay mounted so switching tabs preserves editor/iframe state */}
               <div style={{ flex: 1, minHeight: 0, display: rightTab === 'code' ? 'flex' : 'none', flexDirection: 'column' }}>
-                <CodeEditor workspaceId={workspace.id} />
+                <CodeEditor workspaceId={workspace.id} fileExplorer={<FileExplorer workspaceId={workspace.id} height={600} />} />
               </div>
               <div style={{ flex: 1, minHeight: 0, display: rightTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
                 <LivePreview workspaceId={workspace.id} />

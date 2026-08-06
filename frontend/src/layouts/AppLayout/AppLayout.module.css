@@ -3,12 +3,16 @@
   height: 100vh;
   overflow: hidden;
 }
+
 .main {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   background: var(--surface-base);
   min-width: 0;
 }
+
 .loading {
   display: flex;
   align-items: center;

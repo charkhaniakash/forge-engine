@@ -1,79 +1,88 @@
 .group {
-  margin-bottom: 6px;
-  padding: 8px 10px;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-  transition: border-color var(--duration-normal) var(--ease),
-    background var(--duration-normal) var(--ease);
-}
-
-/* Live group: subtle cyan accent */
-.live {
-  border-color: rgba(0, 229, 255, 0.18);
-  background: rgba(0, 229, 255, 0.03);
-}
-
-.header {
   display: flex;
-  align-items: center;
-  gap: 7px;
-  margin-bottom: 6px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  gap: 10px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  cursor: default;
+  transition: background 0.15s;
 }
 
-.badge {
-  flex-shrink: 0;
+.group:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Live group: subtle accent */
+.live {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Icon dot: 16px flex container */
+.icon {
+  width: 16px;
+  height: 16px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  flex-shrink: 0;
+  margin-top: 3px;
 }
+
+.iconDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--phase-color, var(--text-tertiary));
+}
+
+/* Phase color variables */
+.group { --phase-color: #3B82F6; } /* planning = blue */
+.group.executing { --phase-color: var(--accent); } /* executing = green */
+.group.validation { --phase-color: #60A5FA; } /* validation = cyan-blue */
+.group.repair { --phase-color: #FB923C; } /* repair = orange */
+.group.publishing { --phase-color: #34D399; } /* publishing = teal */
 
 /* Animated dot while live */
 .spinnerDot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: var(--info);
+  background: var(--phase-color);
   display: block;
-  animation: breathe 1.6s ease-in-out infinite;
+  animation: blink 0.9s ease infinite;
 }
 
-@keyframes breathe {
-  0%, 100% { opacity: 0.35; transform: scale(0.85); }
-  50%       { opacity: 0.9;  transform: scale(1.1); }
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinnerDot { animation: none; }
 }
 
 .checkIcon {
   flex-shrink: 0;
-  opacity: 0.5;
+  opacity: 0.6;
+}
+
+/* Header with label and duration */
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .label {
-  font-size: 10px;
-  font-weight: 600;
-  color: rgba(255, 255, 255, 0.3);
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
+  font-size: 13px;
+  color: var(--text-primary);
+  line-height: 1.5;
   flex: 1;
 }
 
-.live .label {
-  color: var(--info);
-  opacity: 0.8;
-}
-
 .durationChip {
-  font-size: 10px;
+  font-size: 11px;
   font-family: var(--font-mono);
-  color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: var(--radius-sm);
-  padding: 1px 5px;
+  color: var(--text-tertiary);
   flex-shrink: 0;
 }
 
@@ -81,4 +90,50 @@
   display: flex;
   flex-direction: column;
   gap: 1px;
+  padding-left: 26px;
+}
+
+/* File change chips */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin: 2px 3px 0 0;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+}
+
+.chip--A {
+  border-color: rgba(34, 197, 94, 0.2);
+  color: #22C55E;
+}
+
+.chip--M {
+  border-color: rgba(59, 130, 246, 0.2);
+  color: #60A5FA;
+}
+
+.chip--D {
+  border-color: rgba(239, 68, 68, 0.2);
+  color: #EF4444;
+}
+
+/* Streaming cursor */
+.cursor {
+  display: inline-block;
+  width: 2px;
+  height: 12px;
+  background: var(--accent);
+  margin-left: 2px;
+  vertical-align: middle;
+  animation: blink 0.9s ease infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cursor { animation: none; }
 }

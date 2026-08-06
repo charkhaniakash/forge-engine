@@ -12,7 +12,7 @@ interface UIState {
 
 function loadTheme(): Theme {
   const stored = localStorage.getItem(THEME_KEY)
-  return stored === 'light' ? 'light' : 'dark'
+  return stored === 'dark' ? 'dark' : 'light'
 }
 
 const initialState: UIState = {

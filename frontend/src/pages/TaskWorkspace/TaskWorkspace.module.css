@@ -42,9 +42,9 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
-  height: 44px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-base);
+  height: 56px;
+  border-bottom: 1px solid #C3C5D9;
+  background: #F7F9FB;
   gap: 16px;
   flex-shrink: 0;
 }
@@ -63,46 +63,47 @@
   justify-content: center;
   background: none;
   border: none;
-  color: var(--muted-foreground, #71717A);
-  font-size: 13px;
+  color: #737688;
+  font-size: 14px;
   cursor: pointer;
-  padding: 4px;
-  border-radius: 4px;
+  padding: 6px;
+  border-radius: 6px;
   flex-shrink: 0;
   transition: color 0.15s ease, background 0.15s ease;
 }
 
 .back:hover {
-  color: var(--foreground, #E4E4E7);
-  background: rgba(255, 255, 255, 0.05);
+  color: #0041C8;
+  background: #ECEEF0;
 }
 
 .crumb {
-  font-size: 11px;
-  font-family: var(--font-heading, 'Fira Code', monospace);
+  font-size: 14px;
+  font-family: 'Hanken Grotesk', sans-serif;
   font-weight: 500;
-  color: var(--muted-foreground, #71717A);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  color: #434656;
+  text-transform: none;
+  letter-spacing: 0;
   white-space: nowrap;
 }
 
 .headerDivider {
   width: 1px;
   height: 16px;
-  background: var(--border, #1F212E);
+  background: #C3C5D9;
   flex-shrink: 0;
 }
 
 .headerGitIcon {
-  color: var(--muted-foreground, #71717A);
+  color: #434656;
   flex-shrink: 0;
 }
 
 .headerRepoName {
-  font-size: 12px;
-  color: var(--foreground, #E4E4E7);
-  font-family: var(--font-heading, 'Fira Code', monospace);
+  font-size: 14px;
+  color: #191C1E;
+  font-family: 'Hanken Grotesk', sans-serif;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -119,25 +120,25 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
-  font-family: var(--font-heading, 'Fira Code', monospace);
-  color: var(--primary, #00FF66);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #0041C8;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
   white-space: nowrap;
 }
 
 .headerGpu {
   font-size: 11px;
-  font-family: var(--font-heading, 'Fira Code', monospace);
-  color: var(--muted-foreground, #71717A);
+  font-family: 'JetBrains Mono', monospace;
+  color: #737688;
 }
 
 .headerGpuDot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--primary, #00FF66);
+  background: #0041C8;
   flex-shrink: 0;
 }
 
@@ -150,7 +151,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--primary, #00FF66);
+  background: #0041C8;
   animation: forgeLiveBlink 1.2s ease infinite;
 }
 
@@ -162,14 +163,14 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: rgba(16, 185, 129, 0.1);
-  color: #10B981;
+  background: #ECFDF5;
+  color: #059669;
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 4px 10px;
   font-size: 11px;
-  font-family: var(--font-heading, 'Fira Code', monospace);
+  font-family: 'JetBrains Mono', monospace;
   font-weight: 600;
-  border: 1px solid rgba(16, 185, 129, 0.25);
+  border: 1px solid rgba(5, 150, 105, 0.25);
   white-space: nowrap;
 }
 
@@ -177,14 +178,14 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: rgba(239, 68, 68, 0.1);
-  color: #EF4444;
+  background: #FFF1F2;
+  color: #BA1A1A;
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 4px 10px;
   font-size: 11px;
-  font-family: var(--font-heading, 'Fira Code', monospace);
+  font-family: 'JetBrains Mono', monospace;
   font-weight: 600;
-  border: 1px solid rgba(239, 68, 68, 0.25);
+  border: 1px solid rgba(186, 26, 26, 0.25);
   white-space: nowrap;
 }
 
@@ -192,18 +193,22 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  background: rgba(0, 255, 102, 0.1);
-  color: var(--primary, #00FF66);
-  border-radius: 999px;
-  padding: 3px 12px;
+  background: transparent;
+  color: #0041C8;
+  border-radius: 8px;
+  padding: 6px 12px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   text-decoration: none;
-  border: 1px solid rgba(0, 255, 102, 0.2);
+  border: 1px solid #C3C5D9;
+  cursor: pointer;
+  transition: border-color 0.15s, background-color 0.15s;
 }
 
 .prChip:hover {
-  text-decoration: underline;
+  border-color: #0041C8;
+  background-color: #DCE1FF;
+  text-decoration: none;
 }
 
 /* ── Composer (bottom input bar) ─────────────────────────────────────── */
@@ -211,17 +216,16 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  background: var(--surface-1, #0D0E12);
-  border: 1px solid var(--border-default, #1F212E);
+  background: #F7F9FB;
+  border: 1px solid #C3C5D9;
   border-radius: 12px;
   padding: 8px 10px;
-  transition: border-color var(--duration-fast) var(--ease),
-    box-shadow var(--duration-fast) var(--ease);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .composerBox:focus-within {
-  border-color: rgba(0, 255, 102, 0.45);
-  box-shadow: 0 0 0 3px rgba(0, 255, 102, 0.08);
+  border-color: #0041C8;
+  box-shadow: 0 0 0 3px rgba(0, 65, 200, 0.1);
 }
 
 .composerInput {
@@ -230,11 +234,11 @@
   resize: none;
   background: transparent;
   border: none;
-  padding: 3px 6px;
-  color: var(--text-primary, #E4E4E7);
-  font-family: var(--font-sans, Inter, sans-serif);
-  font-size: 13px;
-  line-height: 1.55;
+  padding: 6px 0;
+  color: #191C1E;
+  font-family: 'Hanken Grotesk', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
   max-height: 120px;
   overflow-y: auto;
 }
@@ -245,12 +249,12 @@
 }
 
 .composerInput::placeholder {
-  color: var(--text-tertiary, #71717A);
-  font-size: 13px;
+  color: #737688;
+  font-size: 14px;
 }
 
 .composerInput:disabled {
-  opacity: 0.45;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
@@ -273,29 +277,29 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  color: var(--text-tertiary, #71717A);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #737688;
 }
 
 .composerStatusIconGreen {
-  color: var(--accent, #00FF66);
+  color: #059669;
 }
 
 .composerStatusIconCyan {
-  color: #00E5FF;
+  color: #0041C8;
 }
 
 .composerStatusDivider {
   width: 1px;
   height: 12px;
-  background: var(--border-subtle, #1F212E);
+  background: #C3C5D9;
 }
 
 .composerShortcut {
-  font-size: 10px;
-  font-family: var(--font-mono, 'JetBrains Mono', monospace);
-  color: var(--text-tertiary, #71717A);
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  color: #737688;
   opacity: 0.7;
 }
 
@@ -305,28 +309,29 @@
   align-items: center;
   gap: 5px;
   flex-shrink: 0;
-  height: 30px;
+  height: 32px;
   padding: 0 10px;
   border-radius: 6px;
-  border: 1px solid var(--border, #1F212E);
+  border: 1px solid #C3C5D9;
   background: transparent;
-  color: var(--muted-foreground, #71717A);
+  color: #737688;
   font-size: 11px;
-  font-family: var(--font-heading, 'Fira Code', monospace);
+  font-family: 'JetBrains Mono', monospace;
   font-weight: 600;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .planToggle:hover {
-  color: var(--foreground, #E4E4E7);
-  border-color: rgba(255, 255, 255, 0.15);
+  color: #0041C8;
+  border-color: #0041C8;
+  background: #DCE1FF;
 }
 
 .planToggleOn {
-  background: rgba(0, 255, 102, 0.08);
-  border-color: rgba(0, 255, 102, 0.25);
-  color: var(--primary, #00FF66);
+  background: #DCE1FF;
+  border-color: #0041C8;
+  color: #0041C8;
 }
 
 /* ── Left-panel section headers ──────────────────────────────────────── */
@@ -334,15 +339,15 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 12px;
-  font-size: 10px;
-  font-family: var(--font-heading, 'Fira Code', monospace);
-  font-weight: 700;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-tertiary, #71717A);
-  border-bottom: 1px solid var(--border-subtle, #1F212E);
-  background: var(--surface-1, #0D0E12);
+  letter-spacing: 0.1em;
+  color: #737688;
+  border-bottom: 1px solid #C3C5D9;
+  background: #FFFFFF;
   flex-shrink: 0;
 }
 
@@ -354,12 +359,14 @@
 .rightTabStrip {
   display: flex;
   align-items: center;
-  padding: 0 8px;
-  height: 38px;
-  background: var(--surface-1, #0D0E12);
-  border-bottom: 1px solid var(--border-subtle, #1F212E);
-  gap: 2px;
+  padding: 6px 8px;
+  height: 44px;
+  background: #F2F4F6;
+  border-bottom: 1px solid #C3C5D9;
+  gap: 4px;
   flex-shrink: 0;
+  border-radius: 8px;
+  margin: 8px;
 }
 
 .rightTab {
@@ -367,26 +374,28 @@
   align-items: center;
   gap: 6px;
   padding: 4px 12px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
-  border-radius: var(--radius-md, 6px);
+  border-radius: 6px;
   border: none;
   cursor: pointer;
   background: transparent;
-  color: var(--text-tertiary, #71717A);
-  transition: color var(--duration-fast) var(--ease), background var(--duration-fast) var(--ease);
+  color: #434656;
+  transition: color 0.15s, background 0.15s;
   white-space: nowrap;
 }
 
 .rightTab:hover {
-  color: var(--text-secondary, #9AA4B2);
-  background: var(--surface-2, #12131A);
+  color: #0041C8;
+  background: #FFFFFF;
 }
 
 .rightTabActive {
-  background: var(--surface-2, #12131A);
-  color: var(--text-primary, #E4E4E7);
+  background: #FFFFFF;
+  color: #0041C8;
   font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  border: 1px solid rgba(0, 65, 200, 0.2);
 }
 
 /* Active tab underline indicator */
@@ -401,21 +410,22 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  padding: 24px;
+  gap: 16px;
+  padding: 32px;
   text-align: center;
-  color: var(--text-tertiary, #71717A);
+  color: #737688;
+  background: radial-gradient(ellipse at center, #F7F9FB, #FFFFFF);
 }
 
 .rightPanelEmptyTitle {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary, #9AA4B2);
+  font-size: 18px;
+  font-weight: 500;
+  color: #191C1E;
 }
 
 .rightPanelEmptyDesc {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.6;
-  max-width: 220px;
-  color: var(--text-tertiary, #71717A);
+  max-width: 280px;
+  color: #434656;
 }

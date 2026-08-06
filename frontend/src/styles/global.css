@@ -2,7 +2,7 @@
  * Global reset + base element styles. Imported once from main.tsx after tokens.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 *,
 *::before,
@@ -21,9 +21,9 @@ body,
 }
 
 body {
-  background: var(--surface-base);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
+  background: #F7F9FB;
+  color: #191C1E;
+  font-family: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: var(--text-base);
   line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
@@ -31,8 +31,8 @@ body {
 }
 
 ::selection {
-  background: rgba(0, 229, 107, 0.18);
-  color: var(--text-primary);
+  background: #DCE1FF;
+  color: #191C1E;
 }
 
 h1,
@@ -73,7 +73,7 @@ select {
 }
 
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid #0041C8;
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -86,12 +86,12 @@ a:focus:not(:focus-visible) {
 /* ── Scrollbars ──────────────────────────────────────────────────────── */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.08) transparent;
+  scrollbar-color: #C3C5D9 transparent;
 }
 
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 8px;
+  height: 8px;
 }
 
 ::-webkit-scrollbar-track {
@@ -99,12 +99,13 @@ a:focus:not(:focus-visible) {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.08);
-  border-radius: 999px;
+  background: #C3C5D9;
+  border-radius: 20px;
+  border: 2px solid #FFFFFF;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: #737688;
 }
 
 /* ── Textarea placeholder ────────────────────────────────────────────── */

@@ -78,60 +78,77 @@
 :root[data-theme='light'] {
   color-scheme: light;
 
-  --surface-base: #ffffff;
-  --surface-1: #f6f8fa;
-  --surface-2: #eef1f4;
-  --surface-3: #ffffff;
-  --surface-inset: #f6f8fa;
-  --surface-overlay: rgba(27, 31, 36, 0.4);
+  /* ── Surfaces ─────────────────────────────────────────────────────── */
+  --surface-base: #F7F9FB;
+  --surface-1: #FFFFFF;
+  --surface-2: #F2F4F6;
+  --surface-3: #ECEEF0;
+  --surface-container-low: #F2F4F6;
+  --surface-container: #ECEEF0;
+  --surface-container-high: #E6E8EA;
+  --surface-container-highest: #E0E3E5;
+  --surface-bright: #F7F9FB;
+  --surface-inset: #F2F4F6;
+  --surface-overlay: rgba(0, 0, 0, 0.2);
 
-  --border-subtle: #eaecef;
-  --border-default: #d0d7de;
-  --border-strong: #afb8c1;
+  /* ── Borders ──────────────────────────────────────────────────────– */
+  --border: #C3C5D9;
+  --border-default: #C3C5D9;
+  --border-subtle: rgba(195, 197, 217, 0.5);
+  --border-strong: #A9ABBA;
+  --border-focus: rgba(0, 65, 200, 0.4);
 
-  --text-primary: #1f2328;
-  --text-secondary: #57606a;
-  --text-tertiary: #818b98;
-  --text-inverse: #ffffff;
-  --text-on-accent: #ffffff;
-  --text-on-primary: #050507;
+  /* ── Text ──────────────────────────────────────────────────────────– */
+  --text-primary: #191C1E;
+  --text-secondary: #434656;
+  --text-tertiary: #737688;
+  --text-inverse: #FFFFFF;
+  --text-on-accent: #FFFFFF;
+  --text-on-primary: #191C1E;
+  --foreground: #191C1E;
+  --muted-foreground: #737688;
 
-  --accent: #00CC52;
-  --accent-hover: #00B849;
-  --accent-active: #00A340;
-  --accent-subtle: rgba(0, 204, 82, 0.10);
-  --accent-border: rgba(0, 204, 82, 0.30);
+  /* ── Brand / accent — BLUE ────────────────────────────────────────– */
+  --accent: #0041C8;
+  --primary: #0041C8;
+  --accent-hover: #0036A3;
+  --accent-active: #002A7A;
+  --accent-subtle: rgba(0, 65, 200, 0.10);
+  --accent-dim: #DCE1FF;
+  --accent-border: rgba(0, 65, 200, 0.25);
 
   --tertiary: #0099CC;
   --tertiary-subtle: rgba(0, 153, 204, 0.10);
 
-  --success: #00CC52;
-  --success-subtle: rgba(0, 204, 82, 0.10);
-  --warning: #9a6700;
-  --warning-subtle: rgba(154, 103, 0, 0.10);
-  --danger: #cf222e;
-  --danger-subtle: rgba(207, 34, 46, 0.10);
-  --info: #0099CC;
-  --info-subtle: rgba(0, 153, 204, 0.10);
-  --neutral: #57606a;
-  --neutral-subtle: rgba(87, 96, 106, 0.10);
+  /* ── Status ramp ─────────────────────────────────────────────────– */
+  --success: #059669;
+  --success-subtle: rgba(5, 150, 105, 0.15);
+  --warning: #D97706;
+  --warning-subtle: rgba(217, 119, 6, 0.15);
+  --danger: #BA1A1A;
+  --danger-subtle: rgba(186, 26, 26, 0.15);
+  --info: #0041C8;
+  --info-subtle: rgba(0, 65, 200, 0.15);
+  --neutral: #737688;
+  --neutral-subtle: rgba(115, 118, 136, 0.15);
 
-  --diff-add-bg: rgba(0, 204, 82, 0.12);
-  --diff-add-fg: #00CC52;
-  --diff-del-bg: rgba(207, 34, 46, 0.12);
-  --diff-del-fg: #cf222e;
-  --diff-hunk-fg: #0099CC;
+  /* ── Diff colours ───────────────────────────────────────────────– */
+  --diff-add-bg: rgba(5, 150, 105, 0.15);
+  --diff-add-fg: #059669;
+  --diff-del-bg: rgba(186, 26, 26, 0.15);
+  --diff-del-fg: #BA1A1A;
+  --diff-hunk-fg: #0041C8;
 
-  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.10);
-  --shadow-md: 0 4px 12px rgba(31, 35, 40, 0.12);
-  --shadow-lg: 0 12px 32px rgba(31, 35, 40, 0.16);
-  --shadow-xl: 0 20px 60px rgba(31, 35, 40, 0.20);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.16);
 }
 
 :root {
   /* ── Typography ────────────────────────────────────────────────────── */
-  --font-sans: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-heading: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-heading: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
 
   --text-xs: 11px;

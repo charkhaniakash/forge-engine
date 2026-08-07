@@ -78,6 +78,7 @@
   color-scheme: light;
 
   /* ── Surfaces ─────────────────────────────────────────────────────── */
+  --background: #F7F9FB;
   --surface-base: #F7F9FB;
   --surface-1: #FFFFFF;
   --surface-2: #F2F4F6;
@@ -105,6 +106,7 @@
   --text-on-accent: #FFFFFF;
   --text-on-primary: #191C1E;
   --foreground: #191C1E;
+  --muted: #ECEEF0;
   --muted-foreground: #737688;
 
   /* ── Brand / accent — BLUE ────────────────────────────────────────– */

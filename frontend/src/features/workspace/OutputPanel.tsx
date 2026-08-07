@@ -3,7 +3,6 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { useAppSelector } from '@/app/hooks'
-import styles from './workspace.module.css'
 
 /**
  * Read-only live feed of the agent's command output (install / build / test /
@@ -95,5 +94,5 @@ export function OutputPanel({ active }: { active: boolean }) {
     }
   }, [active])
 
-  return <div ref={containerRef} className={styles.terminalWrap} style={{ height: '100%' }} />
+  return <div ref={containerRef} className="h-full w-full overflow-hidden bg-inset p-1" />
 }

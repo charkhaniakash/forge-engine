@@ -58,7 +58,7 @@ class ChatConfig(BaseModel):
     # groq:        llama-3.3-70b-versatile, llama-3.1-8b-instant, openai/gpt-oss-120b
     # openrouter:  nvidia/nemotron-3-ultra-550b-a55b:free, anthropic/claude-3.5-sonnet, openai/gpt-4o
     # tokenrouter: moonshotai/kimi-k3-free
-    model: str = "moonshotai/kimi-k3-free"
+    model: str = "llama-3.3-70b-versatile"
 
 
 class RetrievalConfig(BaseModel):

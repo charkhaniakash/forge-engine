@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Icon } from '@/components/common'
+import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { PlanStepCard } from '@/features/planning/PlanStepCard'
 import { ThoughtGroup } from './ThoughtGroup'
 import { ActivityRow } from './ActivityRow'
@@ -7,7 +9,7 @@ import { FileChanges } from './FileChanges'
 import { ValidationStages } from './ValidationStages'
 import { RepairAttemptCard } from './RepairAttemptCard'
 import type { ConversationEntry } from './model'
-import styles from './MissionThread.module.css'
+import { cn } from '@/lib/utils'
 
 export interface MissionThreadProps {
   header: ReactNode
@@ -17,60 +19,47 @@ export interface MissionThreadProps {
   planActions?: ReactNode
   actionRow?: ReactNode
   trailingMessages?: string[]
-  composer?: ReactNode
   /** Fallback shown when entries is empty — the caller should provide this
    *  from the backend's status/event data, but a generic fallback prevents
    *  rendering "undefined" during the initial load race. */
+  composer?: ReactNode
   emptyLabel?: string
 }
 
-// ── Entry-type color palette (UI chrome, not reasoning content) ─────────
-const ENTRY_COLORS: Record<string, string> = {
-  plan:       '#00FF66',
-  work:       '#00E5FF',
-  files:      '#42A5F5',
-  validation: '#FFA726',
-  repair:     '#EF5350',
-  publish:    '#00FF66',
+// ── Entry-type accent (icon color) ──────────────────────────────────────
+const ENTRY_ICON_COLOR: Record<string, string> = {
+  plan:       'text-primary',
+  work:       'text-info',
+  files:      'text-info',
+  validation: 'text-warning',
+  repair:     'text-destructive',
+  publish:    'text-primary',
 }
 
-function entryColor(entry: ConversationEntry): string {
-  return ENTRY_COLORS[entry.type] ?? '#71717A'
-}
-
-// ── Timeline Dot ────────────────────────────────────────────────────────
-
-function TimelineDot({ color, active }: { color: string; active: boolean }) {
+// ── Compact card shell built on the shadcn Card primitive ───────────────
+function CardShell({ header, children }: { header: ReactNode; children: ReactNode }) {
   return (
-    <div className={styles.timelineDot} style={{ borderColor: color }}>
-      <span
-        className={`${styles.dotInner} ${active ? styles.dotPulse : ''}`}
-        style={{ background: color }}
-      />
-    </div>
+    <Card className="gap-0 overflow-hidden border-border bg-card py-0 shadow-sm">
+      {header && (
+        <div className="flex items-center gap-2 border-b border-border bg-muted/30 px-3 py-2">{header}</div>
+      )}
+      <div className="p-3">{children}</div>
+    </Card>
   )
 }
 
-// ── Card shell — purely visual chrome ─────────────────────────────────
-
-function CardShell({ entry, header, children }: {
-  entry: ConversationEntry
-  header: ReactNode
-  children: ReactNode
+function CardHeaderInner({ icon, color, title, badge }: {
+  icon: Parameters<typeof Icon>[0]['name']
+  color: string
+  title: string
+  badge?: ReactNode
 }) {
-  const color = entryColor(entry)
   return (
-    <div className={styles.phaseCard} style={{ borderColor: `${color}33` }}>
-      {header && (
-        <div
-          className={styles.cardHeader}
-          style={{ background: `${color}0D`, borderBottomColor: `${color}22` }}
-        >
-          {header}
-        </div>
-      )}
-      <div className={styles.cardBody}>{children}</div>
-    </div>
+    <>
+      <Icon name={icon} size={14} className={cn('flex-shrink-0', color)} />
+      <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-fg">{title}</span>
+      {badge}
+    </>
   )
 }
 
@@ -78,11 +67,11 @@ function CardShell({ entry, header, children }: {
 
 function UserBubble({ text, createdAt }: { text: string; createdAt?: string }) {
   return (
-    <div className={styles.userMessageRow}>
-      <div className={styles.userBubble}>
-        <div className={styles.userBubbleText}>{text}</div>
+    <div className="flex justify-end">
+      <div className="max-w-[85%] rounded-2xl rounded-br-sm border border-primary/20 bg-primary/10 px-3 py-2">
+        <div className="whitespace-pre-wrap text-[13px] leading-relaxed text-fg">{text}</div>
         {createdAt && (
-          <div className={styles.userBubbleMeta}>
+          <div className="mt-1 text-[10px] text-fg-subtle">
             You · {new Date(createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </div>
         )}
@@ -93,85 +82,62 @@ function UserBubble({ text, createdAt }: { text: string; createdAt?: string }) {
 
 function PlanEntry({ entry, actions }: { entry: Extract<ConversationEntry, { type: 'plan' }>; actions?: ReactNode }) {
   const { plan } = entry
-  const color = entryColor(entry)
   const stepCount = `${plan.body.steps.length} step${plan.body.steps.length === 1 ? '' : 's'}`
-  // Card header text is derived SOLELY from the backend plan object
   const headerTitle = plan.body.intent_summary
     ? `${plan.body.intent_summary.slice(0, 60)}${plan.body.intent_summary.length > 60 ? '…' : ''}`
     : stepCount
 
   return (
-    <div className={styles.entryRow}>
-      <TimelineDot color={color} active={false} />
-      <div className={styles.entryContent}>
-        <CardShell entry={entry} header={
-          <div className={styles.cardHeaderInner}>
-            <Icon name="execution" size={14} className={styles.cardHeaderIcon} style={{ color }} />
-            <span className={styles.cardHeaderTitle}>{headerTitle}</span>
-            <span
-              className={styles.cardHeaderBadge}
-              style={{
-                color,
-                background: `${color}15`,
-                borderColor: `${color}30`,
-              }}
-            >
-              {stepCount}
-            </span>
-          </div>
-        }>
-          <p className={styles.planSummary}>{plan.body.intent_summary}</p>
-          <div className={styles.planSteps}>
-            {plan.body.steps.map((step, i) => <PlanStepCard key={step.id} step={step} index={i} />)}
-          </div>
-          {actions && <div className={styles.planActions}>{actions}</div>}
-        </CardShell>
+    <CardShell
+      header={
+        <CardHeaderInner
+          icon="execution"
+          color={ENTRY_ICON_COLOR.plan}
+          title={headerTitle}
+          badge={<Badge variant="outline" className="border-primary/30 font-normal text-primary">{stepCount}</Badge>}
+        />
+      }
+    >
+      <p className="mb-3 text-[13px] leading-relaxed text-fg-muted">{plan.body.intent_summary}</p>
+      <div className="flex flex-col gap-2">
+        {plan.body.steps.map((step, i) => <PlanStepCard key={step.id} step={step} index={i} />)}
       </div>
-    </div>
+      {actions && <div className="mt-3 flex flex-wrap items-center justify-end gap-2">{actions}</div>}
+    </CardShell>
   )
 }
 
 function WorkEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'work' }> }) {
-  const color = entryColor(entry)
-  // No card wrapper — the ThoughtGroup itself shows each backend-reasoning event directly
-  return (
-    <div className={styles.entryRow}>
-      <TimelineDot color={entry.isLive ? color : '#2A2A3A'} active={entry.isLive} />
-      <div className={styles.entryContent}>
-        <ThoughtGroup group={entry.group} isLive={entry.isLive} />
-      </div>
-    </div>
-  )
+  return <ThoughtGroup group={entry.group} isLive={entry.isLive} />
 }
 
 function FilesEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'files' }> }) {
-  const color = entryColor(entry)
   const totalAdd = entry.files.reduce((a, f) => a + f.linesAdded, 0)
   const totalDel = entry.files.reduce((a, f) => a + f.linesRemoved, 0)
-  // ALL text derived from backend file data
   const count = `${entry.files.length} file${entry.files.length === 1 ? '' : 's'} changed`
-  const stats = `+${totalAdd}  −${totalDel}`
 
   return (
-    <div className={styles.entryRow}>
-      <TimelineDot color={color} active={false} />
-      <div className={styles.entryContent}>
-        <CardShell entry={entry} header={
-          <div className={styles.cardHeaderInner}>
-            <Icon name="code" size={14} className={styles.cardHeaderIcon} style={{ color }} />
-            <span className={styles.cardHeaderTitle}>{count}</span>
-            <span className={styles.filesHeaderStats}>{stats}</span>
-          </div>
-        }>
-          <FileChanges files={entry.files} />
-        </CardShell>
-      </div>
-    </div>
+    <CardShell
+      header={
+        <CardHeaderInner
+          icon="code"
+          color={ENTRY_ICON_COLOR.files}
+          title={count}
+          badge={
+            <span className="flex-shrink-0 font-mono text-[11px]">
+              <span className="text-success">+{totalAdd}</span>{' '}
+              <span className="text-destructive">−{totalDel}</span>
+            </span>
+          }
+        />
+      }
+    >
+      <FileChanges files={entry.files} />
+    </CardShell>
   )
 }
 
 function ValidationEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'validation' }> }) {
-  const color = entryColor(entry)
   const running = entry.overall == null
   const passed = entry.overall === 'passed'
 
@@ -179,89 +145,65 @@ function ValidationEntry({ entry }: { entry: Extract<ConversationEntry, { type: 
   const failedStages = entry.stages.filter((s) => s.state === 'failed').length
   const total = entry.stages.length
 
-  // Card title from backend stage names
   const stageNames = entry.stages.map((s) => s.name).filter(Boolean)
   const titleText = stageNames.length > 0
     ? stageNames.slice(0, 3).join(', ') + (stageNames.length > 3 ? ` +${stageNames.length - 3}` : '')
     : `${total} task${total === 1 ? '' : 's'}`
 
-  // Status text from backend stage data — human-centered language
   const statusText = running
     ? `${passedStages + failedStages}/${total} complete`
     : passed
-      ? `All checks passed`
+      ? 'All checks passed'
       : `${passedStages}/${total} passed, ${failedStages} with feedback`
 
   return (
-    <div className={styles.entryRow}>
-      <TimelineDot
-        color={passed ? '#00FF66' : !running && !passed ? '#EF5350' : color}
-        active={running}
-      />
-      <div className={styles.entryContent}>
-        <CardShell entry={entry} header={
-          <div className={styles.cardHeaderInner}>
-            <Icon name="check" size={14} className={styles.cardHeaderIcon} style={{ color }} />
-            <span className={styles.cardHeaderTitle}>{titleText}</span>              <span
-              className={styles.cardHeaderBadge}
-              style={{
-                color: passed ? '#00FF66' : '#F59E0B',
-                background: passed ? 'rgba(0,255,102,0.15)' : 'rgba(245,158,11,0.15)',
-                borderColor: passed ? 'rgba(0,255,102,0.3)' : 'rgba(245,158,11,0.3)',
-              }}
+    <CardShell
+      header={
+        <CardHeaderInner
+          icon="check"
+          color={passed ? 'text-success' : !running && !passed ? 'text-destructive' : ENTRY_ICON_COLOR.validation}
+          title={titleText}
+          badge={
+            <Badge
+              variant="outline"
+              className={cn('font-normal', passed ? 'border-success/30 text-success' : 'border-warning/30 text-warning')}
             >
               {statusText}
-            </span>
+            </Badge>
+          }
+        />
+      }
+    >
+      <div className="mb-3 grid grid-cols-3 gap-2">
+        {[
+          { label: 'Tests', value: total },
+          { label: 'Passed', value: passedStages },
+          { label: 'Feedback', value: failedStages },
+        ].map((s) => (
+          <div key={s.label} className="flex flex-col items-center gap-0.5 rounded-lg border border-border bg-background/40 py-2.5">
+            <span className="font-mono text-lg font-semibold tabular-nums text-fg">{s.value}</span>
+            <span className="text-[10px] uppercase tracking-wide text-fg-subtle">{s.label}</span>
           </div>
-        }>
-          {/* Test results from backend stage data */}
-          <div className={styles.testGrid}>
-            <div className={styles.testStatBox}>
-              <span className={styles.testStatLabel}>Tests</span>
-              <span className={styles.testStatValue}>{total}</span>
-            </div>
-            <div className={styles.testStatBox}>
-              <span className={styles.testStatLabel}>Passed</span>
-              <span className={styles.testStatValue}>{passedStages}</span>
-            </div>
-            <div className={styles.testStatBox}>
-              <span className={styles.testStatLabel}>Feedback</span>
-              <span className={styles.testStatValue}>{failedStages}</span>
-            </div>
-          </div>
-          <ValidationStages stages={entry.stages} title="" />
-        </CardShell>
+        ))}
       </div>
-    </div>
+      <ValidationStages stages={entry.stages} title="" />
+    </CardShell>
   )
 }
 
 function RepairEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'repair' }> }) {
-  const color = entryColor(entry)
-  // No CardShell wrapper — render each RepairAttemptCard inline, similar to
-  // WorkEntry rendering ThoughtGroup directly. RepairAttemptCard already has
-  // its own card styling (colored left border, background), so an outer card
-  // would create a nested-card look.
   return (
-    <div className={styles.entryRow}>
-      <TimelineDot color={color} active={false} />
-      <div className={styles.entryContent}>
-        <div className={styles.repairStack}>
-          {entry.attempts.map((a) => <RepairAttemptCard key={a.attempt} attempt={a} />)}
-        </div>
-      </div>
+    <div className="flex flex-col gap-2">
+      {entry.attempts.map((a) => <RepairAttemptCard key={a.attempt} attempt={a} />)}
     </div>
   )
 }
 
 function PublishEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'publish' }> }) {
-  const color = entryColor(entry)
   const { session } = entry
   const needsAttention = session.status === 'failed'
   const ready = session.status === 'completed' && session.pr_url
 
-  // ALL text derived from backend PublishingSession data — only uses fields
-  // that actually exist on the PublishingSession type.
   const statusText = ready
     ? `PR${session.pr_number ? ` #${session.pr_number}` : ''}`
     : needsAttention
@@ -275,70 +217,53 @@ function PublishEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'pu
       : session.current_step ?? session.status
 
   const descText = ready
-    ? session.branch_name
-      ? `Branch: ${session.branch_name}`
-      : ''
+    ? session.branch_name ? `Branch: ${session.branch_name}` : ''
     : needsAttention
       ? session.error_message ?? ''
       : ''
 
   return (
-    <div className={styles.entryRow}>
-      <TimelineDot color={ready ? '#00FF66' : needsAttention ? '#F59E0B' : color} active={false} />
-      <div className={styles.entryContent}>
-        <CardShell entry={entry} header={
-          <div className={styles.cardHeaderInner}>
-            <Icon name="git" size={14} className={styles.cardHeaderIcon} style={{ color }} />
-            <span className={styles.cardHeaderTitle}>{titleText}</span>
-            <span
-              className={styles.cardHeaderBadge}
-              style={{
-                color: ready ? '#00FF66' : needsAttention ? '#F59E0B' : color,
-                background: ready ? 'rgba(0,255,102,0.15)' : needsAttention ? 'rgba(245,158,11,0.15)' : `${color}15`,
-                borderColor: ready ? 'rgba(0,255,102,0.3)' : needsAttention ? 'rgba(245,158,11,0.3)' : `${color}30`,
-              }}
+    <CardShell
+      header={
+        <CardHeaderInner
+          icon="git"
+          color={ready ? 'text-success' : needsAttention ? 'text-warning' : ENTRY_ICON_COLOR.publish}
+          title={titleText}
+          badge={
+            <Badge
+              variant="outline"
+              className={cn(
+                'font-normal',
+                ready ? 'border-success/30 text-success' : needsAttention ? 'border-warning/30 text-warning' : 'border-primary/30 text-primary',
+              )}
             >
               {statusText}
-            </span>
-          </div>
-        }>
-          <div className={styles.publishBody}>
-            <Icon name="git" size={22} className={styles.publishIcon} />
-            <div className={styles.publishInfo}>
-              <p className={styles.publishDesc}>{descText}</p>
-            </div>
-          </div>
-
-          {ready && session.pr_url && (
-            <div className={styles.publishActions}>
-              <a
-                className={styles.publishViewBtn}
-                href={session.pr_url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <Icon name="externalLink" size={13} />
-                <span>Open PR #{session.pr_number ?? ''}</span>
-              </a>
-            </div>
-          )}
-        </CardShell>
+            </Badge>
+          }
+        />
+      }
+    >
+      <div className="flex items-center gap-3">
+        <Icon name="git" size={20} className="flex-shrink-0 text-fg-subtle" />
+        <p className="min-w-0 flex-1 text-xs text-fg-muted">{descText}</p>
       </div>
-    </div>
+      {ready && session.pr_url && (
+        <a
+          className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground no-underline transition-all hover:no-underline hover:brightness-110"
+          href={session.pr_url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <Icon name="externalLink" size={13} />
+          <span>Open PR #{session.pr_number ?? ''}</span>
+        </a>
+      )}
+    </CardShell>
   )
 }
 
 function MessageEntry({ entry }: { entry: Extract<ConversationEntry, { type: 'message' }> }) {
-  return (
-    <div className={styles.entryRow}>
-      <div className={styles.timelineDotSmall}>
-        <span className={styles.dotNode} />
-      </div>
-      <div className={styles.entryContentCompact}>
-        <ActivityRow ev={entry.event} />
-      </div>
-    </div>
-  )
+  return <ActivityRow ev={entry.event} />
 }
 
 function renderEntry(entry: ConversationEntry, planActions?: ReactNode): ReactNode {
@@ -399,10 +324,14 @@ function useTurnInfo(entries: ConversationEntry[]) {
  * Timeline-style Mission thread. NO text is hardcoded — every string
  * displayed is derived from backend events or entry data.
  */
-export function MissionThread({ header, hero, entries, live, planActions, actionRow, trailingMessages, composer, emptyLabel = 'Waiting for the agent...' }: MissionThreadProps) {
+export function MissionThread({ header, entries, live, planActions, actionRow, trailingMessages, composer, emptyLabel = 'Waiting for the agent...' }: MissionThreadProps) {
   const endRef = useRef<HTMLDivElement>(null)
-  const atBottomRef = useRef(true)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const threadRef = useRef<HTMLDivElement>(null)
+  // Pinned = user is parked at the bottom and wants to follow live output.
+  // Once they scroll up to inspect an earlier change, we STOP yanking them down.
+  const pinnedRef = useRef(true)
+  const [showJump, setShowJump] = useState(false)
   const turnBorders = useTurnInfo(entries)
   const boundarySet = useMemo(() => new Set(turnBorders), [turnBorders])
 
@@ -414,92 +343,126 @@ export function MissionThread({ header, hero, entries, live, planActions, action
     return last
   }, [entries])
 
+  const scrollToBottom = useCallback((smooth = false) => {
+    const el = scrollRef.current
+    if (!el) return
+    el.scrollTo({ top: el.scrollHeight, behavior: smooth ? 'smooth' : 'auto' })
+    pinnedRef.current = true
+    setShowJump(false)
+  }, [])
+
+  // Follow streaming growth: content grows INSIDE an existing entry (execution
+  // output, appending reasoning) without the entry count changing. A ResizeObserver
+  // catches every height change and keeps us glued to the bottom — but only while pinned.
   useEffect(() => {
-    if (atBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' })
+    const content = threadRef.current
+    const el = scrollRef.current
+    if (!content || !el) return
+    const ro = new ResizeObserver(() => {
+      if (pinnedRef.current) el.scrollTop = el.scrollHeight
+    })
+    ro.observe(content)
+    return () => ro.disconnect()
+  }, [])
+
+  // New entries / new user messages: jump down only if the user is still pinned.
+  useEffect(() => {
+    if (pinnedRef.current) {
+      const el = scrollRef.current
+      if (el) el.scrollTop = el.scrollHeight
+    }
   }, [entries.length, trailingMessages?.length])
 
   function onScroll() {
     const el = scrollRef.current
     if (!el) return
-    atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight
+    const pinned = distanceFromBottom < 80
+    pinnedRef.current = pinned
+    setShowJump(!pinned)
   }
 
   // Thinking indicator: only shown as fallback when `live` is true but no
   // work group from the backend is already rendering reasoning content.
   const lastEntry = entries[entries.length - 1]
-  const needsThinkingFallback =
-    live && !(lastEntry?.type === 'work' && lastEntry.isLive)
+  const needsThinkingFallback = live && !(lastEntry?.type === 'work' && lastEntry.isLive)
 
   return (
-    <div className={styles.page}>
-      <div className={styles.top}>{header}</div>
-      <div className={styles.scroll} ref={scrollRef} onScroll={onScroll}>
-        <div className={styles.thread}>
-          {hero && <div className={styles.heroSlot}>{hero}</div>}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-base">
+      <div className="relative flex-1 overflow-y-auto" ref={scrollRef} onScroll={onScroll}>
+        <div className="mx-auto flex max-w-[860px] flex-col gap-3 px-5 py-5 pb-16" ref={threadRef}>
+          {header}
 
-          {entries.length === 0 && <div className={styles.empty}>{emptyLabel}</div>}
+          {entries.length === 0 && (
+            <div className="py-8 text-center text-[13px] text-fg-subtle">{emptyLabel}</div>
+          )}
 
-          <div className={styles.timeline}>
-            {entries.map((entry, i) => {
-              const key = entryKey(entry, i)
-              const isUserMsg = entry.type === 'user'
+          {entries.map((entry, i) => {
+            const key = entryKey(entry, i)
+            const isUserMsg = entry.type === 'user'
 
-              const turnSep = boundarySet.has(i) ? (
-                <div className={styles.turnSep} key={`${key}-sep`}>
-                  <span className={styles.turnSepLine} />
-                  <span className={styles.turnSepLabel}>Follow-up</span>
-                  <span className={styles.turnSepLine} />
-                </div>
-              ) : null
-
-              const inner = isUserMsg ? (
-                <UserBubble text={entry.text} createdAt={entry.createdAt} />
-              ) : (
-                renderEntry(entry, entry.type === 'plan' && i === lastPlanIndex ? planActions : undefined)
-              )
-
-              return turnSep ? (
-                <div key={key}>
-                  {turnSep}
-                  {inner}
-                </div>
-              ) : (
-                <div key={key}>{inner}</div>
-              )
-            })}
-
-            {needsThinkingFallback && (
-              <div className={styles.entryRow}>
-                <div className={styles.timelineDotPulse}>
-                  <span className={styles.thinkingDot} />
-                </div>
-                <div className={styles.entryContent}>
-                  <div className={styles.thinkingRow}>
-                    <span className={styles.thinkingLabel}>Forge is thinking</span>
-                    <span className={styles.thinkingDots}>
-                      <span className={styles.dot1}>.</span>
-                      <span className={styles.dot2}>.</span>
-                      <span className={styles.dot3}>.</span>
-                    </span>
-                  </div>
-                </div>
+            const turnSep = boundarySet.has(i) ? (
+              <div className="my-2 flex items-center gap-3" key={`${key}-sep`}>
+                <span className="h-px flex-1 bg-line-subtle" />
+                <span className="font-mono text-[10px] uppercase tracking-wider text-fg-subtle">Follow-up</span>
+                <span className="h-px flex-1 bg-line-subtle" />
               </div>
-            )}
-          </div>
+            ) : null
 
-          {trailingMessages && trailingMessages.length > 0 && (
-            <div className={styles.trailingMessages}>
-              {trailingMessages.map((msg, i) => (
-                <UserBubble key={`user-msg-${i}`} text={msg} />
-              ))}
+            const inner = isUserMsg ? (
+              <UserBubble text={entry.text} createdAt={entry.createdAt} />
+            ) : (
+              renderEntry(entry, entry.type === 'plan' && i === lastPlanIndex ? planActions : undefined)
+            )
+
+            return (
+              <div key={key} className="flex flex-col gap-3">
+                {turnSep}
+                {inner}
+              </div>
+            )
+          })}
+
+          {needsThinkingFallback && (
+            <div className="flex items-center gap-2 px-2 py-1">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+              <span className="text-[13px] text-fg-muted">Forge is thinking</span>
+              <span className="flex gap-0.5">
+                <span className="animate-bounce text-fg-subtle [animation-delay:-0.3s]">.</span>
+                <span className="animate-bounce text-fg-subtle [animation-delay:-0.15s]">.</span>
+                <span className="animate-bounce text-fg-subtle">.</span>
+              </span>
             </div>
           )}
 
-          {actionRow && <div className={styles.actionRow}>{actionRow}</div>}
+          {trailingMessages && trailingMessages.length > 0 && (
+            <div className="flex flex-col gap-3">
+              {trailingMessages.map((msg, i) => <UserBubble key={`user-msg-${i}`} text={msg} />)}
+            </div>
+          )}
+
+          {actionRow && <div className="flex flex-wrap items-center justify-end gap-2 pt-1">{actionRow}</div>}
           <div ref={endRef} />
         </div>
+
+        {showJump && (
+          <button
+            type="button"
+            onClick={() => scrollToBottom(true)}
+            aria-label="Jump to latest"
+            className="sticky bottom-3.5 left-1/2 z-10 -translate-x-1/2 inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-border bg-surface-2/90 px-3.5 py-1.5 text-xs font-medium text-fg-muted shadow-lg backdrop-blur transition-colors hover:border-primary/40 hover:text-primary"
+          >
+            <Icon name="chevronDown" size={14} />
+            {live ? 'Follow live' : 'Latest'}
+          </button>
+        )}
       </div>
-      {composer && <div className={styles.composer}>{composer}</div>}
+
+      {composer && (
+        <div className="flex-shrink-0 border-t border-line bg-base px-4 py-3">
+          <div className="mx-auto max-w-[860px]">{composer}</div>
+        </div>
+      )}
     </div>
   )
 }

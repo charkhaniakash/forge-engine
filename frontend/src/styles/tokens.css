@@ -10,42 +10,42 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  /* ── Surfaces (low → high elevation) ───────────────────────────────── */
-  --surface-base: #0A0A0A; /* app background */
-  --surface-1: #111113; /* cards, panels */
-  --surface-2: #181920; /* raised / hover */
-  --surface-3: #1E2028; /* popovers, menus */
-  --surface-inset: #0D0E12; /* code / log backgrounds */
-  --surface-overlay: rgba(0, 0, 0, 0.6); /* modal scrim */
+  /* ── Surfaces (low → high elevation) — dark slate, "code dark" ─────── */
+  --surface-base: #0B1120; /* app background — deep slate, avoids OLED smear of pure #000 */
+  --surface-1: #0F172A; /* cards, panels */
+  --surface-2: #1A2334; /* raised / hover */
+  --surface-3: #232E42; /* popovers, menus */
+  --surface-inset: #080D18; /* code / log backgrounds */
+  --surface-overlay: rgba(2, 6, 16, 0.7); /* modal scrim */
 
-  /* ── Borders ───────────────────────────────────────────────────────── */
-  --border: rgba(255, 255, 255, 0.07);
-  --border-default: rgba(255, 255, 255, 0.07);
-  --border-subtle: rgba(255, 255, 255, 0.04);
-  --border-strong: #333B46;
-  --border-focus: rgba(0, 229, 107, 0.40);
+  /* ── Borders — slate-tinted, subtle ────────────────────────────────── */
+  --border: rgba(148, 163, 184, 0.12);
+  --border-default: rgba(148, 163, 184, 0.12);
+  --border-subtle: rgba(148, 163, 184, 0.07);
+  --border-strong: rgba(148, 163, 184, 0.24);
+  --border-focus: rgba(34, 197, 94, 0.45);
 
-  /* ── Text ──────────────────────────────────────────────────────────── */
-  --text-primary: #EDEDED;
-  --text-secondary: #A1A1AA;
-  --text-tertiary: #52525B;
-  --text-inverse: #050507;
-  --text-on-accent: #050507;
-  --text-on-primary: #050507;
-  --foreground: #EDEDED;
-  --muted-foreground: #71717A;
+  /* ── Text — slate ramp ─────────────────────────────────────────────── */
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-tertiary: #64748B;
+  --text-inverse: #0B1120;
+  --text-on-accent: #04180C;
+  --text-on-primary: #04180C;
+  --foreground: #F1F5F9;
+  --muted-foreground: #94A3B8;
 
-  /* ── Brand / accent ────────────────────────────────────────────────── */
-  --accent: #0041C8;
-  --primary: #0041C8;
-  --accent-hover: #0036A3;
-  --accent-active: #002A7A;
-  --accent-subtle: rgba(0, 65, 200, 0.10);
-  --accent-dim: rgba(0, 65, 200, 0.10);
-  --accent-border: rgba(0, 65, 200, 0.25);
+  /* ── Brand / accent — GREEN ("run green") ──────────────────────────── */
+  --accent: #22C55E;
+  --primary: #22C55E;
+  --accent-hover: #16A34A;
+  --accent-active: #15803D;
+  --accent-subtle: rgba(34, 197, 94, 0.12);
+  --accent-dim: rgba(34, 197, 94, 0.12);
+  --accent-border: rgba(34, 197, 94, 0.30);
 
-  --tertiary: #00E5FF;
-  --tertiary-subtle: rgba(0, 229, 255, 0.10);
+  --tertiary: #38BDF8;
+  --tertiary-subtle: rgba(56, 189, 248, 0.10);
 
   /* ── Status ramp (fg + subtle bg) ──────────────────────────────────── */
   --success: #22C55E;
@@ -151,8 +151,8 @@
 
 :root {
   /* ── Typography ────────────────────────────────────────────────────── */
-  --font-sans: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-heading: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-heading: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
 
   --text-xs: 11px;
@@ -186,6 +186,7 @@
   --space-16: 64px;
 
   /* ── Radii ─────────────────────────────────────────────────────────── */
+  --radius: 0.5rem; /* shadcn base — rounded-sm/md/lg/xl derive from this */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;

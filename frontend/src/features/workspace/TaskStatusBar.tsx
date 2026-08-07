@@ -1,21 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppSelector } from '@/app/hooks'
-import styles from './workspace.module.css'
+import { cn } from '@/lib/utils'
 
-const PHASE_LABELS: Record<string, string> = {
-  planning:   'Planning',
-  executing:  'Executing',
-  validation: 'Validating',
-  repair:     'Repairing',
-  publishing: 'Publishing',
-}
-
-const PHASE_COLORS: Record<string, string> = {
-  planning:   '#A78BFA',
-  executing:  'var(--accent)',
-  validation: '#60A5FA',
-  repair:     '#FB923C',
-  publishing: '#34D399',
+const PHASE: Record<string, { text: string; dot: string; label: string }> = {
+  planning:   { text: 'text-purple-400', dot: 'bg-purple-400', label: 'Planning' },
+  executing:  { text: 'text-primary',    dot: 'bg-primary',    label: 'Executing' },
+  validation: { text: 'text-info',       dot: 'bg-info',       label: 'Validating' },
+  repair:     { text: 'text-warning',    dot: 'bg-warning',    label: 'Repairing' },
+  publishing: { text: 'text-success',    dot: 'bg-success',    label: 'Publishing' },
 }
 
 function useElapsedTimer(active: boolean) {
@@ -54,82 +46,71 @@ interface TaskStatusBarProps {
 
 export function TaskStatusBar({ livePhase, isLive = false }: TaskStatusBarProps) {
   const activeFilePath = useAppSelector((s) => s.workspaceEditor?.activeFilePath)
-  // Workspace socket connection — this IS correct (set by useWorkspaceSocket)
-  const wsStatus      = useAppSelector((s) => s.workspaceEditor?.connectionStatus ?? 'idle')
-  // AI activity events from workspace socket — source of current tool/action
-  const aiEvents      = useAppSelector((s) => s.workspaceActivity?.aiEvents ?? [])
+  // Workspace socket connection — set by useWorkspaceSocket (correct source).
+  const wsStatus = useAppSelector((s) => s.workspaceEditor?.connectionStatus ?? 'idle')
+  const aiEvents = useAppSelector((s) => s.workspaceActivity?.aiEvents ?? [])
 
   const isRunning = isLive
-  const elapsed   = useElapsedTimer(isRunning)
+  const elapsed = useElapsedTimer(isRunning)
 
-  const lastTool  = [...aiEvents].reverse().find((e) => e.tool)?.tool ?? null
+  const lastTool = [...aiEvents].reverse().find((e) => e.tool)?.tool ?? null
   const lastLabel = aiEvents.length > 0 ? aiEvents[aiEvents.length - 1].label : null
 
-  const phaseKey   = livePhase ?? 'idle'
-  const phaseLabel = PHASE_LABELS[phaseKey] ?? 'Idle'
-  const phaseColor = isLive ? (PHASE_COLORS[phaseKey] ?? 'var(--accent)') : 'var(--text-tertiary)'
+  const phase = (livePhase && PHASE[livePhase]) || null
+  const phaseLabel = phase?.label ?? 'Idle'
+  const phaseText = isLive && phase ? phase.text : 'text-fg-subtle'
+  const phaseDot = isLive && phase ? phase.dot : 'bg-fg-subtle'
 
   const wsConnected = wsStatus === 'connected'
-  const wsConnColor = wsConnected ? '#10B981' : wsStatus === 'connecting' ? '#F59E0B' : '#52525B'
-  const wsLabel     = wsConnected ? 'Workspace' : wsStatus === 'connecting' ? 'Connecting…' : ''
+  const wsConnColor = wsConnected ? 'bg-success' : wsStatus === 'connecting' ? 'bg-warning' : 'bg-fg-subtle'
+  const wsLabel = wsConnected ? 'Workspace' : wsStatus === 'connecting' ? 'Connecting…' : ''
 
   const fileName = activeFilePath ? activeFilePath.split('/').pop() : null
 
   return (
-    <div className={styles.statusBar}>
-      {/* ── Left: Phase + current action ─────────────────────────────────── */}
-      <div className={styles.statusLeft}>
-        <div className={styles.statusGroup}>
-          <span
-            className={styles.statusPhaseDot}
-            style={{
-              background: phaseColor,
-              animation: isRunning ? 'status-pulse 1.6s ease infinite' : 'none',
-            }}
-          />
-          <span className={styles.statusPhaseLabel} style={{ color: phaseColor }}>
-            {phaseLabel}
-          </span>
-        </div>
+    <div className="flex h-7 flex-shrink-0 items-center gap-2 border-t border-line bg-surface px-3 font-mono text-[11px]">
+      {/* Left: phase + current action */}
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="flex items-center gap-1.5">
+          <span className={cn('h-1.5 w-1.5 rounded-full', phaseDot, isRunning && 'animate-pulse')} />
+          <span className={cn('font-medium', phaseText)}>{phaseLabel}</span>
+        </span>
 
         {isRunning && lastLabel && (
           <>
-            <span className={styles.statusSep}>/</span>
-            <span className={styles.statusAction} title={lastLabel}>
+            <span className="text-fg-subtle opacity-50">/</span>
+            <span className="truncate text-fg-muted" title={lastLabel}>
               {lastLabel.length > 50 ? lastLabel.slice(0, 50) + '…' : lastLabel}
             </span>
           </>
         )}
-
         {isRunning && lastTool && (
           <>
-            <span className={styles.statusSep}>·</span>
-            <span className={styles.statusTool}>{lastTool}</span>
+            <span className="text-fg-subtle opacity-50">·</span>
+            <span className="text-fg-subtle">{lastTool}</span>
           </>
         )}
       </div>
 
-      {/* ── Center: Active file ──────────────────────────────────────────── */}
-      <div className={styles.statusCenter}>
+      {/* Center: active file */}
+      <div className="mx-auto min-w-0">
         {fileName && (
-          <span className={styles.statusFile} title={activeFilePath ?? ''}>
+          <span className="truncate text-fg-subtle" title={activeFilePath ?? ''}>
             {fileName}
           </span>
         )}
       </div>
 
-      {/* ── Right: Workspace connection + elapsed timer ──────────────────── */}
-      <div className={styles.statusRight}>
-        {isRunning && (
-          <span className={styles.statusTimer}>{fmtElapsed(elapsed)}</span>
-        )}
+      {/* Right: elapsed timer + workspace connection */}
+      <div className="flex flex-shrink-0 items-center gap-2">
+        {isRunning && <span className="text-fg-muted tabular-nums">{fmtElapsed(elapsed)}</span>}
         {wsConnected && (
           <>
-            <span className={styles.statusSep}>·</span>
-            <div className={styles.statusGroup}>
-              <span className={styles.connectionDot} style={{ backgroundColor: wsConnColor }} />
-              <span className={styles.statusLabel}>{wsLabel}</span>
-            </div>
+            <span className="text-fg-subtle opacity-50">·</span>
+            <span className="flex items-center gap-1.5">
+              <span className={cn('h-1.5 w-1.5 rounded-full', wsConnColor)} />
+              <span className="text-fg-subtle">{wsLabel}</span>
+            </span>
           </>
         )}
       </div>

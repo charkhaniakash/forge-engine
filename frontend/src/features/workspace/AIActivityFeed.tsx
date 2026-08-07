@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
 import { useAppSelector } from '@/app/hooks'
-import styles from './workspace.module.css'
 
 /** Emoji glyph for an ai_activity event type. */
 function glyph(type: string): string {
@@ -28,16 +27,20 @@ export function AIActivityFeed() {
   }, [events.length])
 
   if (events.length === 0) {
-    return <div className={styles.empty}>Waiting for the agent… live reasoning and tool calls appear here.</div>
+    return (
+      <div className="p-4 text-xs text-fg-subtle">
+        Waiting for the agent… live reasoning and tool calls appear here.
+      </div>
+    )
   }
 
   return (
-    <div className={styles.aiFeed}>
+    <div className="flex flex-col p-2">
       {events.map((e) => (
-        <div key={e.id} className={styles.aiRow}>
-          <span className={styles.aiIcon}>{glyph(e.type)}</span>
-          <span className={styles.aiLabel}>{e.label}</span>
-          <span className={styles.aiTime}>{fmtTime(e.ts)}</span>
+        <div key={e.id} className="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-surface-2">
+          <span className="flex-shrink-0 text-sm leading-none">{glyph(e.type)}</span>
+          <span className="min-w-0 flex-1 truncate text-[13px] text-fg-muted">{e.label}</span>
+          <span className="flex-shrink-0 font-mono text-[10px] text-fg-subtle">{fmtTime(e.ts)}</span>
         </div>
       ))}
       <div ref={endRef} />

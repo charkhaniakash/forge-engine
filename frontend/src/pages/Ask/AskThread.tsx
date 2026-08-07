@@ -9,7 +9,6 @@ import { useAskMutation, useGetSessionQuery } from '@/services/api/qaApi'
 import { useListReposQuery } from '@/services/api/repositoryApi'
 import { ROUTES } from '@/constants/routes'
 import type { QAMessage } from '@/types'
-import styles from './AskThread.module.css'
 
 /**
  * A single continuous Ask conversation. Opened from the console the instant a
@@ -99,16 +98,20 @@ export function AskThread() {
   }, [firstQuestion])
 
   return (
-    <div className={styles.thread}>
-      <header className={styles.header}>
-        <button className={styles.back} onClick={() => navigate(ROUTES.root)}>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-base">
+      <header className="flex h-12 flex-shrink-0 items-center gap-3 border-b border-line bg-surface px-3">
+        <button
+          className="flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-xs text-fg-subtle transition-colors hover:bg-surface-2 hover:text-fg"
+          onClick={() => navigate(ROUTES.root)}
+        >
           <Icon name="chevronLeft" size={14} /> Console
         </button>
-        <div className={styles.title}>
-          <Icon name="chat" size={15} /> Ask · {repoName}
+        <span className="h-4 w-px bg-line" />
+        <div className="flex items-center gap-1.5 text-[13px] font-medium text-fg">
+          <Icon name="chat" size={15} className="text-primary" /> Ask · {repoName}
         </div>
       </header>
-      <div className={styles.body}>
+      <div className="min-h-0 flex-1">
         <ChatWindow repoName={repoName} messages={messages} busy={busy} onAsk={onAsk} />
       </div>
     </div>

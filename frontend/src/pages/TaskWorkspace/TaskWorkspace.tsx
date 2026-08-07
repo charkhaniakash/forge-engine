@@ -54,7 +54,6 @@ import { usePublishingStream } from '@/features/task-workspace/usePublishingStre
 import { loadPlanMode, savePlanMode } from '@/features/task-workspace/planMode'
 import { WORK_ITEM_STATUS } from '@/constants/status'
 import { ROUTES } from '@/constants/routes'
-import styles from './TaskWorkspace.module.css'
 
 const EXEC_LIVE = new Set(['pending', 'running'])
 const STORAGE_PREFIX = 'forge-turn-artifacts'
@@ -605,7 +604,7 @@ export function TaskWorkspace() {
       />
     )
   }
-  if (isLoading) return <div className={styles.center}><Spinner size={22} /></div>
+  if (isLoading) return <div className="flex h-full items-center justify-center"><Spinner size={22} /></div>
   if (!task) {
     return (
       <EmptyState
@@ -813,7 +812,12 @@ export function TaskWorkspace() {
         <>
           <StatusBadge map={WORK_ITEM_STATUS} status={task.status} size="sm" />
           {prUrl && (
-            <a className={styles.prChip} href={prUrl} target="_blank" rel="noreferrer">
+            <a
+              className="inline-flex items-center gap-1 rounded-full border border-primary/25 bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary no-underline hover:no-underline"
+              href={prUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
               <Icon name="git" size={13} /> {publishSession?.pr_number ? `#${publishSession.pr_number}` : 'PR'}
             </a>
           )}
@@ -822,30 +826,92 @@ export function TaskWorkspace() {
     />
   )
 
+  // "Create PR" in the top bar maps to the publishing flow — enabled once the
+  // mission is done with real changes and no PR is open yet.
+  const canCreatePr =
+    missionDone && fileChanges.length > 0 && !prUrl && !publishActive &&
+    (!publishSession || ['failed', 'cancelled'].includes(publishSession.status))
+  async function handleCreatePr() {
+    await run(startPublish({ repoId, taskId }).unwrap(), 'Creating PR…', 'Failed to create PR')
+    refetchPublish()
+    refetchTask()
+  }
+
   const header = (
-    <div className={styles.header}>
-      <div className={styles.headerLeft}>
-        <button className={styles.back} onClick={() => navigate(ROUTES.root)}>
-          <Icon name="chevronLeft" size={14} />
+    <div className="flex h-12 flex-shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-3">
+      {/* Left: back + breadcrumb */}
+      <div className="flex min-w-0 flex-1 items-center gap-2">
+        <button
+          onClick={() => navigate(ROUTES.root)}
+          aria-label="Back to console"
+          className="flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-subtle transition-colors hover:bg-surface-2 hover:text-fg"
+        >
+          <Icon name="chevronLeft" size={16} />
         </button>
-        <span className={styles.crumb}>Mission</span>
-        <span className={styles.headerDivider} />
-        <Icon name="git" size={12} className={styles.headerGitIcon} />
-        <span className={styles.headerRepoName}>{repoId ? `repo-${repoId.slice(0, 6)}` : 'No repo'}</span>
+        <Icon name="branch" size={13} className="flex-shrink-0 text-fg-subtle" />
+        <span className="flex-shrink-0 font-mono text-xs text-fg-subtle">
+          {repoId ? `repo-${repoId.slice(0, 6)}` : 'no-repo'}
+        </span>
+        <Icon name="chevronRight" size={12} className="flex-shrink-0 text-fg-subtle opacity-50" />
+        <span className="min-w-0 truncate text-[13px] font-medium text-fg">{task.intent}</span>
       </div>
-      <div className={styles.headerRight}>
-        {/* Task phase indicator — derived from what the component already knows,
-            never reads from a stale Redux slice that's never updated here */}
+
+      {/* Right: view toggle + live status + Create PR */}
+      <div className="flex flex-shrink-0 items-center gap-2">
+        {workspace?.id && (
+          <div className="flex items-center gap-0.5 rounded-lg border border-line bg-base p-0.5">
+            <button
+              onClick={() => setRightTab('code')}
+              className={`flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${rightTab === 'code' ? 'bg-surface-2 text-fg' : 'text-fg-subtle hover:text-fg'}`}
+            >
+              <Icon name="code" size={13} /> Code
+            </button>
+            <button
+              onClick={() => setRightTab('preview')}
+              className={`flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${rightTab === 'preview' ? 'bg-surface-2 text-fg' : 'text-fg-subtle hover:text-fg'}`}
+            >
+              <Icon name="monitor" size={13} /> Preview
+            </button>
+          </div>
+        )}
+
         {live ? (
-          <span className={styles.headerLive}>
-            <span className={styles.liveDot}><span /></span>
+          <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 font-mono text-[11px] font-medium text-primary">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-primary" />
+            </span>
             {liveHint ?? 'Live'}
           </span>
         ) : missionDone ? (
-          <span className={styles.headerDoneChip}>✓ Complete</span>
+          <span className="flex items-center gap-1 rounded-full border border-success/25 bg-success/10 px-2.5 py-1 text-[11px] font-semibold text-success">
+            <Icon name="check" size={12} /> Complete
+          </span>
         ) : missionFailed ? (
-          <span className={styles.headerFailChip}>✗ Failed</span>
+          <span className="flex items-center gap-1 rounded-full border border-danger/25 bg-danger/10 px-2.5 py-1 text-[11px] font-semibold text-danger">
+            <Icon name="x" size={12} /> Failed
+          </span>
         ) : null}
+
+        {prUrl ? (
+          <a
+            href={prUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground no-underline transition-all hover:no-underline hover:brightness-110"
+          >
+            <Icon name="git" size={14} />
+            {publishSession?.pr_number ? `PR #${publishSession.pr_number}` : 'View PR'}
+          </a>
+        ) : (
+          <button
+            onClick={handleCreatePr}
+            disabled={!canCreatePr || publishStarting}
+            className="flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[13px] font-semibold text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <Icon name="branch" size={14} /> Create PR
+          </button>
+        )}
       </div>
     </div>
   )
@@ -912,9 +978,9 @@ export function TaskWorkspace() {
 
   const composer = (
     <>
-      <div className={styles.composerBox}>
+      <div className="flex items-end gap-2 rounded-xl border border-line bg-surface p-2 transition-colors focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10">
         <textarea
-          className={styles.composerInput}
+          className="max-h-32 min-w-0 flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] leading-relaxed text-fg outline-none placeholder:text-fg-subtle disabled:opacity-50"
           value={refineNote}
           onChange={(e) => setRefineNote(e.target.value)}
           placeholder={composerPlaceholder}
@@ -940,7 +1006,7 @@ export function TaskWorkspace() {
           <>
             <button
               type="button"
-              className={`${styles.planToggle} ${planMode ? styles.planToggleOn : ''}`}
+              className={`flex h-8 flex-shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 font-mono text-[11px] font-semibold transition-colors ${planMode ? 'border-primary/30 bg-primary/10 text-primary' : 'border-line text-fg-subtle hover:text-fg'}`}
               onClick={togglePlanMode}
               title={planMode
                 ? 'Plan first — review the plan before it runs'
@@ -972,19 +1038,19 @@ export function TaskWorkspace() {
           </Button>
         )}
       </div>
-      <div className={styles.composerFooter}>
-        <div className={styles.composerStatusLeft}>
-          <span className={styles.composerStatusItem}>
-            <Icon name="code" size={11} className={styles.composerStatusIconGreen} />
-            Shell Sandbox listening
+      <div className="mt-1.5 flex items-center justify-between px-1">
+        <div className="flex items-center gap-2.5">
+          <span className="flex items-center gap-1 font-mono text-[10px] text-fg-subtle">
+            <Icon name="code" size={11} className="text-primary" />
+            Shell sandbox listening
           </span>
-          <span className={styles.composerStatusDivider} />
-          <span className={styles.composerStatusItem}>
-            <Icon name="tool" size={11} className={styles.composerStatusIconCyan} />
-            Safe Mode: Activated
+          <span className="h-3 w-px bg-line" />
+          <span className="flex items-center gap-1 font-mono text-[10px] text-fg-subtle">
+            <Icon name="tool" size={11} className="text-tertiary" />
+            Safe mode active
           </span>
         </div>
-        <span className={styles.composerShortcut}>Ctrl + Enter to submit</span>
+        <span className="font-mono text-[10px] text-fg-subtle opacity-70">⌘ + Enter to submit</span>
       </div>
     </>
   )
@@ -998,14 +1064,14 @@ export function TaskWorkspace() {
   })()
 
   return (
-    <div className={styles.root}>
-      {/* Header */}
+    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-base">
+      {/* Top bar */}
       {header}
-      
+
       {/* Main 2-column workspace body */}
-      <div className={styles.body}>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
         {/* Left: Mission Thread (~44%) */}
-        <div className={styles.left}>
+        <div className="flex w-[44%] min-w-[380px] max-w-[680px] flex-col overflow-hidden border-r border-line">
           <MissionThread
             header={hero}
             entries={conversation.filter(
@@ -1019,59 +1085,30 @@ export function TaskWorkspace() {
           />
         </div>
 
-        {/* Right: Code Editor (~56%) */}
-        <div className={styles.right}>
+        {/* Right: Code Editor (~56%) — Code/Preview toggle lives in the top bar */}
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden bg-surface">
           {workspace?.id ? (
             <>
-              {/* Tab strip — proper CSS module classes so active state renders */}
-              <div className={styles.rightTabStrip}>
-                <button
-                  className={`${styles.rightTab} ${rightTab === 'code' ? styles.rightTabActive : ''}`}
-                  onClick={() => setRightTab('code')}
-                >
-                  <Icon name="code" size={12} />
-                  Code
-                </button>
-                <button
-                  className={`${styles.rightTab} ${rightTab === 'preview' ? styles.rightTabActive : ''}`}
-                  onClick={() => setRightTab('preview')}
-                >
-                  <Icon name="monitor" size={12} />
-                  Preview
-                </button>
-              </div>
-
               {/* Panels stay mounted so switching tabs preserves editor/iframe state */}
               <div style={{ flex: 1, minHeight: 0, display: rightTab === 'code' ? 'flex' : 'none', flexDirection: 'column' }}>
-                <CodeEditor workspaceId={workspace.id} fileExplorer={<FileExplorer workspaceId={workspace.id} height={600} />} />
+                <CodeEditor workspaceId={workspace.id} live={live} fileExplorer={<FileExplorer workspaceId={workspace.id} />} />
               </div>
               <div style={{ flex: 1, minHeight: 0, display: rightTab === 'preview' ? 'flex' : 'none', flexDirection: 'column' }}>
                 <LivePreview workspaceId={workspace.id} />
               </div>
             </>
           ) : (
-            <>
-              {/* Tab strip even when no workspace — keeps layout stable */}
-              <div className={styles.rightTabStrip}>
-                <button className={`${styles.rightTab} ${styles.rightTabActive}`}>
-                  <Icon name="code" size={12} />
-                  Code
-                </button>
-                <button className={styles.rightTab}>
-                  <Icon name="monitor" size={12} />
-                  Preview
-                </button>
-              </div>
-              <div className={styles.rightPanelEmpty}>
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-line bg-surface-2 text-fg-subtle">
                 <Icon name="code" size={24} />
-                <p className={styles.rightPanelEmptyTitle}>No workspace yet</p>
-                <p className={styles.rightPanelEmptyDesc}>
-                  {taskAutoRun || status === 'planning' || status === 'draft'
-                    ? 'Forge is preparing the workspace — code will appear here as the agent edits files.'
-                    : 'Approve the plan and run it. Code will stream in here as the agent works.'}
-                </p>
               </div>
-            </>
+              <p className="text-sm font-semibold text-fg-muted">No workspace yet</p>
+              <p className="max-w-[260px] text-xs leading-relaxed text-fg-subtle">
+                {taskAutoRun || status === 'planning' || status === 'draft'
+                  ? 'Forge is preparing the workspace — code will appear here as the agent edits files.'
+                  : 'Approve the plan and run it. Code will stream in here as the agent works.'}
+              </p>
+            </div>
           )}
         </div>
       </div>

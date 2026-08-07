@@ -1,9 +1,11 @@
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { Button } from '@/components/common'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Spinner } from '@/components/common'
 import { useLoginMutation } from '@/services/api/authApi'
 import { ROUTES } from '@/constants/routes'
-import styles from './Login.module.css'
 
 function errorMessage(error: unknown): string {
   if (typeof error === 'object' && error !== null && 'data' in error) {
@@ -33,16 +35,13 @@ export function Login() {
   }
 
   return (
-    <form className={styles.form} onSubmit={handleSubmit}>
-      <h1 className={styles.heading}>Sign in</h1>
+    <form className="flex flex-col gap-4" onSubmit={handleSubmit}>
+      <h1 className="text-xl font-semibold text-fg">Sign in</h1>
 
-      <div className={styles.field}>
-        <label className={styles.label} htmlFor="email">
-          Email
-        </label>
-        <input
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="email">Email</Label>
+        <Input
           id="email"
-          className={styles.input}
           type="email"
           autoComplete="email"
           placeholder="you@company.com"
@@ -52,13 +51,10 @@ export function Login() {
         />
       </div>
 
-      <div className={styles.field}>
-        <label className={styles.label} htmlFor="password">
-          Password
-        </label>
-        <input
+      <div className="flex flex-col gap-1.5">
+        <Label htmlFor="password">Password</Label>
+        <Input
           id="password"
-          className={styles.input}
           type="password"
           autoComplete="current-password"
           placeholder="••••••••"
@@ -68,15 +64,19 @@ export function Login() {
         />
       </div>
 
-      {error && <div className={styles.error}>{errorMessage(error)}</div>}
+      {error && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
+          {errorMessage(error)}
+        </div>
+      )}
 
-      <Button type="submit" variant="primary" block loading={isLoading}>
-        Sign in
+      <Button type="submit" className="w-full" disabled={isLoading}>
+        {isLoading ? <Spinner size={14} /> : 'Sign in'}
       </Button>
 
-      <p className={styles.footer}>
+      <p className="text-center text-[13px] text-fg-subtle">
         Don&apos;t have an account?{' '}
-        <Link className={styles.link} to={ROUTES.signup}>
+        <Link className="font-medium text-primary hover:underline" to={ROUTES.signup}>
           Sign up
         </Link>
       </p>

@@ -9,7 +9,6 @@ import {
   useCreateTerminalMutation,
 } from '@/services/api/workspaceEditorApi'
 import { workspaceSocket } from '@/services/workspace/WorkspaceSocket'
-import styles from './workspace.module.css'
 
 // Stable empty array — `?? []` inside a selector creates a new reference every
 // render, forcing re-renders on every store dispatch even when idle.
@@ -166,5 +165,5 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
     agentWrittenRef.current = agentOutput.length
   }, [agentOutput])
 
-  return <div ref={containerRef} className={styles.terminalWrap} />
+  return <div ref={containerRef} className="h-full w-full overflow-hidden bg-inset p-1" />
 }

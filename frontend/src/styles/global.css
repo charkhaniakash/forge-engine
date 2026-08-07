@@ -1,9 +1,74 @@
 /**
- * Global reset + base element styles. Imported once from main.tsx after tokens.
+ * Global stylesheet — Tailwind v4 entry.
+ *
+ * Order: tokens.css (imported first in main.tsx) defines the raw CSS variables
+ * and light/dark switching. Here we pull in Tailwind and bridge those variables
+ * into Tailwind's theme via `@theme inline`, so utilities like `bg-surface`,
+ * `text-accent`, `border-line` resolve to our tokens AND respect [data-theme].
  */
 
-@import url('https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import 'tailwindcss';
+@import 'tw-animate-css';
 
+/* ── Bridge design tokens → Tailwind/shadcn utilities (theme-aware via `inline`) ──
+   `inline` makes Tailwind emit `var(--token)` directly into each utility, so a
+   runtime [data-theme] switch on :root repaints every utility for free.
+
+   shadcn/ui components use the semantic names below (bg-background, text-foreground,
+   bg-primary, bg-muted, border-border, ring-ring…). We map each to a Forge token so
+   shadcn inherits dark-slate + green with zero per-component theming.
+   Brand green = `primary`. shadcn's `accent` = a subtle hover surface. */
+@theme inline {
+  /* ── shadcn semantic tokens → Forge tokens ── */
+  --color-background: var(--surface-base);
+  --color-foreground: var(--text-primary);
+  --color-card: var(--surface-1);
+  --color-card-foreground: var(--text-primary);
+  --color-popover: var(--surface-3);
+  --color-popover-foreground: var(--text-primary);
+  --color-primary: var(--accent);                   /* brand green */
+  --color-primary-foreground: var(--text-on-accent);
+  --color-secondary: var(--surface-2);
+  --color-secondary-foreground: var(--text-primary);
+  --color-muted: var(--surface-2);
+  --color-muted-foreground: var(--text-secondary);
+  --color-accent: var(--surface-2);                 /* shadcn "accent" = subtle hover bg */
+  --color-accent-foreground: var(--text-primary);
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: #ffffff;
+  --color-border: var(--border);
+  --color-input: var(--border);
+  --color-ring: var(--accent-hover);
+
+  /* ── Forge app-surface aliases (custom components) ── */
+  --color-base: var(--surface-base);
+  --color-surface: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-inset: var(--surface-inset);
+  --color-fg: var(--text-primary);
+  --color-fg-muted: var(--text-secondary);
+  --color-fg-subtle: var(--text-tertiary);
+  --color-line: var(--border);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+
+  /* ── Semantic status (Forge extras beyond shadcn) ── */
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+  --color-tertiary: var(--tertiary);
+
+  /* fonts + radius */
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* ── Base reset ──────────────────────────────────────────────────────── */
 *,
 *::before,
 *::after {
@@ -21,9 +86,9 @@ body,
 }
 
 body {
-  background: #F7F9FB;
-  color: #191C1E;
-  font-family: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: var(--surface-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
   font-size: var(--text-base);
   line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
@@ -31,8 +96,8 @@ body {
 }
 
 ::selection {
-  background: #DCE1FF;
-  color: #191C1E;
+  background: var(--accent-subtle);
+  color: var(--text-primary);
 }
 
 h1,
@@ -73,7 +138,7 @@ select {
 }
 
 :focus-visible {
-  outline: 2px solid #0041C8;
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
   border-radius: 4px;
 }
@@ -86,7 +151,7 @@ a:focus:not(:focus-visible) {
 /* ── Scrollbars ──────────────────────────────────────────────────────── */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #C3C5D9 transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -99,17 +164,20 @@ a:focus:not(:focus-visible) {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #C3C5D9;
+  background: var(--border-strong);
   border-radius: 20px;
-  border: 2px solid #FFFFFF;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #737688;
+  background: var(--text-tertiary);
+  background-clip: padding-box;
 }
 
 /* ── Textarea placeholder ────────────────────────────────────────────── */
-textarea::placeholder {
+textarea::placeholder,
+input::placeholder {
   color: var(--text-tertiary);
   opacity: 0.7;
 }
@@ -159,10 +227,10 @@ textarea::placeholder {
 
 @keyframes forge-glow {
   0%, 100% {
-    box-shadow: 0 0 20px rgba(0, 255, 102, 0.1);
+    box-shadow: 0 0 20px var(--accent-subtle);
   }
   50% {
-    box-shadow: 0 0 40px rgba(0, 255, 102, 0.2);
+    box-shadow: 0 0 40px var(--accent-subtle);
   }
 }
 

@@ -5,12 +5,7 @@
  *   /v1/workspace/:id/preview/proxy/*
  *
  * State machine (driven by the `preview` WS channel):
- *   idle      → user clicks "Start preview"
- *   starting  → dev server process spawning
- *   compiling → server up, recompiling after a file change
- *   ready     → iframe shown; HMR events increment reloadKey
- *   error     → build/runtime error shown inline
- *   stopped   → user or system stopped the server
+ *   idle → starting → compiling → ready (iframe) → error / stopped
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAppDispatch, useAppSelector } from '@/app/hooks'
@@ -18,7 +13,7 @@ import { Icon, Spinner } from '@/components/common'
 import { useStartPreviewMutation, useStopPreviewMutation } from '@/services/api/workspaceEditorApi'
 import { previewReset } from '@/store/slices/workspaceActivitySlice'
 import { BACKEND_URL } from '@/constants/config'
-import styles from './LivePreview.module.css'
+import { cn } from '@/lib/utils'
 
 interface LivePreviewProps {
   workspaceId: string
@@ -26,6 +21,18 @@ interface LivePreviewProps {
   collapsed?: boolean
   onToggleCollapse?: () => void
 }
+
+const STATUS_META: Record<string, { dot: string; text: string; label: string }> = {
+  idle:      { dot: 'bg-fg-subtle',   text: 'text-fg-subtle',   label: 'Not started' },
+  starting:  { dot: 'bg-info',        text: 'text-info',        label: 'Starting…' },
+  compiling: { dot: 'bg-warning',     text: 'text-warning',     label: 'Compiling…' },
+  ready:     { dot: 'bg-success',     text: 'text-success',     label: 'Live' },
+  error:     { dot: 'bg-destructive', text: 'text-destructive', label: 'Error' },
+  stopped:   { dot: 'bg-fg-subtle',   text: 'text-fg-subtle',   label: 'Stopped' },
+}
+
+const iconBtn =
+  'flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-md text-fg-subtle transition-colors hover:bg-surface-2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-40'
 
 export function LivePreview({ workspaceId, collapsed, onToggleCollapse }: LivePreviewProps) {
   const dispatch = useAppDispatch()
@@ -37,27 +44,23 @@ export function LivePreview({ workspaceId, collapsed, onToggleCollapse }: LivePr
   const [addressBarUrl, setAddressBarUrl] = useState('/')
   const [showAddressBar, setShowAddressBar] = useState(false)
 
-  // Build the full proxy URL for the iframe src
   const proxyBase = `${BACKEND_URL}/v1/workspace/${workspaceId}/preview/proxy`
   const iframeSrc = `${proxyBase}${addressBarUrl}`
 
-  // On HMR update: reload the iframe instead of full re-mount when possible
+  // On HMR update: reload the iframe instead of full re-mount when possible.
   const prevReloadKey = useRef(preview.reloadKey)
   useEffect(() => {
     if (preview.reloadKey === prevReloadKey.current) return
     prevReloadKey.current = preview.reloadKey
     const iframe = iframeRef.current
     if (!iframe) return
-    // Try postMessage reload first (faster, no flash)
     try {
       iframe.contentWindow?.postMessage({ type: 'forge:reload' }, '*')
     } catch {
-      // If cross-origin or blocked, fall back to src reassignment
+      /* cross-origin — fall back to src reassignment */
     }
-    // Delay the src bump so the postMessage has a chance to be handled first
     const t = setTimeout(() => {
       if (iframeRef.current) {
-        // Toggle a cache-buster on the src to force a reload
         const url = new URL(iframeSrc, window.location.origin)
         url.searchParams.set('_r', String(Date.now()))
         iframeRef.current.src = url.toString()
@@ -66,15 +69,11 @@ export function LivePreview({ workspaceId, collapsed, onToggleCollapse }: LivePr
     return () => clearTimeout(t)
   }, [preview.reloadKey, iframeSrc])
 
-  // When status goes ready, clear any iframe error flag
   useEffect(() => {
     if (preview.status === 'ready') setIframeError(false)
   }, [preview.status])
 
   const handleStart = useCallback(async () => {
-    // Guard: an empty workspaceId produces /v1/workspace//preview/start (404).
-    // The panel is only mounted with a real ID now, but keep the guard so a
-    // stale state can never fire a broken request.
     if (!workspaceId) {
       console.warn('[LivePreview] start skipped — no workspaceId')
       return
@@ -115,61 +114,69 @@ export function LivePreview({ workspaceId, collapsed, onToggleCollapse }: LivePr
   const isRunning = status === 'ready' || status === 'compiling'
   const isLoading = status === 'starting' || (starting && status === 'idle')
   const hasError = status === 'error' || iframeError
+  const meta = STATUS_META[status] ?? STATUS_META.idle
 
-  const statusColor = {
-    idle: 'var(--text-tertiary)',
-    starting: 'var(--info)',
-    compiling: 'var(--warning)',
-    ready: 'var(--success)',
-    error: 'var(--danger)',
-    stopped: 'var(--text-tertiary)',
-  }[status] ?? 'var(--text-tertiary)'
+  const StateScreen = ({ icon, title, subtitle, action, danger }: {
+    icon: React.ReactNode
+    title: string
+    subtitle?: string
+    action?: React.ReactNode
+    danger?: boolean
+  }) => (
+    <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+      <div className={cn('flex h-16 w-16 items-center justify-center rounded-2xl border border-border bg-surface-2', danger ? 'text-destructive' : 'text-fg-subtle')}>
+        {icon}
+      </div>
+      <p className="text-sm font-semibold text-fg-muted">{title}</p>
+      {subtitle && <span className="max-w-xs text-xs leading-relaxed text-fg-subtle">{subtitle}</span>}
+      {action}
+    </div>
+  )
 
-  const statusLabel = {
-    idle: 'Not started',
-    starting: 'Starting…',
-    compiling: 'Compiling…',
-    ready: 'Live',
-    error: 'Error',
-    stopped: 'Stopped',
-  }[status] ?? status
+  const startFullBtn = (label: string) => (
+    <button
+      className="mt-1 inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-xs font-semibold text-primary-foreground transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
+      onClick={handleStart}
+      disabled={!workspaceId}
+      title={workspaceId ? undefined : 'No workspace available'}
+    >
+      <Icon name="play" size={14} /> {label}
+    </button>
+  )
 
   return (
-    <div className={styles.root} data-collapsed={collapsed}>
-      {/* ── Header bar ────────────────────────────────────────────────── */}
-      <div className={styles.header}>
-        <div className={styles.headerLeft}>
-          <button
-            className={styles.iconBtn}
-            onClick={onToggleCollapse}
-            title={collapsed ? 'Show preview' : 'Hide preview'}
-          >
-            <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} size={13} />
-          </button>
-          <span className={styles.title}>
-            <Icon name="monitor" size={13} />
-            Preview
+    <div className="flex h-full min-h-0 flex-col overflow-hidden" data-collapsed={collapsed}>
+      {/* Header bar */}
+      <div className="flex h-9 flex-shrink-0 items-center gap-2 border-b border-line bg-surface px-2">
+        <div className="flex items-center gap-1">
+          {onToggleCollapse && (
+            <button className={iconBtn} onClick={onToggleCollapse} title={collapsed ? 'Show preview' : 'Hide preview'}>
+              <Icon name={collapsed ? 'chevronRight' : 'chevronLeft'} size={13} />
+            </button>
+          )}
+          <span className="flex items-center gap-1.5 px-1 text-xs font-medium text-fg-muted">
+            <Icon name="monitor" size={13} /> Preview
           </span>
         </div>
 
-        <div className={styles.headerCenter}>
+        <div className="flex min-w-0 flex-1 items-center justify-center">
           {showAddressBar && isRunning ? (
-            <form onSubmit={handleNavigate} className={styles.addressForm}>
+            <form onSubmit={handleNavigate} className="flex w-full max-w-sm items-center gap-1">
               <input
-                className={styles.addressInput}
+                className="min-w-0 flex-1 rounded-md border border-border bg-base px-2 py-1 font-mono text-[11px] text-fg outline-none focus:border-primary/40"
                 value={addressBarUrl}
                 onChange={(e) => setAddressBarUrl(e.target.value)}
                 placeholder="/"
                 spellCheck={false}
                 autoComplete="off"
               />
-              <button type="submit" className={styles.iconBtn} title="Go">
+              <button type="submit" className={iconBtn} title="Go">
                 <Icon name="chevronRight" size={12} />
               </button>
             </form>
           ) : (
             <button
-              className={styles.urlChip}
+              className="max-w-xs truncate rounded-md border border-border bg-base px-2.5 py-1 font-mono text-[11px] text-fg-subtle transition-colors hover:text-fg-muted disabled:cursor-not-allowed disabled:opacity-60"
               onClick={() => setShowAddressBar((v) => !v)}
               title="Navigate to path"
               disabled={!isRunning}
@@ -179,27 +186,23 @@ export function LivePreview({ workspaceId, collapsed, onToggleCollapse }: LivePr
           )}
         </div>
 
-        <div className={styles.headerRight}>
-          {/* Status indicator */}
-          <span className={styles.statusChip} title={preview.lastMessage ?? statusLabel}>
-            <span className={styles.statusDot} style={{ background: statusColor,
-              animation: (status === 'ready' || status === 'compiling') ? 'lp-pulse 1.8s ease infinite' : 'none' }} />
-            <span style={{ color: statusColor }}>{statusLabel}</span>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          <span className="flex items-center gap-1.5 px-1 font-mono text-[11px]" title={preview.lastMessage ?? meta.label}>
+            <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot, isRunning && 'animate-pulse')} />
+            <span className={meta.text}>{meta.label}</span>
           </span>
-
-          {/* Controls */}
           {isRunning && (
-            <button className={styles.iconBtn} onClick={handleRefresh} title="Refresh">
+            <button className={iconBtn} onClick={handleRefresh} title="Refresh">
               <Icon name="refresh" size={13} />
             </button>
           )}
           {isRunning ? (
-            <button className={styles.iconBtn} onClick={handleStop} title="Stop dev server">
+            <button className={iconBtn} onClick={handleStop} title="Stop dev server">
               <Icon name="stop" size={13} />
             </button>
           ) : status !== 'starting' && (
             <button
-              className={`${styles.iconBtn} ${styles.startBtn}`}
+              className={cn(iconBtn, 'text-primary hover:text-primary')}
               onClick={handleStart}
               disabled={isLoading || !workspaceId}
               title={workspaceId ? 'Start dev server' : 'No workspace available'}
@@ -210,100 +213,59 @@ export function LivePreview({ workspaceId, collapsed, onToggleCollapse }: LivePr
         </div>
       </div>
 
-      {/* ── Content area ──────────────────────────────────────────────── */}
+      {/* Content area */}
       {!collapsed && (
-        <div className={styles.body}>
-          {/* Compiling overlay — shown over the iframe without unmounting it */}
+        <div className="relative min-h-0 flex-1 bg-white">
           {status === 'compiling' && (
-            <div className={styles.overlay}>
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-base/80 text-fg-muted backdrop-blur-sm">
               <Spinner size={20} />
-              <span>Compiling…</span>
+              <span className="text-xs">Compiling…</span>
             </div>
           )}
 
-          {/* Starting / loading state */}
           {isLoading && (
-            <div className={styles.stateScreen}>
-              <div className={styles.stateIcon}>
-                <Spinner size={28} />
-              </div>
-              <p className={styles.stateTitle}>Starting Development Server</p>
-              <span className={styles.stateSubtitle}>
-                Auto-detecting stack and launching dev server…
-              </span>
+            <div className="absolute inset-0 bg-base">
+              <StateScreen icon={<Spinner size={28} />} title="Starting development server" subtitle="Auto-detecting stack and launching dev server…" />
             </div>
           )}
 
-          {/* Error state */}
           {hasError && !isLoading && (
-            <div className={styles.stateScreen}>
-              <div className={styles.stateIcon} style={{ color: 'var(--danger)' }}>
-                <Icon name="alertCircle" size={32} />
-              </div>
-              <p className={styles.stateTitle}>
-                {iframeError ? 'Preview failed to load' : 'Build Error'}
-              </p>
-              <span className={styles.stateSubtitle}>
-                {preview.errorMessage ?? 'Check the terminal for details'}
-              </span>
-              <button className={styles.retryBtn} onClick={handleStart}>
-                <Icon name="refresh" size={13} /> Retry
-              </button>
+            <div className="absolute inset-0 bg-base">
+              <StateScreen
+                danger
+                icon={<Icon name="alertCircle" size={32} />}
+                title={iframeError ? 'Preview failed to load' : 'Build error'}
+                subtitle={preview.errorMessage ?? 'Check the terminal for details'}
+                action={
+                  <button className="mt-1 inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-fg-muted transition-colors hover:bg-surface-2" onClick={handleStart}>
+                    <Icon name="refresh" size={13} /> Retry
+                  </button>
+                }
+              />
             </div>
           )}
 
-          {/* Idle — no server running */}
           {status === 'idle' && !isLoading && (
-            <div className={styles.stateScreen}>
-              <div className={styles.stateIcon}>
-                <Icon name="monitor" size={36} />
-              </div>
-              <p className={styles.stateTitle}>No preview running</p>
-              <span className={styles.stateSubtitle}>
-                Start the dev server to see your app update live as files change
-              </span>
-              <button
-                className={styles.startFullBtn}
-                onClick={handleStart}
-                disabled={!workspaceId}
-                title={workspaceId ? undefined : 'No workspace available'}
-              >
-                <Icon name="play" size={14} />
-                Start preview
-              </button>
+            <div className="absolute inset-0 bg-base">
+              <StateScreen icon={<Icon name="monitor" size={36} />} title="No preview running" subtitle="Start the dev server to see your app update live as files change" action={startFullBtn('Start preview')} />
             </div>
           )}
 
-          {/* Stopped */}
           {status === 'stopped' && !isLoading && (
-            <div className={styles.stateScreen}>
-              <div className={styles.stateIcon}>
-                <Icon name="stop" size={32} />
-              </div>
-              <p className={styles.stateTitle}>Dev server stopped</p>
-              <button
-                className={styles.startFullBtn}
-                onClick={handleStart}
-                disabled={!workspaceId}
-              >
-                <Icon name="play" size={14} />
-                Restart preview
-              </button>
+            <div className="absolute inset-0 bg-base">
+              <StateScreen icon={<Icon name="stop" size={32} />} title="Dev server stopped" action={startFullBtn('Restart preview')} />
             </div>
           )}
 
-          {/* Live iframe — mounted as soon as server is ready (or compiling,
-              so it stays alive during recompile instead of flashing) */}
           {(status === 'ready' || status === 'compiling') && !hasError && (
             <iframe
               ref={iframeRef}
-              key={`preview-${workspaceId}`}     /* stable key — never remount */
+              key={`preview-${workspaceId}`}
               src={iframeSrc}
-              className={styles.iframe}
+              className="h-full w-full border-0 bg-white"
               title="Live Preview"
               onLoad={() => setIframeError(false)}
               onError={() => setIframeError(true)}
-              /* Broad sandbox to allow most web apps to run correctly */
               sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-pointer-lock"
               referrerPolicy="no-referrer"
             />

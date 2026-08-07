@@ -5,7 +5,6 @@ import { ErrorBoundary } from '@/components/common/ErrorBoundary/ErrorBoundary'
 import { Spinner } from '@/components/common'
 import { useAuth } from '@/hooks/useAuth'
 import { ROUTES } from '@/constants/routes'
-import styles from './AppLayout.module.css'
 
 /**
  * Authenticated shell: a single persistent Mission rail + the active surface.
@@ -20,13 +19,13 @@ export function AppLayout() {
   }
 
   return (
-    <div className={styles.shell}>
+    <div className="flex h-screen overflow-hidden">
       <MissionSidebar />
-      <main className={styles.main}>
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden bg-base">
         <ErrorBoundary>
           <Suspense
             fallback={
-              <div className={styles.loading}>
+              <div className="flex h-full items-center justify-center text-fg-subtle">
                 <Spinner size={22} />
               </div>
             }

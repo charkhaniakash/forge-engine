@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
 
 // Backend origin used for the dev proxy. Overridable via VITE_BACKEND_URL.
@@ -7,7 +8,7 @@ const BACKEND = process.env.VITE_BACKEND_URL ?? 'http://localhost:8080'
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

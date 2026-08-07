@@ -4,12 +4,11 @@ import { openFile, setActiveFile } from '@/store/slices/workspaceEditorSlice'
 import { useLazyGetFileContentQuery } from '@/services/api/workspaceEditorApi'
 import { languageForPath } from './language'
 import type { DiagnosticItem } from '@/types/workspaceEditor'
-import styles from './workspace.module.css'
 
 function sevClass(sev: string): string {
-  if (sev === 'error') return styles.sevError
-  if (sev === 'warning') return styles.sevWarning
-  return styles.sevInfo
+  if (sev === 'error') return 'text-destructive'
+  if (sev === 'warning') return 'text-warning'
+  return 'text-info'
 }
 
 export function DiagnosticsPanel({ workspaceId }: { workspaceId: string }) {
@@ -40,19 +39,23 @@ export function DiagnosticsPanel({ workspaceId }: { workspaceId: string }) {
   }
 
   if (diagnostics.length === 0) {
-    return <div className={styles.empty}>No diagnostics. Build/test/lint issues appear here.</div>
+    return <div className="p-4 text-xs text-fg-subtle">No diagnostics. Build/test/lint issues appear here.</div>
   }
 
   return (
-    <div>
+    <div className="flex flex-col p-2">
       {diagnostics.map((d) => (
-        <div key={d.id} className={styles.diagRow} onClick={() => onOpen(d)}>
+        <div
+          key={d.id}
+          className="flex cursor-pointer gap-2.5 rounded-md px-2 py-2 transition-colors hover:bg-surface-2"
+          onClick={() => onOpen(d)}
+        >
           <span className={sevClass(d.severity)}>
             <Icon name={d.severity === 'error' ? 'x' : 'alert'} size={13} />
           </span>
-          <div>
-            <div>{d.message}</div>
-            <div className={styles.diagLoc}>
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] text-fg">{d.message}</div>
+            <div className="mt-0.5 font-mono text-[11px] text-fg-subtle">
               {d.file}{d.line != null ? `:${d.line}` : ''}{d.column != null ? `:${d.column}` : ''}
             </div>
           </div>

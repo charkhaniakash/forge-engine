@@ -1,6 +1,5 @@
 import { Icon } from '@/components/common'
 import type { Citation } from '@/types'
-import styles from './CitationCard.module.css'
 
 export interface CitationCardProps {
   citation: Citation
@@ -22,7 +21,7 @@ export function CitationCard({ citation, variant = 'chip', onClick }: CitationCa
   if (variant === 'chip') {
     return (
       <button
-        className={styles.chip}
+        className="inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-0.5 font-mono text-[11px] text-fg-muted transition-colors hover:border-primary/30 hover:text-primary"
         title={`${citation.file_path}:${range}`}
         onClick={() => onClick?.(citation)}
       >
@@ -33,11 +32,14 @@ export function CitationCard({ citation, variant = 'chip', onClick }: CitationCa
   }
 
   return (
-    <button className={styles.row} onClick={() => onClick?.(citation)}>
-      <Icon name="file" size={14} className={styles.rowIcon} />
-      <div className={styles.rowMain}>
-        <div className={styles.rowPath}>{citation.file_path}</div>
-        <div className={styles.rowMeta}>
+    <button
+      className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg border border-border bg-card p-2.5 text-left transition-colors hover:border-line-strong hover:bg-surface-2"
+      onClick={() => onClick?.(citation)}
+    >
+      <Icon name="file" size={14} className="flex-shrink-0 text-fg-subtle" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-mono text-xs text-fg">{citation.file_path}</div>
+        <div className="mt-0.5 font-mono text-[11px] text-fg-subtle">
           lines {range}
           {citation.symbol_name && ` · ${citation.symbol_name}`}
           {citation.language && ` · ${citation.language}`}

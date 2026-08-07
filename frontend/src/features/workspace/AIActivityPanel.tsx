@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useAppSelector } from '@/app/hooks'
 import { Icon } from '@/components/common'
 import type { AIActivityEvent } from '@/types/workspaceEditor'
-import styles from './workspace.module.css'
+import { cn } from '@/lib/utils'
 
 const NO_EVENTS: AIActivityEvent[] = []
 
@@ -26,14 +26,14 @@ function activityIcon(type: string): IconName {
 }
 
 function activityIconColor(type: string): string {
-  if (type === 'reasoning' || type === 'repair_reasoning') return 'var(--text-tertiary)'
-  if (type.includes('tool_result') || type.includes('success') || type.includes('complete') || type.includes('check')) return 'var(--success)'
-  if (type.includes('error') || type.includes('fail') || type.includes('deviation')) return 'var(--danger)'
-  if (type.includes('validation')) return 'var(--warning)'
-  if (type.includes('publishing') || type.includes('git')) return 'var(--accent)'
-  if (type.includes('repair')) return 'var(--danger)'
-  if (type.includes('tool_call')) return 'var(--info)'
-  return 'var(--text-tertiary)'
+  if (type === 'reasoning' || type === 'repair_reasoning') return 'text-fg-subtle'
+  if (type.includes('tool_result') || type.includes('success') || type.includes('complete') || type.includes('check')) return 'text-success'
+  if (type.includes('error') || type.includes('fail') || type.includes('deviation')) return 'text-destructive'
+  if (type.includes('validation')) return 'text-warning'
+  if (type.includes('publishing') || type.includes('git')) return 'text-primary'
+  if (type.includes('repair')) return 'text-destructive'
+  if (type.includes('tool_call')) return 'text-info'
+  return 'text-fg-subtle'
 }
 
 function fmtTime(ts: number): string {
@@ -50,10 +50,10 @@ export function AIActivityPanel() {
 
   if (events.length === 0) {
     return (
-      <div className={styles.activityPanelEmpty}>
+      <div className="flex h-full flex-col items-center justify-center gap-1.5 p-6 text-center text-fg-subtle">
         <Icon name="sparkles" size={20} />
-        <p>No activity yet</p>
-        <span>AI operations will stream in here as the agent works</span>
+        <p className="text-[13px] font-medium text-fg-muted">No activity yet</p>
+        <span className="text-xs">AI operations will stream in here as the agent works</span>
       </div>
     )
   }
@@ -61,32 +61,26 @@ export function AIActivityPanel() {
   const visible = events.slice(-60)
 
   return (
-    <div className={styles.activityPanel}>
-      <div className={styles.activityList}>
-        {visible.map((e: AIActivityEvent, idx: number) => {
-          const isLatest = idx === visible.length - 1
-          const icon = activityIcon(e.type)
-          const iconColor = activityIconColor(e.type)
-          return (
-            <div
-              key={e.id}
-              className={`${styles.activityRow} ${isLatest ? styles.activityRowActive : ''}`}
-            >
-              <div className={styles.activityIcon} style={{ color: iconColor }}>
-                <Icon name={icon} size={13} />
-              </div>
-              <div className={styles.activityContent}>
-                <div className={styles.activityLabel}>{e.label}</div>
-                {e.tool && (
-                  <div className={styles.activityDetails}>{e.tool}</div>
-                )}
-              </div>
-              <div className={styles.activityTime}>{fmtTime(e.ts)}</div>
+    <div className="flex flex-col p-2">
+      {visible.map((e: AIActivityEvent, idx: number) => {
+        const isLatest = idx === visible.length - 1
+        return (
+          <div
+            key={e.id}
+            className={cn('flex items-start gap-2 rounded-md px-2 py-1.5 transition-colors', isLatest ? 'bg-surface-2' : 'hover:bg-surface-2/60')}
+          >
+            <div className={cn('mt-0.5 flex-shrink-0', activityIconColor(e.type))}>
+              <Icon name={activityIcon(e.type)} size={13} />
             </div>
-          )
-        })}
-        <div ref={endRef} />
-      </div>
+            <div className="min-w-0 flex-1">
+              <div className="text-[13px] text-fg">{e.label}</div>
+              {e.tool && <div className="mt-0.5 font-mono text-[11px] text-fg-subtle">{e.tool}</div>}
+            </div>
+            <div className="flex-shrink-0 font-mono text-[10px] text-fg-subtle">{fmtTime(e.ts)}</div>
+          </div>
+        )
+      })}
+      <div ref={endRef} />
     </div>
   )
 }

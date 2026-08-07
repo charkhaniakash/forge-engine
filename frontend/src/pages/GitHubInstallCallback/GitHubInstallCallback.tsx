@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { Icon, Spinner } from '@/components/common'
 import { useLinkInstallationMutation } from '@/services/api/repositoryApi'
 import { ROUTES } from '@/constants/routes'
-import styles from './GitHubInstallCallback.module.css'
+import { cn } from '@/lib/utils'
 
 type Phase = 'linking' | 'success' | 'error'
 
@@ -22,16 +22,12 @@ export function GitHubInstallCallback() {
   const [searchParams] = useSearchParams()
   const [linkInstallation] = useLinkInstallationMutation()
   const [phase, setPhase] = useState<Phase>('linking')
-  const [message, setMessage] = useState(
-    'Please wait while we link your GitHub App installation…',
-  )
+  const [message, setMessage] = useState('Please wait while we link your GitHub App installation…')
   const started = useRef(false)
 
   const installationId = searchParams.get('installation_id')
   const setupAction = searchParams.get('setup_action')
 
-  // One-time mount action: resolve the OAuth callback exactly once. The initial
-  // phase/message writes are intentional synchronous state on mount.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (started.current) return
@@ -45,9 +41,7 @@ export function GitHubInstallCallback() {
 
     if (setupAction === 'request') {
       setPhase('success')
-      setMessage(
-        'Your installation request was submitted. An organization admin needs to approve it before repositories appear.',
-      )
+      setMessage('Your installation request was submitted. An organization admin needs to approve it before repositories appear.')
       return
     }
 
@@ -55,9 +49,7 @@ export function GitHubInstallCallback() {
       try {
         await linkInstallation({ installation_id: installationId }).unwrap()
         setPhase('success')
-        setMessage(
-          'Your GitHub installation is linked. Your repositories will appear shortly.',
-        )
+        setMessage('Your GitHub installation is linked. Your repositories will appear shortly.')
       } catch (err) {
         setPhase('error')
         setMessage(errorMessage(err))
@@ -67,42 +59,41 @@ export function GitHubInstallCallback() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   return (
-    <div className={styles.root}>
-      <div className={styles.panel}>
+    <div className="flex min-h-screen items-center justify-center bg-base p-4">
+      <div className="flex w-full max-w-md flex-col items-center gap-3 rounded-2xl border border-border bg-card p-8 text-center shadow-xl">
         {phase === 'linking' && (
           <>
             <Spinner size={28} />
-            <h1 className={styles.title}>Linking installation</h1>
-            <p className={styles.message}>{message}</p>
+            <h1 className="text-lg font-semibold text-fg">Linking installation</h1>
+            <p className="text-[13px] leading-relaxed text-fg-muted">{message}</p>
           </>
         )}
 
         {phase === 'success' && (
           <>
-            <div className={`${styles.iconWrap} ${styles.iconSuccess}`}>
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success/10 text-success">
               <Icon name="check" size={24} />
             </div>
-            <h1 className={styles.title}>Installation linked</h1>
-            <p className={styles.message}>{message}</p>
+            <h1 className="text-lg font-semibold text-fg">Installation linked</h1>
+            <p className="text-[13px] leading-relaxed text-fg-muted">{message}</p>
             <Link
-              className={`${styles.linkButton} ${styles.linkButtonPrimary}`}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3.5 py-2 text-[13px] font-semibold text-primary-foreground no-underline transition-all hover:no-underline hover:brightness-110"
               to={ROUTES.repositories}
             >
-              <Icon name="repo" size={14} />
-              View repositories
+              <Icon name="repo" size={14} /> View repositories
             </Link>
           </>
         )}
 
         {phase === 'error' && (
           <>
-            <div className={`${styles.iconWrap} ${styles.iconError}`}>
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10 text-destructive">
               <Icon name="alert" size={24} />
             </div>
-            <h1 className={styles.title}>Installation failed</h1>
-            <p className={styles.message}>{message}</p>
+            <h1 className="text-lg font-semibold text-fg">Installation failed</h1>
+            <p className="text-[13px] leading-relaxed text-fg-muted">{message}</p>
             <Link
-              className={`${styles.linkButton} ${styles.linkButtonSecondary}`}
+              className={cn('mt-1 inline-flex items-center gap-1.5 rounded-lg border border-border px-3.5 py-2 text-[13px] font-medium text-fg-muted no-underline transition-colors hover:bg-surface-2 hover:no-underline')}
               to={ROUTES.repositories}
             >
               Back to repositories

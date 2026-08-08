@@ -1,4 +1,4 @@
-import styles from './CodeViewer.module.css'
+import { cn } from '@/lib/utils'
 
 export interface CodeViewerProps {
   code: string
@@ -29,23 +29,27 @@ export function CodeViewer({
   const lines = code.replace(/\n$/, '').split('\n')
   const hlEnd = highlightEnd ?? highlightStart
   return (
-    <div className={styles.root}>
+    <div className="overflow-hidden rounded-md border border-line-subtle bg-inset">
       {filename && (
-        <div className={styles.header}>
+        <div className="flex items-center justify-between border-b border-line-subtle bg-surface-2 px-3 py-2 font-mono text-xs text-fg-muted">
           <span>{filename}</span>
-          {language && <span className={styles.lang}>{language}</span>}
+          {language && <span className="text-[11px] uppercase text-fg-subtle">{language}</span>}
         </div>
       )}
-      <div className={styles.scroll} style={{ maxHeight }}>
-        <pre className={styles.pre}>
+      <div className="overflow-auto" style={{ maxHeight }}>
+        <pre className="m-0 font-mono text-xs leading-relaxed">
           {lines.map((line, i) => {
             const no = i + 1
             const highlighted =
               highlightStart != null && no >= highlightStart && no <= (hlEnd ?? highlightStart)
             return (
-              <div key={i} className={`${styles.line} ${highlighted ? styles.hl : ''}`}>
-                {showLineNumbers && <span className={styles.no}>{no}</span>}
-                <span className={styles.text}>{line || ' '}</span>
+              <div key={i} className={cn('flex', highlighted && 'bg-primary/10')}>
+                {showLineNumbers && (
+                  <span className="w-11 flex-shrink-0 pr-3 text-right text-fg-subtle select-none">
+                    {no}
+                  </span>
+                )}
+                <span className="whitespace-pre pr-4 text-fg">{line || ' '}</span>
               </div>
             )
           })}

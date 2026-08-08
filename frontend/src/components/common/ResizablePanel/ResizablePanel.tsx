@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type ReactNode } from 'react'
-import styles from './ResizablePanel.module.css'
+import { cn } from '@/lib/utils'
 
 export interface ResizablePanelProps {
   direction?: 'horizontal' | 'vertical'
@@ -50,20 +50,25 @@ export function ResizablePanel({
   return (
     <div
       ref={containerRef}
-      className={`${styles.container} ${isH ? styles.horizontal : styles.vertical}`}
+      className={cn('flex h-full w-full overflow-hidden', isH ? 'flex-row' : 'flex-col')}
     >
       <div
-        className={styles.pane}
+        className="min-w-0 min-h-0 overflow-auto"
         style={isH ? { width: size, flex: '0 0 auto' } : { height: size, flex: '0 0 auto' }}
       >
         {first}
       </div>
       <div
-        className={`${styles.divider} ${isH ? styles.dividerH : styles.dividerV}`}
+        className={cn(
+          'flex-shrink-0 bg-line transition-colors hover:bg-primary/40',
+          isH
+            ? 'w-px cursor-col-resize border-x-2 border-transparent bg-clip-padding'
+            : 'h-px cursor-row-resize border-y-2 border-transparent bg-clip-padding',
+        )}
         onMouseDown={start}
         role="separator"
       />
-      <div className={`${styles.pane} ${styles.grow}`}>{second}</div>
+      <div className="min-w-0 min-h-0 flex-1 overflow-auto">{second}</div>
     </div>
   )
 }

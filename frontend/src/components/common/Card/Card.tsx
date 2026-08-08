@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from 'react'
-import styles from './Card.module.css'
+import { cn } from '@/lib/utils'
 
 export interface CardProps extends HTMLAttributes<HTMLDivElement> {
   padded?: boolean
@@ -15,14 +15,14 @@ export function Card({
 }: CardProps) {
   return (
     <div
-      className={[
-        styles.card,
-        padded && styles.padded,
-        interactive && styles.interactive,
+      data-padded={padded}
+      className={cn(
+        'group/card bg-card border border-line rounded-lg overflow-hidden',
+        padded && 'p-5',
+        interactive &&
+          'cursor-pointer transition-colors duration-150 hover:border-line-strong hover:bg-surface-2',
         className,
-      ]
-        .filter(Boolean)
-        .join(' ')}
+      )}
       {...rest}
     >
       {children}
@@ -40,12 +40,12 @@ export function CardHeader({
   actions?: ReactNode
 }) {
   return (
-    <div className={styles.header}>
-      <div className={styles.headerText}>
-        <div className={styles.title}>{title}</div>
-        {subtitle && <div className={styles.subtitle}>{subtitle}</div>}
+    <div className="flex items-start justify-between gap-4 mb-4 group-data-[padded=false]/card:mb-0 group-data-[padded=false]/card:px-5 group-data-[padded=false]/card:py-4 group-data-[padded=false]/card:border-b group-data-[padded=false]/card:border-line-subtle">
+      <div className="min-w-0">
+        <div className="font-semibold text-[16px] text-fg">{title}</div>
+        {subtitle && <div className="text-[13px] text-fg-muted mt-0.5">{subtitle}</div>}
       </div>
-      {actions && <div className={styles.actions}>{actions}</div>}
+      {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
     </div>
   )
 }

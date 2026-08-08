@@ -207,6 +207,15 @@ input::placeholder {
   }
 }
 
+@keyframes forge-indeterminate {
+  0% {
+    margin-left: -40%;
+  }
+  100% {
+    margin-left: 100%;
+  }
+}
+
 @keyframes forge-slide-in-right {
   from {
     transform: translateX(100%);

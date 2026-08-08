@@ -1,5 +1,5 @@
 import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import styles from './Button.module.css'
+import { cn } from '@/lib/utils'
 import { Spinner } from '../Spinner/Spinner'
 
 export type ButtonVariant =
@@ -20,8 +20,20 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   trailingIcon?: ReactNode
 }
 
-function cx(...parts: (string | false | undefined)[]): string {
-  return parts.filter(Boolean).join(' ')
+const variantClasses: Record<ButtonVariant, string> = {
+  primary:
+    'bg-primary text-primary-foreground enabled:hover:bg-[var(--accent-hover)] enabled:active:bg-[var(--accent-active)]',
+  secondary:
+    'bg-surface-2 text-fg border-line enabled:hover:bg-surface-3 enabled:hover:border-line-strong',
+  ghost: 'bg-transparent text-fg-muted enabled:hover:bg-surface-2 enabled:hover:text-fg',
+  danger: 'bg-destructive text-white enabled:hover:brightness-110',
+  subtle: 'bg-primary/10 text-primary enabled:hover:brightness-125',
+}
+
+const sizeClasses: Record<ButtonSize, string> = {
+  sm: 'h-7 px-3 text-[12px]',
+  md: 'h-[34px] px-4',
+  lg: 'h-10 px-5 text-[14px]',
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -44,12 +56,12 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         ref={ref}
-        className={cx(
-          styles.button,
-          styles[variant],
-          styles[size],
-          block && styles.block,
-          iconOnly && styles.iconOnly,
+        className={cn(
+          'inline-flex items-center justify-center gap-2 border border-transparent rounded-md font-medium text-[13px] leading-none whitespace-nowrap select-none cursor-pointer transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:opacity-50 disabled:cursor-not-allowed',
+          variantClasses[variant],
+          sizeClasses[size],
+          block && 'w-full',
+          iconOnly && 'p-0 aspect-square',
           className,
         )}
         disabled={disabled || loading}

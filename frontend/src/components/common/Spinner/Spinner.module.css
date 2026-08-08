@@ -1,9 +1,0 @@
-.spinner {
-  display: inline-block;
-  border-style: solid;
-  border-color: var(--border-strong);
-  border-top-color: currentColor;
-  border-radius: var(--radius-full);
-  animation: forge-spin 0.7s linear infinite;
-  flex-shrink: 0;
-}

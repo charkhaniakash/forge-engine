@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import styles from './LogViewer.module.css'
+import { cn } from '@/lib/utils'
 
 export interface LogLine {
   id?: string | number
@@ -18,12 +18,12 @@ export interface LogViewerProps {
 }
 
 const TONE: Record<NonNullable<LogLine['tone']>, string> = {
-  default: styles.default,
-  info: styles.info,
-  success: styles.success,
-  warning: styles.warning,
-  error: styles.error,
-  muted: styles.muted,
+  default: 'text-fg',
+  info: 'text-info',
+  success: 'text-success',
+  warning: 'text-warning',
+  error: 'text-destructive',
+  muted: 'text-fg-subtle',
 }
 
 /** Terminal-style streaming log surface. */
@@ -40,14 +40,20 @@ export function LogViewer({
   }, [lines.length, follow])
 
   return (
-    <div className={styles.root} style={{ maxHeight }}>
-      {lines.length === 0 && !live && <div className={styles.empty}>{emptyLabel}</div>}
+    <div
+      className="overflow-y-auto rounded-md bg-inset p-3 font-mono text-xs leading-relaxed"
+      style={{ maxHeight }}
+    >
+      {lines.length === 0 && !live && <div className="text-fg-subtle">{emptyLabel}</div>}
       {lines.map((line, i) => (
-        <div key={line.id ?? i} className={`${styles.line} ${TONE[line.tone ?? 'default']}`}>
+        <div
+          key={line.id ?? i}
+          className={cn('whitespace-pre-wrap break-words', TONE[line.tone ?? 'default'])}
+        >
           {line.text}
         </div>
       ))}
-      {live && <div className={styles.cursor}>▋</div>}
+      {live && <div className="text-primary animate-pulse">▋</div>}
       <div ref={endRef} />
     </div>
   )

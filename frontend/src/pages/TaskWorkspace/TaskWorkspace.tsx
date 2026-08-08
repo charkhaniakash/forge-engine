@@ -106,6 +106,10 @@ export function TaskWorkspace() {
   const execution = execSnap?.execution
   const taskExecutionId = execution?.id ?? ''
   const execLive = EXEC_LIVE.has(execution?.status ?? '')
+  // Execution finished → the backend auto-triggers validation ~1s later. Used to
+  // proactively connect the validation socket + poll for the run so the UI flips
+  // to "Validating" on its own (no manual refresh).
+  const execCompleted = execution?.status === 'completed'
 
   const { data: diffsData, refetch: refetchDiffs } = useGetExecutionDiffsQuery(
     { repoId, taskId },
@@ -121,6 +125,9 @@ export function TaskWorkspace() {
   )
   const valRun = valSnap?.run
   const valLiveState = valRun?.status === 'running' || valRun?.status === 'pending'
+  // Validation finishing with a non-passed result auto-triggers a repair session
+  // server-side — used to discover repair without a manual refresh.
+  const valFailed = valRun?.overall_result != null && valRun.overall_result !== 'passed'
 
   const { data: repairSession, refetch: refetchRepair } = useGetRepairSessionByTaskQuery(taskExecutionId, {
     skip: !taskExecutionId,
@@ -222,7 +229,11 @@ export function TaskWorkspace() {
     channel: 'validation',
     resourceId: taskId,
     path: `/repos/${repoId}/tasks/${taskId}/validation/stream`,
-    enabled: Boolean(repoId && taskId) && Boolean(valLiveState),
+    // Connect as soon as execution completes (not only once validation is already
+    // running) so the auto-triggered validation's events stream in immediately —
+    // breaks the chicken-and-egg where the socket waited for a run that the socket
+    // itself was supposed to surface.
+    enabled: Boolean(repoId && taskId) && (valLiveState || execCompleted),
   })
   useRepairStream(repairSession?.id, Boolean(repairSession))
   usePublishingStream(publishSession?.id, publishActive)
@@ -260,36 +271,67 @@ export function TaskWorkspace() {
       // Belt-and-suspenders: re-query the workspace on execution events too, in
       // case the rising-edge refetch landed before the workspace row committed.
       refetchWorkspace()
+      // Execution finishing auto-triggers server-side validation — pull the
+      // validation snapshot so the thread flips to "Validating" without a manual
+      // refresh. The run row may not exist this instant; the poll below covers it.
+      refetchVal()
     }
-  }, [lastExec, execEvents.length, refetchExec, refetchDiffs, refetchTask, refetchWorkspace])
+  }, [lastExec, execEvents.length, refetchExec, refetchDiffs, refetchTask, refetchWorkspace, refetchVal])
 
   const lastVal = valEvents[valEvents.length - 1]?.kind
   useEffect(() => {
+    if (!lastVal) return
+    // ANY validation event (started / stage_started / stage_complete / complete)
+    // refreshes the run — so the very first event surfaces the run and flips the
+    // UI to "Validating" live, and each stage updates without a refresh.
+    refetchVal()
     if (lastVal === 'validation_complete') {
-      refetchVal()
       refetchTask() // pick up done / failed_repairable transition
-    } else if (lastVal === 'stage_complete') {
-      refetchVal()
+      refetchRepair() // a failed validation auto-triggers repair — discover it now
     }
-  }, [lastVal, valEvents.length, refetchVal, refetchTask])
+  }, [lastVal, valEvents.length, refetchVal, refetchTask, refetchRepair])
+
+  // Discovery poll: the auto-triggered validation run is created ~1s after
+  // execution completes. Poll briefly until it appears so the UI surfaces
+  // "Validating" on its own; stops the moment the run exists (the socket then
+  // drives live stage updates). This is the belt to the socket's suspenders.
+  useEffect(() => {
+    if (!execCompleted || valRun) return
+    const id = setInterval(() => refetchVal(), 1500)
+    return () => clearInterval(id)
+  }, [execCompleted, valRun, refetchVal])
 
   const lastRepair = repairEvents[repairEvents.length - 1]?.event
   useEffect(() => {
+    if (!lastRepair) return
+    // ANY repair event (repair_started / strategy / attempt_started / attempt_complete)
+    // refreshes the session — so repair surfaces live and each attempt updates
+    // without a refresh.
+    refetchRepair()
     if (lastRepair === 'repair_complete' || lastRepair === 'repair_escalated') {
       refetchVal()
       refetchTask()
-      refetchRepair()
-    } else if (lastRepair === 'attempt_complete') {
-      // Refetch repair session to pick up updated attempts_used count
-      refetchRepair()
     }
   }, [lastRepair, repairEvents.length, refetchVal, refetchTask, refetchRepair])
 
+  // Discovery poll: a failed validation auto-triggers a repair session server-side.
+  // Poll until it appears so the thread shows "Repairing" on its own; stops the
+  // moment the session exists (the repair socket then streams attempts live) or the
+  // task reaches a terminal state.
+  useEffect(() => {
+    if (!valFailed || repairSession || !taskActive) return
+    const id = setInterval(() => refetchRepair(), 1500)
+    return () => clearInterval(id)
+  }, [valFailed, repairSession, taskActive, refetchRepair])
+
   const lastPub = pubEvents[pubEvents.length - 1]?.event
   useEffect(() => {
+    if (!lastPub) return
+    // ANY publishing event (branch / commit / push / pr steps → complete) refreshes
+    // the session so current_step / status update live in the thread — no refresh.
+    refetchPublish()
     if (lastPub === 'publishing_complete') {
-      refetchPublish() // pull final pr_url / status
-      refetchTask()
+      refetchTask() // pick up final done / pr_url transition
     }
   }, [lastPub, pubEvents.length, refetchPublish, refetchTask])
 

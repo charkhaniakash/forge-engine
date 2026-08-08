@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from 'react'
 import { useClickOutside } from '@/hooks/useClickOutside'
-import styles from './Dropdown.module.css'
+import { cn } from '@/lib/utils'
 
 export interface DropdownItem {
   id: string
@@ -28,29 +28,47 @@ export function Dropdown({ trigger, items, align = 'end', header, width = 220 }:
   useClickOutside(ref, () => setOpen(false), open)
 
   return (
-    <div className={styles.root} ref={ref}>
+    <div className="relative inline-flex" ref={ref}>
       {trigger({ open, toggle: () => setOpen((o) => !o) })}
       {open && (
         <div
-          className={`${styles.menu} ${align === 'end' ? styles.alignEnd : styles.alignStart}`}
+          className={cn(
+            'absolute top-[calc(100%+6px)] z-[var(--z-drawer)] rounded-lg border border-line bg-surface-3 p-1 shadow-lg animate-in fade-in-0',
+            align === 'end' ? 'right-0' : 'left-0',
+          )}
           style={{ width }}
           role="menu"
         >
-          {header && <div className={styles.header}>{header}</div>}
+          {header && (
+            <div className="mb-1 border-b border-line-subtle px-3 py-2 text-xs text-fg-subtle">
+              {header}
+            </div>
+          )}
           {items.map((item) => (
             <div key={item.id}>
-              {item.divider && <div className={styles.divider} />}
+              {item.divider && <div className="my-1 border-t border-line-subtle" />}
               <button
                 role="menuitem"
-                className={`${styles.item} ${item.danger ? styles.danger : ''}`}
+                className={cn(
+                  'flex w-full cursor-pointer items-center gap-2 rounded-sm px-3 py-2 text-left text-[13px] disabled:cursor-not-allowed disabled:opacity-50',
+                  item.danger
+                    ? 'text-destructive enabled:hover:bg-destructive/10'
+                    : 'text-fg enabled:hover:bg-surface-2',
+                )}
                 disabled={item.disabled}
                 onClick={() => {
                   item.onSelect?.()
                   setOpen(false)
                 }}
               >
-                {item.icon && <span className={styles.icon}>{item.icon}</span>}
-                <span className={styles.itemLabel}>{item.label}</span>
+                {item.icon && (
+                  <span
+                    className={cn('inline-flex', item.danger ? 'text-destructive' : 'text-fg-muted')}
+                  >
+                    {item.icon}
+                  </span>
+                )}
+                <span className="flex-1 truncate">{item.label}</span>
               </button>
             </div>
           ))}

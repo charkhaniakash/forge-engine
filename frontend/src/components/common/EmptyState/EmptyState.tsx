@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import styles from './EmptyState.module.css'
+import { cn } from '@/lib/utils'
 
 export interface EmptyStateProps {
   icon?: ReactNode
@@ -18,11 +18,20 @@ export function EmptyState({
   compact = false,
 }: EmptyStateProps) {
   return (
-    <div className={`${styles.root} ${compact ? styles.compact : ''}`}>
-      {icon && <div className={styles.icon}>{icon}</div>}
-      <div className={styles.title}>{title}</div>
-      {description && <div className={styles.description}>{description}</div>}
-      {action && <div className={styles.action}>{action}</div>}
+    <div
+      className={cn(
+        'flex flex-col items-center justify-center text-center gap-2',
+        compact ? 'py-8 px-4' : 'py-16 px-6',
+      )}
+    >
+      {icon && <div className="text-fg-subtle mb-2 flex">{icon}</div>}
+      <div className={cn('font-semibold text-fg', compact ? 'text-[14px]' : 'text-[16px]')}>
+        {title}
+      </div>
+      {description && (
+        <div className="text-fg-muted text-[13px] max-w-[420px]">{description}</div>
+      )}
+      {action && <div className="mt-4">{action}</div>}
     </div>
   )
 }

@@ -36,7 +36,6 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
   const output = useAppSelector((s) =>
     activeTerminalId ? s.workspaceTerminal.output[activeTerminalId] ?? NO_OUTPUT : NO_OUTPUT,
   )
-  console.log('[TerminalPanel] activeTerminalId:', activeTerminalId, 'output length:', output.length)
   const agentOutput = useAppSelector((s) => s.workspaceTerminal.output['agent'] ?? NO_OUTPUT)
   const agentWrittenRef = useRef(0)
 
@@ -144,7 +143,6 @@ export function TerminalPanel({ workspaceId, active }: { workspaceId: string; ac
   useEffect(() => {
     const term = termRef.current
     if (!term) return
-    console.log('[TerminalPanel] Writing output to xterm', { from: writtenRef.current, to: output.length, chunks: output.length - writtenRef.current })
     for (let i = writtenRef.current; i < output.length; i++) {
       term.write(output[i])
     }

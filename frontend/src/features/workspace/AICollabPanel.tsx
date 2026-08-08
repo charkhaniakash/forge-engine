@@ -9,7 +9,7 @@ import {
 import { transitionalActionSet } from '@/store/slices/workspaceActivitySlice'
 import { useToast } from '@/hooks/useToast'
 import type { MissionPhase } from './useMissionPhase'
-import styles from './AICollabPanel.module.css'
+import { cn } from '@/lib/utils'
 
 const STATUS_LABEL: Record<string, string> = {
   running: 'Running',
@@ -191,83 +191,65 @@ export function AICollabPanel({ workspaceId, mission }: { workspaceId: string; m
   }
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.head}>
-        <span className={styles.headTitle}>
-          <Icon name="sparkles" size={15} /> AI Collaboration
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex h-9 flex-shrink-0 items-center border-b border-line-subtle bg-surface px-3">
+        <span className="flex items-center gap-1.5 text-[13px] font-semibold text-fg">
+          <Icon name="sparkles" size={15} className="text-primary" /> AI Collaboration
         </span>
       </div>
 
-      <div className={styles.scroll}>
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
         {/* Current task */}
-        <div className={styles.section}>
-          <div className={styles.label}>Current Task</div>
-          <div className={styles.task}>{currentTask}</div>
+        <div className="flex flex-col gap-1.5">
+          <div className="font-mono text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Current Task</div>
+          <div className="text-[13px] text-fg">{currentTask}</div>
         </div>
 
         {/* Phase / tool */}
-        <div className={styles.grid}>
-          <div className={styles.metaCard}>
-            <div className={styles.label}>Phase</div>
-            <div className={`${styles.metaValue} ${phaseLive ? styles.metaActive : ''}`}>
-              {phaseLabel}
-            </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="flex flex-col gap-1 rounded-lg border border-line bg-card p-2.5">
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Phase</div>
+            <div className={cn('text-[13px]', phaseLive ? 'text-primary' : 'text-fg-muted')}>{phaseLabel}</div>
           </div>
-          <div className={styles.metaCard}>
-            <div className={styles.label}>Tool</div>
-            <div className={styles.metaValue}>{lastTool?.label ?? '—'}</div>
+          <div className="flex flex-col gap-1 rounded-lg border border-line bg-card p-2.5">
+            <div className="font-mono text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Tool</div>
+            <div className="truncate text-[13px] text-fg-muted">{lastTool?.label ?? '—'}</div>
           </div>
         </div>
 
-        {/* Progress — pipeline position when known, else indeterminate while running */}
-        <div className={styles.section}>
-          <div className={styles.progressHead}>
-            <span className={styles.label}>Progress</span>
-            <span className={styles.progressState}>
-              {/* A pending control action takes priority over the phase %, so the
-                  user always sees their request is being honored. */}
+        {/* Progress */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center justify-between">
+            <span className="font-mono text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Progress</span>
+            <span className="font-mono text-[11px] text-fg-subtle">
               {effectiveTransitional
                 ? (effectiveTransitional === 'pausing' ? 'Pausing…' : effectiveTransitional === 'stopping' ? 'Stopping…' : 'Resuming…')
                 : usePhase ? `${progressPct}%` : progressState}
             </span>
           </div>
-          <div className={styles.track}>
+          <div className="h-1.5 overflow-hidden rounded-full bg-surface-2">
             <div
-              className={`${styles.bar} ${!usePhase && running ? styles.barIndeterminate : ''}`}
+              className={cn('h-full rounded-full bg-primary transition-all', !usePhase && running && 'w-1/3 animate-pulse')}
               style={usePhase || !running ? { width: `${progressPct}%` } : undefined}
             />
           </div>
         </div>
 
-        {/* Controls — always visible; enabled while a run is interruptible. */}
-        <div className={styles.controls}>
-          {/* Task 9.5: Button state logic based on transitional and authoritative states */}
+        {/* Controls */}
+        <div className="flex gap-2">
           {inTransition ? (
             <>
               {effectiveTransitional === 'pausing' && (
-                <Button variant="secondary" disabled loading
-                  leadingIcon={<Icon name="pause" size={14} />}>
-                  Pausing…
-                </Button>
+                <Button variant="secondary" disabled loading leadingIcon={<Icon name="pause" size={14} />}>Pausing…</Button>
               )}
               {effectiveTransitional === 'resuming' && (
-                <Button variant="primary" disabled loading
-                  leadingIcon={<Icon name="play" size={14} />}>
-                  Resuming…
-                </Button>
+                <Button variant="primary" disabled loading leadingIcon={<Icon name="play" size={14} />}>Resuming…</Button>
               )}
               {effectiveTransitional === 'stopping' && (
-                <Button variant="danger" disabled loading
-                  leadingIcon={<Icon name="stop" size={13} />}>
-                  Stopping…
-                </Button>
+                <Button variant="danger" disabled loading leadingIcon={<Icon name="stop" size={13} />}>Stopping…</Button>
               )}
-              {/* Show disabled counterpart buttons during transition */}
               {effectiveTransitional !== 'stopping' && (
-                <Button variant="danger" disabled
-                  leadingIcon={<Icon name="stop" size={13} />}>
-                  Stop
-                </Button>
+                <Button variant="danger" disabled leadingIcon={<Icon name="stop" size={13} />}>Stop</Button>
               )}
             </>
           ) : (
@@ -277,10 +259,7 @@ export function AICollabPanel({ workspaceId, mission }: { workspaceId: string; m
                   leadingIcon={<Icon name="play" size={14} />}
                   onClick={() => {
                     startTransition('resuming')
-                    run(
-                      async () => { await resume(workspaceId).unwrap(); setOptimisticPaused(false) },
-                      '',
-                    )
+                    run(async () => { await resume(workspaceId).unwrap(); setOptimisticPaused(false) }, '')
                   }}>
                   Resume
                 </Button>
@@ -289,10 +268,7 @@ export function AICollabPanel({ workspaceId, mission }: { workspaceId: string; m
                   leadingIcon={<Icon name="pause" size={14} />}
                   onClick={() => {
                     startTransition('pausing')
-                    run(
-                      async () => { await pause(workspaceId).unwrap(); setOptimisticPaused(true) },
-                      '',
-                    )
+                    run(async () => { await pause(workspaceId).unwrap(); setOptimisticPaused(true) }, '')
                   }}>
                   Pause
                 </Button>
@@ -301,10 +277,7 @@ export function AICollabPanel({ workspaceId, mission }: { workspaceId: string; m
                 leadingIcon={<Icon name="stop" size={13} />}
                 onClick={() => {
                   startTransition('stopping')
-                  run(
-                    async () => { await stop(workspaceId).unwrap(); setOptimisticPaused(null) },
-                    '',
-                  )
+                  run(async () => { await stop(workspaceId).unwrap(); setOptimisticPaused(null) }, '')
                 }}>
                 Stop
               </Button>
@@ -312,7 +285,7 @@ export function AICollabPanel({ workspaceId, mission }: { workspaceId: string; m
           )}
         </div>
         {inTransition ? (
-          <div className={styles.controlHint}>
+          <div className="text-[11px] leading-relaxed text-fg-subtle">
             {effectiveTransitional === 'pausing'
               ? 'Finishing the current step, then execution will hold. Resume continues from here.'
               : effectiveTransitional === 'resuming'
@@ -320,7 +293,7 @@ export function AICollabPanel({ workspaceId, mission }: { workspaceId: string; m
                 : 'Stopping — cancelling the current run.'}
           </div>
         ) : !controllable ? (
-          <div className={styles.controlHint}>
+          <div className="text-[11px] leading-relaxed text-fg-subtle">
             {usePhase && mission?.live
               ? `${mission.label} in progress — pause & stop apply during execution`
               : 'No active run to control.'}
@@ -328,18 +301,18 @@ export function AICollabPanel({ workspaceId, mission }: { workspaceId: string; m
         ) : null}
 
         {/* Activity log */}
-        <div className={styles.section}>
-          <div className={styles.label}>Activity Log</div>
+        <div className="flex flex-col gap-1.5">
+          <div className="font-mono text-[10px] font-semibold uppercase tracking-wider text-fg-subtle">Activity Log</div>
           {events.length === 0 ? (
-            <div className={styles.empty}>Live reasoning and tool calls appear here.</div>
+            <div className="text-xs text-fg-subtle">Live reasoning and tool calls appear here.</div>
           ) : (
-            <div className={styles.log}>
+            <div className="flex flex-col gap-0.5">
               {events.map((e) => {
                 const isLast = e.id === lastEvent?.id
                 return (
-                  <div key={e.id} className={`${styles.logRow} ${isLast && active ? styles.logRowLive : ''}`}>
-                    <span className={styles.logGlyph}>{glyph(e.type)}</span>
-                    <span className={styles.logLabel}>{e.label}</span>
+                  <div key={e.id} className={cn('flex items-center gap-2 rounded-md px-2 py-1', isLast && active ? 'bg-surface-2' : 'hover:bg-surface-2/60')}>
+                    <span className="flex-shrink-0 text-sm leading-none">{glyph(e.type)}</span>
+                    <span className="min-w-0 flex-1 truncate text-[13px] text-fg-muted">{e.label}</span>
                   </div>
                 )
               })}

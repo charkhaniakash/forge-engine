@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import styles from './DiffViewer.module.css'
+import { cn } from '@/lib/utils'
 
 export interface DiffViewerProps {
   /** Unified diff text (git-style). */
@@ -58,12 +58,20 @@ function parse(diff: string): DiffLine[] {
   return out
 }
 
-const KIND_CLASS: Record<LineKind, string> = {
-  add: styles.add,
-  del: styles.del,
-  hunk: styles.hunk,
-  meta: styles.meta,
-  context: styles.context,
+const ROW_CLASS: Record<LineKind, string> = {
+  add: 'bg-success/10',
+  del: 'bg-destructive/10',
+  hunk: 'bg-surface-2',
+  meta: '',
+  context: '',
+}
+
+const CODE_CLASS: Record<LineKind, string> = {
+  add: 'text-success',
+  del: 'text-destructive',
+  hunk: 'text-info',
+  meta: 'text-fg-subtle',
+  context: 'text-fg-muted',
 }
 
 export function DiffViewer({ diff, hideFileHeader = false, maxHeight = 480 }: DiffViewerProps) {
@@ -73,14 +81,23 @@ export function DiffViewer({ diff, hideFileHeader = false, maxHeight = 480 }: Di
   }, [diff, hideFileHeader])
 
   return (
-    <div className={styles.root} style={{ maxHeight }}>
-      <table className={styles.table}>
+    <div
+      className="overflow-auto rounded-md bg-inset font-mono text-xs leading-relaxed"
+      style={{ maxHeight }}
+    >
+      <table className="w-full border-collapse">
         <tbody>
           {lines.map((line, i) => (
-            <tr key={i} className={KIND_CLASS[line.kind]}>
-              <td className={styles.gutter}>{line.oldNo ?? ''}</td>
-              <td className={styles.gutter}>{line.newNo ?? ''}</td>
-              <td className={styles.code}>{line.text || ' '}</td>
+            <tr key={i} className={ROW_CLASS[line.kind]}>
+              <td className="w-[1%] whitespace-nowrap border-r border-line-subtle px-2 text-right align-top text-fg-subtle select-none">
+                {line.oldNo ?? ''}
+              </td>
+              <td className="w-[1%] whitespace-nowrap border-r border-line-subtle px-2 text-right align-top text-fg-subtle select-none">
+                {line.newNo ?? ''}
+              </td>
+              <td className={cn('w-full whitespace-pre-wrap break-words px-3 text-fg', CODE_CLASS[line.kind])}>
+                {line.text || ' '}
+              </td>
             </tr>
           ))}
         </tbody>

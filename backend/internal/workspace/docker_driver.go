@@ -410,7 +410,12 @@ func (d *DockerSandboxDriver) ExecInteractive(ctx context.Context, containerID s
 // same code may indicate an OOM kill, which warrants investigation.
 func (d *DockerSandboxDriver) Destroy(ctx context.Context, containerID string) error {
 	// Extract workspace ID from container name to clean up the volume.
+	// NOTE: types.ContainerJSON embeds a *ContainerJSONBase pointer, which is nil
+	// when inspect fails (e.g. the container was already removed/died). Accessing
+	// containerInfo.Name in that case dereferences nil → SIGSEGV. Track whether the
+	// inspect actually succeeded and only read fields from it when it did.
 	containerInfo, err := d.client.ContainerInspect(ctx, containerID)
+	inspectOK := err == nil
 	if err != nil && !isNotFoundError(err) {
 		d.logger.Warnw("docker_inspect_failed", "container_id", containerID[:min(12, len(containerID))], "error", err)
 	}
@@ -444,8 +449,11 @@ func (d *DockerSandboxDriver) Destroy(ctx context.Context, containerID string) e
 		// Already removed — treat as success.
 	}
 
-	// Remove the workspace volume if it exists.
-	if containerInfo.Name != "" {
+	// Remove the workspace volume if it exists. Only safe to read containerInfo.Name
+	// when the inspect above succeeded — otherwise the embedded *ContainerJSONBase is
+	// nil and this dereference would panic. If the container was already gone we
+	// simply skip volume cleanup here (the reaper/manager still removes the row).
+	if inspectOK && containerInfo.ContainerJSONBase != nil && containerInfo.Name != "" {
 		volumeName := fmt.Sprintf("forge-workspace-%s", strings.TrimPrefix(containerInfo.Name, "forge-ws-"))
 		if err := d.client.VolumeRemove(ctx, volumeName, true); err != nil && !isNotFoundError(err) {
 			d.logger.Warnw("docker_volume_remove_failed", "volume_name", volumeName, "error", err)

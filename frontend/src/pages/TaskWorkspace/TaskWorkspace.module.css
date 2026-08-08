@@ -43,8 +43,8 @@
   justify-content: space-between;
   padding: 0 20px;
   height: 56px;
-  border-bottom: 1px solid #C3C5D9;
-  background: #F7F9FB;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-base);
   gap: 16px;
   flex-shrink: 0;
 }
@@ -63,7 +63,7 @@
   justify-content: center;
   background: none;
   border: none;
-  color: #737688;
+  color: var(--text-tertiary);
   font-size: 14px;
   cursor: pointer;
   padding: 6px;
@@ -73,15 +73,15 @@
 }
 
 .back:hover {
-  color: #0041C8;
-  background: #ECEEF0;
+  color: var(--accent);
+  background: var(--surface-2);
 }
 
 .crumb {
   font-size: 14px;
   font-family: 'Hanken Grotesk', sans-serif;
   font-weight: 500;
-  color: #434656;
+  color: var(--text-secondary);
   text-transform: none;
   letter-spacing: 0;
   white-space: nowrap;
@@ -90,18 +90,18 @@
 .headerDivider {
   width: 1px;
   height: 16px;
-  background: #C3C5D9;
+  background: var(--border);
   flex-shrink: 0;
 }
 
 .headerGitIcon {
-  color: #434656;
+  color: var(--text-secondary);
   flex-shrink: 0;
 }
 
 .headerRepoName {
   font-size: 14px;
-  color: #191C1E;
+  color: var(--text-primary);
   font-family: 'Hanken Grotesk', sans-serif;
   font-weight: 600;
   overflow: hidden;
@@ -122,7 +122,7 @@
   gap: 6px;
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
-  color: #0041C8;
+  color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.06em;
   white-space: nowrap;
@@ -131,14 +131,14 @@
 .headerGpu {
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
-  color: #737688;
+  color: var(--text-tertiary);
 }
 
 .headerGpuDot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #0041C8;
+  background: var(--accent);
   flex-shrink: 0;
 }
 
@@ -151,7 +151,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #0041C8;
+  background: var(--accent);
   animation: forgeLiveBlink 1.2s ease infinite;
 }
 
@@ -194,19 +194,19 @@
   align-items: center;
   gap: 5px;
   background: transparent;
-  color: #0041C8;
+  color: var(--accent);
   border-radius: 8px;
   padding: 6px 12px;
   font-size: 12px;
   font-weight: 600;
   text-decoration: none;
-  border: 1px solid #C3C5D9;
+  border: 1px solid var(--border);
   cursor: pointer;
   transition: border-color 0.15s, background-color 0.15s;
 }
 
 .prChip:hover {
-  border-color: #0041C8;
+  border-color: var(--accent);
   background-color: #DCE1FF;
   text-decoration: none;
 }
@@ -216,15 +216,15 @@
   display: flex;
   align-items: flex-end;
   gap: 8px;
-  background: #F7F9FB;
-  border: 1px solid #C3C5D9;
+  background: var(--surface-base);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 8px 10px;
   transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .composerBox:focus-within {
-  border-color: #0041C8;
+  border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(0, 65, 200, 0.1);
 }
 
@@ -235,7 +235,7 @@
   background: transparent;
   border: none;
   padding: 6px 0;
-  color: #191C1E;
+  color: var(--text-primary);
   font-family: 'Hanken Grotesk', sans-serif;
   font-size: 14px;
   line-height: 1.5;
@@ -249,7 +249,7 @@
 }
 
 .composerInput::placeholder {
-  color: #737688;
+  color: var(--text-tertiary);
   font-size: 14px;
 }
 
@@ -279,7 +279,7 @@
   gap: 4px;
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
-  color: #737688;
+  color: var(--text-tertiary);
 }
 
 .composerStatusIconGreen {
@@ -287,19 +287,19 @@
 }
 
 .composerStatusIconCyan {
-  color: #0041C8;
+  color: var(--accent);
 }
 
 .composerStatusDivider {
   width: 1px;
   height: 12px;
-  background: #C3C5D9;
+  background: var(--border);
 }
 
 .composerShortcut {
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
-  color: #737688;
+  color: var(--text-tertiary);
   opacity: 0.7;
 }
 
@@ -312,9 +312,9 @@
   height: 32px;
   padding: 0 10px;
   border-radius: 6px;
-  border: 1px solid #C3C5D9;
+  border: 1px solid var(--border);
   background: transparent;
-  color: #737688;
+  color: var(--text-tertiary);
   font-size: 11px;
   font-family: 'JetBrains Mono', monospace;
   font-weight: 600;
@@ -323,15 +323,15 @@
 }
 
 .planToggle:hover {
-  color: #0041C8;
-  border-color: #0041C8;
+  color: var(--accent);
+  border-color: var(--accent);
   background: #DCE1FF;
 }
 
 .planToggleOn {
   background: #DCE1FF;
-  border-color: #0041C8;
-  color: #0041C8;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 /* ── Left-panel section headers ──────────────────────────────────────── */
@@ -345,9 +345,9 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.1em;
-  color: #737688;
-  border-bottom: 1px solid #C3C5D9;
-  background: #FFFFFF;
+  color: var(--text-tertiary);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
   flex-shrink: 0;
 }
 
@@ -361,8 +361,8 @@
   align-items: center;
   padding: 6px 8px;
   height: 44px;
-  background: #F2F4F6;
-  border-bottom: 1px solid #C3C5D9;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
   gap: 4px;
   flex-shrink: 0;
   border-radius: 8px;
@@ -380,19 +380,19 @@
   border: none;
   cursor: pointer;
   background: transparent;
-  color: #434656;
+  color: var(--text-secondary);
   transition: color 0.15s, background 0.15s;
   white-space: nowrap;
 }
 
 .rightTab:hover {
-  color: #0041C8;
-  background: #FFFFFF;
+  color: var(--accent);
+  background: var(--surface-1);
 }
 
 .rightTabActive {
-  background: #FFFFFF;
-  color: #0041C8;
+  background: var(--surface-1);
+  color: var(--accent);
   font-weight: 600;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
   border: 1px solid rgba(0, 65, 200, 0.2);
@@ -413,19 +413,19 @@
   gap: 16px;
   padding: 32px;
   text-align: center;
-  color: #737688;
-  background: radial-gradient(ellipse at center, #F7F9FB, #FFFFFF);
+  color: var(--text-tertiary);
+  background: radial-gradient(ellipse at center, var(--surface-base), var(--surface-1));
 }
 
 .rightPanelEmptyTitle {
   font-size: 18px;
   font-weight: 500;
-  color: #191C1E;
+  color: var(--text-primary);
 }
 
 .rightPanelEmptyDesc {
   font-size: 14px;
   line-height: 1.6;
   max-width: 280px;
-  color: #434656;
+  color: var(--text-secondary);
 }

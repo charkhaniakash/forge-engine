@@ -24,7 +24,7 @@
   --border-default: rgba(255, 255, 255, 0.07);
   --border-subtle: rgba(255, 255, 255, 0.04);
   --border-strong: #333B46;
-  --border-focus: rgba(0, 229, 107, 0.40);
+  --border-focus: rgba(0, 65, 200, 0.40);
 
   /* ── Text ──────────────────────────────────────────────────────────── */
   --text-primary: #EDEDED;
@@ -36,7 +36,6 @@
   --muted: #12131A;
   --muted-foreground: #71717A;
   --foreground: #EDEDED;
-  --muted-foreground: #71717A;
 
   /* ── Brand / accent ────────────────────────────────────────────────── */
   --accent: #0041C8;
@@ -197,7 +196,7 @@
   --radius-xl: 12px;
   --radius-full: 9999px;
 
-  /* ── Layout dimensions ─────────────────────────────────────────────── */
+  /* ── Layout dimensions ─────���───────────────────────────────────────── */
   --topnav-height: 56px;
   --sidebar-width: 288px;
   --sidebar-width-collapsed: 56px;

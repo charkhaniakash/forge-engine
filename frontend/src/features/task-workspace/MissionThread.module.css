@@ -27,12 +27,12 @@
   display: flex;
   flex-direction: column;
   height: 100%;
-  background: var(--background, #050507);
+  background: var(--background, var(--background));
 }
 .top {
   flex-shrink: 0;
-  border-bottom: 1px solid var(--border, #1F212E);
-  background: var(--surface-base, #050507);
+  border-bottom: 1px solid var(--border, var(--border));
+  background: var(--surface-base, var(--background));
 }
 .thread {
   max-width: 860px;
@@ -48,7 +48,7 @@
   z-index: 2;
   padding: 12px 0 8px;
   margin-top: -24px;
-  background: var(--background, #050507);
+  background: var(--background, var(--background));
 }
 .empty {
   color: var(--muted-foreground, #71717A);
@@ -102,7 +102,7 @@
   height: 34px;
   border-radius: 50%;
   border: 2px solid;
-  background: var(--background, #050507);
+  background: var(--background, var(--background));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -191,7 +191,7 @@
   border: 1px solid;
   border-radius: 10px;
   overflow: hidden;
-  background: var(--surface-1, #0D0E12);
+  background: var(--surface-1, var(--surface-1));
   box-shadow: var(--shadow-sm);
   transition: border-color var(--duration-normal) var(--ease),
     box-shadow var(--duration-normal) var(--ease);
@@ -224,7 +224,7 @@
   font-size: 12px;
   font-family: var(--font-sans, Inter, sans-serif);
   font-weight: 600;
-  color: var(--foreground, #E4E4E7);
+  color: var(--foreground, var(--text-primary));
   margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -288,7 +288,7 @@
 .filesSummaryLabel {
   font-size: 13px;
   font-weight: 600;
-  color: var(--foreground, #E4E4E7);
+  color: var(--foreground, var(--text-primary));
 }
 
 .filesSummaryStats {
@@ -325,7 +325,7 @@
 .testStatBox {
   background: rgba(5, 5, 7, 0.4);
   padding: 10px;
-  border: 1px solid var(--border, #1F212E);
+  border: 1px solid var(--border, var(--border));
   border-radius: 8px;
   text-align: center;
 }
@@ -345,7 +345,7 @@
   font-size: 20px;
   font-family: var(--font-heading, 'Fira Code', monospace);
   font-weight: 700;
-  color: var(--foreground, #E4E4E7);
+  color: var(--foreground, var(--text-primary));
 }
 
 /* ── Publishing card ──────────────────────────────────────────────────── */
@@ -370,7 +370,7 @@
   margin: 0 0 4px;
   font-size: 13px;
   font-weight: 600;
-  color: var(--foreground, #E4E4E7);
+  color: var(--foreground, var(--text-primary));
 }
 
 .publishDesc {
@@ -384,7 +384,7 @@
 /* PR details box */
 .prDetails {
   background: rgba(5, 5, 7, 0.4);
-  border: 1px solid var(--border, #1F212E);
+  border: 1px solid var(--border, var(--border));
   border-radius: 8px;
   padding: 12px;
   margin-bottom: 12px;
@@ -401,12 +401,12 @@
   font-size: 12px;
   font-family: var(--font-heading, 'Fira Code', monospace);
   font-weight: 700;
-  color: var(--foreground, #E4E4E7);
+  color: var(--foreground, var(--text-primary));
 }
 
 .prDetailValue {
   font-size: 13px;
-  color: var(--foreground, #E4E4E7);
+  color: var(--foreground, var(--text-primary));
 }
 
 .prDetailAuthor {
@@ -431,7 +431,7 @@
 }
 
 .prStatFiles {
-  color: #00E5FF;
+  color: var(--tertiary);
 }
 
 /* Publish action buttons */
@@ -472,8 +472,8 @@
   gap: 6px;
   padding: 10px 12px;
   background: transparent;
-  color: var(--foreground, #E4E4E7);
-  border: 1px solid var(--border, #1F212E);
+  color: var(--foreground, var(--text-primary));
+  border: 1px solid var(--border, var(--border));
   border-radius: 6px;
   font-family: var(--font-heading, 'Fira Code', monospace);
   font-size: 11px;
@@ -487,7 +487,7 @@
 }
 
 .mergeIcon {
-  color: #00E5FF;
+  color: var(--tertiary);
 }
 
 /* ── User chat bubble ─────────────────────────────────────────────────── */
@@ -514,7 +514,7 @@
 }
 
 .userBubbleText {
-  color: var(--text-primary, #E4E4E7);
+  color: var(--text-primary, var(--text-primary));
   font-size: 13px;
   font-family: var(--font-sans, Inter, sans-serif);
   white-space: pre-wrap;
@@ -597,7 +597,7 @@
   text-transform: uppercase;
   letter-spacing: 0.08em;
   padding: 2px 12px;
-  background: var(--background, #050507);
+  background: var(--background, var(--background));
   border: 1px solid var(--overlay-separator);
   border-radius: 999px;
 }
@@ -610,8 +610,8 @@
   gap: 10px;
   margin-top: 12px;
   padding: 14px 16px;
-  background: var(--surface-1, #0D0E12);
-  border: 1px solid var(--border-default, #1F212E);
+  background: var(--surface-1, var(--surface-1));
+  border: 1px solid var(--border-default, var(--border));
   border-radius: 10px;
   box-shadow: var(--shadow-sm);
 }
@@ -640,8 +640,8 @@
 /* ── Docked composer (follow-up input) ─────────────────────────────────── */
 .composer {
   flex-shrink: 0;
-  border-top: 1px solid var(--border, #1F212E);
-  background: var(--background, #050507);
+  border-top: 1px solid var(--border, var(--border));
+  background: var(--background, var(--background));
   padding: 12px 24px;
 }
 

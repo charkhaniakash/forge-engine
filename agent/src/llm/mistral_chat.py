@@ -42,18 +42,17 @@ _DEFAULT_BASE_URL = "https://api.mistral.ai/v1"
 class MistralChatProvider:
     """Streams chat completions from Mistral's OpenAI-compatible API."""
 
-    def __init__(self) -> None:
-        api_key = settings.mistral_api_key
-        if not api_key:
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        key = api_key if api_key is not None else settings.mistral_api_key
+        if not key:
             raise RuntimeError(
-                "MISTRAL_API_KEY is not set. Get a key at "
-                "https://console.mistral.ai/ and set MISTRAL_API_KEY "
-                "(or add it to agent/.env.local)."
+                "Mistral API key is not set. Add it in Settings → Models "
+                "(https://console.mistral.ai/)."
             )
 
         base_url = os.getenv("MISTRAL_BASE_URL", _DEFAULT_BASE_URL)
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self._model = settings.chat.model
+        self._client = AsyncOpenAI(api_key=key, base_url=base_url)
+        self._model = model or settings.chat.model
         self._max_retries = 6
         self._base_delay = 1.0  # 1+2+4+8+16+32 = 63 seconds total before giving up
         logger.info(

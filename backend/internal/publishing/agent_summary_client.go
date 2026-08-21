@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 )
 
 // AgentSummaryClient calls the Agent's summary endpoint for commit messages and PR descriptions.
@@ -42,6 +44,7 @@ func (c *AgentSummaryClient) GenerateSummary(ctx context.Context, req SummaryReq
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	llmcreds.ApplyHeadersFromContext(ctx, httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

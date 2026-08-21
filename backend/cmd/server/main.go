@@ -24,6 +24,7 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/github"
 	"github.com/charkhaniakash/forge-engine/backend/internal/handlers"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/middleware"
 	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
@@ -88,6 +89,20 @@ func main() {
 	execRepo := repository.NewExecutionRepository(dbConn)
 	valRepo := validation.NewValidationRepository(dbConn)
 
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "phase-0-insecure-default"
+	}
+
+	agentURL := os.Getenv("AGENT_URL")
+	if agentURL == "" {
+		agentURL = "http://agent:8000"
+	}
+
+	llmCredRepo := llmcreds.NewRepository(dbConn)
+	llmService := llmcreds.NewService(llmCredRepo, agentURL, jwtSecret)
+	llmHandlers := llmcreds.NewHandlers(llmService, llmCredRepo, sugar)
+
 	// ── Auth handlers ─────────────────────────────────────────────────────────
 	authHandlers := handlers.NewAuthHandlers(userRepo, orgRepo, sugar)
 	orgHandlers := handlers.NewOrgHandlers(orgRepo, invitationRepo, userRepo, sugar)
@@ -108,11 +123,6 @@ func main() {
 	var publishingHandlers *publishing.Handlers
 	var bwHandlers *browserworkspace.Handlers
 	var bwGateway *browserworkspace.Gateway
-
-	jwtSecret := os.Getenv("JWT_SECRET")
-	if jwtSecret == "" {
-		jwtSecret = "phase-0-insecure-default"
-	}
 
 	if os.Getenv("GITHUB_APP_ID") != "" {
 		appAuth, err = github.NewAppAuth()
@@ -138,10 +148,6 @@ func main() {
 			}
 
 			// ── Ingestion worker (Phase 3) ────────────────────────────────────
-			agentURL := os.Getenv("AGENT_URL")
-			if agentURL == "" {
-				agentURL = "http://agent:8000"
-			}
 			cloneBaseDir := os.Getenv("CLONE_BASE_DIR") // defaults to /tmp/forge-clones
 
 			workerConcurrency := 2
@@ -205,6 +211,7 @@ func main() {
 				jwtSecret,
 				sugar,
 			)
+			qaHandlers.SetLLM(llmService)
 
 			// ── Task handlers (Phase 5) ───────────────────────────────────────
 			agentPlanClient := ingestion.NewAgentPlanClient(agentURL, jwtSecret)
@@ -216,6 +223,7 @@ func main() {
 				jwtSecret,
 				sugar,
 			)
+			taskHandlers.SetLLM(llmService)
 
 			// ── Workspace / execution sandbox (Phase 6) ───────────────────────
 			dockerDriver, driverErr := workspace.NewDockerDriver(sugar)
@@ -270,11 +278,13 @@ func main() {
 					valOrchestrator, agentRepairClient, repairPolicy,
 					jwtSecret, sugar,
 				)
+				repairOrch.SetLLM(llmService)
 				repairHandlers = repair.NewHandlers(repairRepo, repairOrch, sugar)
 
 				// ── Pipeline pause/cancel infrastructure ──────────────────────
 				contextRegistry := pipeline.NewContextRegistry()
 				execOrchestrator.SetContextRegistry(contextRegistry)
+				execOrchestrator.SetLLM(llmService)
 				pauseChecker := pipeline.NewPauseChecker(execRepo)
 
 				// ── Publishing (Phase 10) ─────────────────────────────────────
@@ -302,6 +312,7 @@ func main() {
 					publishingRepo, workItemRepo, execRepo, wsManager,
 					githubPRClient, agentSummaryClient, jwtSecret, sugar,
 				)
+				publishingOrch.SetLLM(llmService)
 				publishingHandlers = publishing.NewHandlers(
 					publishingRepo, publishingOrch, workItemRepo, execRepo,
 					wsRepo, githubRepoRepo, sugar,
@@ -793,6 +804,13 @@ func main() {
 	app.Get("/v1/orgs/:orgID", middleware.RequireAuth(sugar), orgHandlers.GetOrg)
 	app.Get("/v1/orgs/:orgID/members", middleware.RequireAuth(sugar), orgHandlers.ListMembers)
 	app.Post("/v1/orgs/:orgID/members/invite", middleware.RequireAuth(sugar), orgHandlers.InviteMember)
+
+	// ── LLM credentials (BYOK) ────────────────────────────────────────────────
+	app.Get("/v1/llm/providers", middleware.RequireAuth(sugar), llmHandlers.ListProviders)
+	app.Get("/v1/llm/credentials", middleware.RequireAuth(sugar), llmHandlers.GetConfig)
+	app.Post("/v1/llm/credentials", middleware.RequireAuth(sugar), llmHandlers.ValidateAndSave)
+	app.Post("/v1/llm/credentials/:provider/activate", middleware.RequireAuth(sugar), llmHandlers.Activate)
+	app.Delete("/v1/llm/credentials/:provider", middleware.RequireAuth(sugar), llmHandlers.Delete)
 
 	// ── GitHub + ingestion endpoints ──────────────────────────────────────────
 	if githubHandlers != nil {

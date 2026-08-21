@@ -14,6 +14,7 @@ import (
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/execution"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
@@ -40,6 +41,7 @@ type Orchestrator struct {
 	policy           *RepairPolicy
 	publisher        func(sessionID string, eventType string, payload map[string]interface{})
 	onStartHook      func(sessionID, workspaceID string)
+	llm              *llmcreds.Service
 	jwtSecret        string
 	logger           *zap.SugaredLogger
 }
@@ -86,6 +88,10 @@ func (o *Orchestrator) GetPublisher() func(sessionID string, eventType string, p
 // binding sessionID→workspaceID so the EventBridge can resolve the target gateway.
 func (o *Orchestrator) SetOnStartHook(hook func(sessionID, workspaceID string)) {
 	o.onStartHook = hook
+}
+
+func (o *Orchestrator) SetLLM(svc *llmcreds.Service) {
+	o.llm = svc
 }
 
 // publish fans a repair event to the WebSocket hub (no-op if no publisher set).
@@ -165,6 +171,18 @@ func (o *Orchestrator) Run(
 	}
 	workItemID := exec.WorkItemID
 	log = log.With("work_item_id", workItemID)
+
+	if o.llm != nil {
+		item, itemErr := o.workItemRepo.GetByIDInternal(ctx, workItemID)
+		if itemErr != nil {
+			return fmt.Errorf("load work item for llm: %w", itemErr)
+		}
+		bound, bindErr := o.llm.BindActive(ctx, item.OrgID)
+		if bindErr != nil {
+			return bindErr
+		}
+		ctx = bound
+	}
 
 	// 1. Load validation run with full diagnostics
 	validationRun, err := o.validationRepo.GetRunWithFullResult(ctx, validationRunID)

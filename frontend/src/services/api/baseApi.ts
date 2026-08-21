@@ -62,6 +62,8 @@ export const baseApi = createApi({
     'Org',
     'OrgMember',
     'MissionMessages',
+    'LLMProviders',
+    'LLMCredentials',
   ],
   endpoints: () => ({}),
 })

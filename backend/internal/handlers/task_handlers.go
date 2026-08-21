@@ -14,6 +14,7 @@ import (
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/auth"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 )
@@ -37,6 +38,7 @@ type TaskHandlers struct {
 	jobRepo        *repository.IngestionJobRepository
 	missionMsgRepo *repository.MissionMessageRepository
 	agentClient    *ingestion.AgentPlanClient
+	llm            *llmcreds.Service
 	jwtSecret      string
 	logger         *zap.SugaredLogger
 
@@ -82,6 +84,10 @@ func NewTaskHandlers(
 		wsHub:          make(map[string]chan []byte),
 		planEventLog:   make(map[string][][]byte),
 	}
+}
+
+func (h *TaskHandlers) SetLLM(svc *llmcreds.Service) {
+	h.llm = svc
 }
 
 // SetAutoRunHook wires the server-side auto-run sequence (approve → provision →
@@ -745,6 +751,15 @@ func (h *TaskHandlers) runPlanning(
 	planCtx, cancel := context.WithTimeout(ctx, planTimeout)
 	defer cancel()
 	planCtx = ingestion.WithTraceID(planCtx, traceID)
+	if h.llm != nil {
+		bound, bindErr := h.llm.BindActive(planCtx, item.OrgID)
+		if bindErr != nil {
+			log.Errorw("planning_llm_bind_failed", "error", bindErr)
+			_ = h.workItemRepo.MarkPlanningFailed(ctx, taskID, bindErr.Error())
+			return
+		}
+		planCtx = bound
+	}
 
 	// emitTerminal publishes a lifecycle event to the planning socket AFTER the
 	// DB write + status transition has committed. The agent's raw "plan" event

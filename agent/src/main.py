@@ -12,6 +12,8 @@ from src.execution.router import router as execution_router
 from src.validation.router import router as validation_router
 from src.repair.router import router as repair_router
 from src.summarization.router import router as summarization_router
+from src.llm.runtime import LLMRuntime, reset_runtime, set_runtime
+from src.llm.router import router as llm_router
 
 # Configure structlog — structured JSON, ISO timestamps, trace ID on every line.
 structlog.configure(
@@ -38,6 +40,22 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+@app.middleware("http")
+async def llm_runtime_middleware(request: Request, call_next):
+    """Bind per-request BYOK credentials from backend-forwarded headers."""
+    provider = (request.headers.get("X-Forge-LLM-Provider") or "").strip()
+    model = (request.headers.get("X-Forge-LLM-Model") or "").strip()
+    api_key = (request.headers.get("X-Forge-LLM-Key") or "").strip()
+    token = None
+    if provider:
+        token = set_runtime(LLMRuntime(provider=provider, model=model, api_key=api_key))
+    try:
+        return await call_next(request)
+    finally:
+        if token is not None:
+            reset_runtime(token)
 
 
 @app.middleware("http")
@@ -111,6 +129,10 @@ app.include_router(repair_router)
 # ── Phase 10 — Summarization (Commit Messages & PR Descriptions) ─────────────
 # POST /v1/agent/summarize  (JSON — see summarization/router.py)
 app.include_router(summarization_router)
+
+# BYOK — validate a user-supplied provider + API key
+# POST /v1/agent/llm/validate
+app.include_router(llm_router)
 
 
 

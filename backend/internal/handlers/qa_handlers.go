@@ -13,6 +13,7 @@ import (
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/auth"
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 )
@@ -34,6 +35,7 @@ type QAHandlers struct {
 	jobRepo     *repository.IngestionJobRepository
 	repoRepo    *repository.GitHubRepoRepository
 	agentClient *ingestion.AgentQAClient
+	llm         *llmcreds.Service
 	jwtSecret   string
 	logger      *zap.SugaredLogger
 
@@ -61,6 +63,10 @@ func NewQAHandlers(
 		logger:      logger,
 		wsHub:       make(map[string]chan []byte),
 	}
+}
+
+func (h *QAHandlers) SetLLM(svc *llmcreds.Service) {
+	h.llm = svc
 }
 
 // ── POST /v1/repos/:repoID/qa/sessions ───────────────────────────────────────
@@ -253,6 +259,15 @@ func (h *QAHandlers) Ask(c *fiber.Ctx) error {
 	}
 
 	agentCtx := ingestion.WithTraceID(ctx, traceID)
+	if h.llm != nil {
+		bound, bindErr := h.llm.BindActive(agentCtx, orgID)
+		if bindErr != nil {
+			return c.Status(fiber.StatusPreconditionFailed).JSON(fiber.Map{
+				"error": "Add an LLM API key in Settings before asking questions",
+			})
+		}
+		agentCtx = bound
+	}
 
 	streamErr := h.agentClient.Ask(agentCtx, agentReq, agentToken, func(event ingestion.QAStreamEvent) {
 		// Fan to WebSocket immediately (non-blocking; slow client drops events

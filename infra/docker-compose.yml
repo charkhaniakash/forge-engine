@@ -49,6 +49,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       LOG_LEVEL: debug
       JWT_SECRET: phase-0-insecure-default
+      # AES key for BYOK LLM credentials (falls back to JWT_SECRET if unset)
+      LLM_CREDENTIALS_KEY: phase-0-insecure-default
       # GitHub App credentials (Phase 2)
       GITHUB_APP_ID: 4135365
       GITHUB_APP_NAME: ForgeRepoSync-Akash
@@ -117,41 +119,12 @@ services:
       # EMBEDDING__MODEL: text-embedding-3-small
       # EMBEDDING__DIMENSIONS: 1536
 
-      # Phase 4 — chat (local Gemma via Ollama — no API key needed)
-      # qwen2.5-coder:7b is pulled and running on the host Mac GPU.
-      # host.docker.internal resolves to the Mac host from inside Docker.
+      # Phase 4 — chat (BYOK via Settings is preferred).
+      # Per-request X-Forge-LLM-* headers override these when the org has a saved key.
+      # Optional local fallback for agents that run without Settings:
       # CHAT__PROVIDER: ollama
       # CHAT__MODEL: qwen2.5-coder:7b
       # OLLAMA_BASE_URL: http://host.docker.internal:11434
-
-      # CHAT__PROVIDER: gemini
-      # CHAT__MODEL: gemini-3.1-pro-preview
-
-      # CHAT__PROVIDER: openai
-      # CHAT__MODEL: gpt-4o-mini
-
-      # Groq (hosted, OpenAI-compatible). Set GROQ_API_KEY in agent/.env.local.
-      # CHAT__PROVIDER: groq
-      # CHAT__MODEL: qwen/qwen3.6-27b
-
-      # OpenRouter (OpenAI-compatible, supports many models including NVIDIA)
-      # CHAT__PROVIDER: openrouter
-      # CHAT__MODEL: nvidia/nemotron-3-ultra-550b-a55b:free
-      # CHAT__MODEL: poolside/laguna-m.1:free
-
-      # TokenRouter (OpenAI-compatible, supports various models)
-      # CHAT__PROVIDER: tokenrouter
-      # CHAT__MODEL: moonshotai/kimi-k3-free
-
-      # Mistral (OpenAI-compatible, supports various models)
-      # CHAT__PROVIDER: mistral
-      # CHAT__MODEL: mistral-medium-latest
-      # CHAT__MODEL: codestral-latest
-
-      # Cohere (native API, supports various models)
-      CHAT__PROVIDER: cohere
-      CHAT__MODEL: command-a-plus-05-2026
-      # CHAT__MODEL: command-r-plus-08-2024
 
       # Phase 4 — retrieval
       RETRIEVAL__CANDIDATE_K: 50
@@ -159,6 +132,7 @@ services:
       RETRIEVAL__FINAL_K: 8
       RETRIEVAL__MAX_CHUNKS_PER_FILE: 3
       RETRIEVAL__CONTEXT_TOKEN_BUDGET: 4096
+      RETRIEVAL__PLANNING_CONTEXT_TOKEN_BUDGET: 5500  
       RETRIEVAL__HISTORY_TURNS: 6
 
     ports:

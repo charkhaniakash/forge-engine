@@ -99,7 +99,13 @@ var profiles = map[string]*ValidationProfile{
 			{
 				Name:           "test",
 				SequenceNumber: 3,
-				Commands:       [][]string{{"npm", "test", "--", "--json", "--forceExit"}},
+				// --passWithNoTests: exits 0 when no test files exist instead of 1,
+				// preventing the "no tests found" exit-1 from being misclassified as
+				// a repairable failure and triggering an infinite repair→validation loop.
+				// --watchAll=false: single run, no interactive watch mode (CI_=true also
+				// handles this but the flag is explicit insurance).
+				// --forceExit: prevents jest from hanging if async tasks remain open.
+				Commands:       [][]string{{"npm", "test", "--", "--watchAll=false", "--passWithNoTests", "--forceExit"}},
 				TimeoutSeconds: 180,
 				RunOnBuildFail: false,
 				RunOnInstallFail: false,

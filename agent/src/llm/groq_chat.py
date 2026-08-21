@@ -44,18 +44,17 @@ _DEFAULT_BASE_URL = "https://api.groq.com/openai/v1"
 class GroqChatProvider:
     """Streams chat completions from Groq's OpenAI-compatible API."""
 
-    def __init__(self) -> None:
-        api_key = settings.groq_api_key
-        if not api_key:
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        key = api_key if api_key is not None else settings.groq_api_key
+        if not key:
             raise RuntimeError(
-                "GROQ_API_KEY is not set. Get a key at "
-                "https://console.groq.com/keys and set GROQ_API_KEY "
-                "(or add it to agent/.env.local)."
+                "Groq API key is not set. Add it in Settings → Models "
+                "(https://console.groq.com/keys)."
             )
 
         base_url = os.getenv("GROQ_BASE_URL", _DEFAULT_BASE_URL)
-        self._client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self._model = settings.chat.model
+        self._client = AsyncOpenAI(api_key=key, base_url=base_url)
+        self._model = model or settings.chat.model
         logger.info(
             "groq_provider_init",
             model=self._model,

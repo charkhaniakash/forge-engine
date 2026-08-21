@@ -9,6 +9,8 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 )
 
 // QAHistoryMessage is one turn of conversation history sent to the Agent.
@@ -110,6 +112,7 @@ func (c *AgentQAClient) Ask(
 	if traceID := ctx.Value(contextKeyTraceID); traceID != nil {
 		httpReq.Header.Set("X-Trace-ID", fmt.Sprintf("%v", traceID))
 	}
+	llmcreds.ApplyHeadersFromContext(ctx, httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

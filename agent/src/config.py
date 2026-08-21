@@ -60,7 +60,7 @@ class ChatConfig(BaseModel):
     # tokenrouter: moonshotai/kimi-k3-free
     # mistral:     mistral-medium-latest, mistral-large-latest, codestral-latest
     # cohere:      command-a-plus-05-2026, command-r-plus-08-2024, command-light-04-2024
-    model: str = "command-a-plus-05-2026"
+    model: str = "gemini-2.5-flash"
 
 
 class RetrievalConfig(BaseModel):
@@ -86,7 +86,7 @@ class RetrievalConfig(BaseModel):
     planning_rerank_k: int = 30
     planning_final_k: int = 15
     planning_max_chunks_per_file: int = 5
-    planning_context_token_budget: int = 8192
+    planning_context_token_budget: int = 5500
     planning_include_tests: bool = True
 
 

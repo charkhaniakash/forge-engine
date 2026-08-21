@@ -2,8 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install uv
-RUN pip install uv
+# Install uv using the official installation script
+RUN pip install --upgrade pip && \
+    pip install uv
 
 # Copy project metadata
 COPY pyproject.toml .

@@ -10,6 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 	"github.com/charkhaniakash/forge-engine/backend/internal/pipeline"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
@@ -52,6 +53,7 @@ type ExecutionOrchestrator struct {
 	validationTrigger ValidationTrigger
 	onStartHook       func(execID, workspaceID string)
 	contextRegistry   *pipeline.ContextRegistry
+	llm               *llmcreds.Service
 	jwtSecret         string
 	logger            *zap.SugaredLogger
 }
@@ -105,6 +107,10 @@ func (o *ExecutionOrchestrator) SetValidationTrigger(trigger ValidationTrigger) 
 // enabling Stop to immediately cancel in-flight operations across all pipeline phases.
 func (o *ExecutionOrchestrator) SetContextRegistry(cr *pipeline.ContextRegistry) {
 	o.contextRegistry = cr
+}
+
+func (o *ExecutionOrchestrator) SetLLM(svc *llmcreds.Service) {
+	o.llm = svc
 }
 
 // Run executes an approved plan step-by-step. Called as a goroutine.
@@ -162,6 +168,16 @@ func (o *ExecutionOrchestrator) Run(ctx context.Context, execID string, planBody
 		log.Errorw("exec_ctx_unmarshal_failed", "error", err)
 		_ = o.execRepo.MarkFailed(pipelineCtx, execID, "invalid execution context")
 		return
+	}
+
+	if o.llm != nil && execCtx.OrgID != "" {
+		bound, bindErr := o.llm.BindActive(pipelineCtx, execCtx.OrgID)
+		if bindErr != nil {
+			log.Errorw("llm_bind_failed", "error", bindErr)
+			_ = o.execRepo.MarkFailed(pipelineCtx, execID, bindErr.Error())
+			return
+		}
+		pipelineCtx = bound
 	}
 
 	// Track artifacts across all steps for the final checkpoint.

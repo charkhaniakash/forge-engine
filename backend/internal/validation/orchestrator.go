@@ -611,11 +611,19 @@ func (o *ValidationOrchestrator) runStage(
 	}
 
 	durationMS := int(time.Since(start).Milliseconds())
-	stagePassed := exitCode == 0 && !timedOut
+
+	// "No tests found" is advisory — react-scripts exits 1 in this case even
+	// though there is no code failure. Treat it like a pass so it does NOT
+	// mark the stage failed, does NOT cascade to build-fail skips, and does NOT
+	// trigger the repair loop. The engine-path classifier already handles this
+	// via OutcomeNoTests; we mirror it here for the legacy profile path.
+	combined := combinedBuf.String()
+	noTestsExit := stageCfg.Name == "test" && exitCode == 1 && noTestsInOutput(combined)
+	stagePassed := (exitCode == 0 || noTestsExit) && !timedOut
 
 	stdout := truncateStr(stdoutBuf.String(), 256*1024)
 	stderr := truncateStr(stderrBuf.String(), 256*1024)
-	combined := truncateStr(combinedBuf.String(), 512*1024)
+	combined = truncateStr(combined, 512*1024)
 
 	// ── Environment failure detection (before agent parsing) ─────────────────
 	// Detect infrastructure failures that should not be treated as code errors.
@@ -871,6 +879,30 @@ func (o *ValidationOrchestrator) publish(runID, eventType string, payload map[st
 	if o.publisher != nil {
 		o.publisher(runID, eventType, payload)
 	}
+}
+
+// noTestsInOutput reports whether a test command's combined output indicates that
+// no test files were found. Some runners (react-scripts/jest without
+// --passWithNoTests) exit 1 in this case even though there is no code failure.
+// This mirrors the engine-path Classifier so both paths agree on the verdict.
+func noTestsInOutput(output string) bool {
+	lower := strings.ToLower(output)
+	phrases := []string{
+		"no tests found",
+		"no tests ran",
+		"no test files",
+		"no tests to run",
+		"no test suites found",
+		"0 passed, 0 failed",
+		"collected 0 items",
+		"passwithonotests",
+	}
+	for _, p := range phrases {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // computeOverallResult classifies the validation run for Phase 9 consumption.

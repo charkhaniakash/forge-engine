@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
@@ -25,6 +26,7 @@ type Orchestrator struct {
 	agentClient      *AgentSummaryClient
 	publisher        func(sessionID, eventType string, payload map[string]interface{})
 	onStartHook      func(sessionID, workspaceID string)
+	llm              *llmcreds.Service
 	jwtSecret        string
 	logger           *zap.SugaredLogger
 }
@@ -69,6 +71,10 @@ func (o *Orchestrator) SetOnStartHook(hook func(sessionID, workspaceID string)) 
 	o.onStartHook = hook
 }
 
+func (o *Orchestrator) SetLLM(svc *llmcreds.Service) {
+	o.llm = svc
+}
+
 // publish emits a progress event to WebSocket subscribers.
 func (o *Orchestrator) publish(sessionID, step, status, message string) {
 	if o.publisher != nil {
@@ -90,6 +96,19 @@ func (o *Orchestrator) Run(ctx context.Context, req PublishRequest) error {
 		"trace_id", req.TraceID,
 	)
 	log.Info("publishing_starting")
+
+	if o.llm != nil {
+		item, itemErr := o.workItemRepo.GetByIDInternal(ctx, req.WorkItemID)
+		if itemErr != nil {
+			return fmt.Errorf("load work item for llm: %w", itemErr)
+		}
+		bound, bindErr := o.llm.BindActive(ctx, item.OrgID)
+		if bindErr != nil {
+			log.Warnw("llm_bind_failed_summaries_will_fallback", "error", bindErr)
+		} else {
+			ctx = bound
+		}
+	}
 
 	// Create publishing session
 	session, err := o.repo.CreateSession(ctx, req)

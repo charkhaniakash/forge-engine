@@ -41,19 +41,18 @@ _DEFAULT_BASE_URL = "https://api.cohere.ai/v2"
 class CohereChatProvider:
     """Streams chat completions from Cohere's API."""
 
-    def __init__(self) -> None:
-        api_key = settings.cohere_api_key
-        if not api_key:
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        key = api_key if api_key is not None else settings.cohere_api_key
+        if not key:
             raise RuntimeError(
-                "COHERE_API_KEY is not set. Get a key at "
-                "https://dashboard.cohere.com/api-keys and set COHERE_API_KEY "
-                "(or add it to agent/.env.local)."
+                "Cohere API key is not set. Add it in Settings → Models "
+                "(https://dashboard.cohere.com/api-keys)."
             )
 
         base_url = os.getenv("COHERE_BASE_URL", _DEFAULT_BASE_URL)
         self._base_url = base_url
-        self._api_key = api_key
-        self._model = settings.chat.model
+        self._api_key = key
+        self._model = model or settings.chat.model
         self._max_retries = 6
         self._base_delay = 1.0  # 1+2+4+8+16+32 = 63 seconds total before giving up
         logger.info(

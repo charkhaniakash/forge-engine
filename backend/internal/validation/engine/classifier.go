@@ -31,7 +31,15 @@ func Classify(cap Capability, r CommandResult) (Outcome, FailureOrigin, []Diagno
 		return OutcomePassed, OriginNone, nil
 	}
 
-	// 3. Non-zero exit with no environment signature → a real, repairable failure.
+	// 3. Non-zero exit: check for "no tests found" before treating as a real
+	// failure. react-scripts and some other runners exit 1 (not 0) when they
+	// find no test files — that is advisory, not a code error, and must NOT
+	// trigger the repair loop.
+	if cap == CapTest && noTestsCollected(combined) {
+		return OutcomeNoTests, OriginNone, nil
+	}
+
+	// 4. Non-zero exit with no environment signature → a real, repairable failure.
 	// Lint/typecheck/build/test failures are all code/config-level for the repo.
 	return OutcomeFailed, OriginCode, diag("error", string(cap), tail(combined, 4000))
 }
@@ -58,18 +66,22 @@ func environmentSignature(output string) (string, bool) {
 	return "", false
 }
 
-// noTestsCollected reports whether a passing test run actually ran zero tests.
-// Runner-agnostic phrase set (jest, pytest, go, vitest, mocha).
+// noTestsCollected reports whether a test run found no test files/cases.
+// Runner-agnostic phrase set — covers jest, react-scripts, pytest, go test,
+// vitest, mocha.  Checked for both exit 0 (some runners) and exit 1 (react-
+// scripts / jest when --passWithNoTests is absent).
 func noTestsCollected(output string) bool {
 	lower := strings.ToLower(output)
 	phrases := []string{
-		"no tests found",
+		"no tests found",          // react-scripts / jest (exit 1)
 		"no tests ran",
-		"no test files",       // go: "no test files"
+		"no test files",           // go test: "no test files"
 		"no tests to run",
-		"no test suites found",
+		"no test suites found",    // jest
 		"0 passed, 0 failed",
-		"collected 0 items",   // pytest
+		"collected 0 items",       // pytest
+		"run with `--passwithonotests` to exit with code 0", // jest hint line
+		"passwithonotests",        // substring of the flag name in any context
 	}
 	for _, p := range phrases {
 		if strings.Contains(lower, p) {

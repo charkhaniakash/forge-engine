@@ -21,9 +21,12 @@ logger = structlog.get_logger()
 class GeminiChatProvider:
     """Streams chat completions using the Google Gemini API."""
 
-    def __init__(self) -> None:
-        self._client = genai.Client(api_key=settings.gemini_api_key)
-        self._model = settings.chat.model
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        key = api_key if api_key is not None else settings.gemini_api_key
+        if not key:
+            raise RuntimeError("Gemini API key is not set. Add it in Settings → Models.")
+        self._client = genai.Client(api_key=key)
+        self._model = model or settings.chat.model
         self._max_retries = 6
         self._base_delay = 1.0  # seconds (1+2+4+8+16+32=63s total before giving up)
 

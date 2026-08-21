@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 )
 
 // PlanRequest is the JSON body sent to POST /v1/agent/plan.
@@ -126,6 +128,7 @@ func (c *AgentPlanClient) Plan(
 	if traceID := ctx.Value(contextKeyTraceID); traceID != nil {
 		httpReq.Header.Set("X-Trace-ID", fmt.Sprintf("%v", traceID))
 	}
+	llmcreds.ApplyHeadersFromContext(ctx, httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

@@ -105,6 +105,13 @@ func (d *DockerSandboxDriver) Provision(ctx context.Context, cfg WorkspaceConfig
 		ReadonlyRootfs: true,
 		Binds: []string{
 			fmt.Sprintf("forge-workspace-%s:%s", cfg.WorkspaceID, workspaceMountPath),
+			// Shared home-dir volume across ALL workspace containers.
+			// npm cache lives at /home/forge/.npm (set by forge-sandbox-node's
+			// NPM_CONFIG_CACHE env). Mounting the full /home/forge means the
+			// first install populates the cache; every subsequent workspace
+			// container reuses it — reducing `npm install` from ~2m to ~30s.
+			// npm writes atomically so concurrent containers are safe.
+			"forge-npm-cache:/home/forge",
 		},
 		Tmpfs: map[string]string{
 			"/tmp": "size=128m,mode=1777",
@@ -565,17 +572,18 @@ func (d *DockerSandboxDriver) CopyFile(ctx context.Context, containerID string, 
 // Filesystem layout for the validation container:
 //   /workspace        → existing workspace volume (read-write, contains the code)
 //   /tmp              → tmpfs 256m (build tools write temp files here)
-//   /home/forge       → tmpfs 512m (npm cache, pip cache, go module cache, etc.)
+//   /home/forge       → forge-npm-cache named volume (persists npm/pip/go caches
+//                       across validation runs — first run cold, subsequent warm)
 //   everything else   → read-only (rootfs from the sandbox image)
 //
-// Why /home/forge needs tmpfs:
+// Why /home/forge uses a persistent named volume (not tmpfs):
 //   - forge-sandbox-node sets NPM_CONFIG_CACHE=/home/forge/.npm
-//   - forge-sandbox-python pip installs to /home/forge/.local when run as forge
+//   - forge-sandbox-python pip installs to /home/forge/.local
 //   - forge-sandbox-go sets GOPATH=/home/forge/go
-//   All three toolchains write to /home/forge during their first run.
-//   Without a writable /home/forge the tools crash with permission errors,
-//   which manifest as exit code 254 (npm/pip startup failure) or exit code 1
-//   with a misleading "executable not found" error from the generic parser.
+//   Using a named volume means caches survive container destruction.
+//   First validation: cold npm install (~2min for CRA). Every subsequent
+//   validation against any repo: warm cache (~30s). npm writes atomically
+//   so concurrent containers sharing the volume are safe.
 func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg WorkspaceConfig, volumeName string) (*DriverInfo, error) {
 	containerName := fmt.Sprintf("forge-val-%s", cfg.WorkspaceID)
 
@@ -598,18 +606,25 @@ func (d *DockerSandboxDriver) ProvisionWithVolume(ctx context.Context, cfg Works
 			PidsLimit: &pidsLimit,
 		},
 		ReadonlyRootfs: true,
-		// Mount the EXISTING workspace volume (not a new one).
+		// Writable mounts required by the language toolchains.
+		//
+		// /tmp  — tmpfs: general scratch space (all tools, per-container, throwaway)
+		//
+		// /home/forge — shared named volume "forge-npm-cache" so npm/pip/go caches
+		// PERSIST across validation containers. Without this, every validation
+		// cold-downloads all packages from the registry (~2 min for a CRA repo).
+		// With the shared volume the first run populates the cache; every
+		// subsequent run hits it and finishes in ~15-30s — matching local speed.
+		//
+		// Safety: npm writes to its cache atomically (content-addressed tarballs).
+		// Multiple containers sharing the same directory is safe.
 		Binds: []string{
 			fmt.Sprintf("%s:%s", volumeName, workspaceMountPath),
+			// Shared npm/pip/go cache — persists across validation containers.
+			"forge-npm-cache:/home/forge",
 		},
-		// Writable tmpfs mounts required by the language toolchains:
-		//   /tmp            — general temp files (all tools)
-		//   /home/forge     — npm cache (node_npm_v1), pip cache (python_pip_v1),
-		//                     go module cache (go_default_v1), ruff cache, etc.
-		//                     MUST be writable or the toolchain cannot start.
 		Tmpfs: map[string]string{
-			"/tmp":        "size=256m,mode=1777",
-			"/home/forge": "size=512m,mode=0755,uid=1000,gid=1000",
+			"/tmp": "size=256m,mode=1777",
 		},
 		AutoRemove:  false,
 		SecurityOpt: []string{"no-new-privileges"},

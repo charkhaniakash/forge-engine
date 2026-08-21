@@ -28,6 +28,7 @@ import '@/services/api/workspaceApi'
 import '@/services/api/repairApi'
 import '@/services/api/publishingApi'
 import '@/services/api/workspaceEditorApi'
+import '@/services/api/llmApi'
 
 const reducer = {
   [baseApi.reducerPath]: baseApi.reducer,

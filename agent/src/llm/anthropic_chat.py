@@ -19,9 +19,12 @@ logger = structlog.get_logger()
 class AnthropicChatProvider:
     """Streams chat completions using the Anthropic API."""
 
-    def __init__(self) -> None:
-        self._client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        self._model = settings.chat.model
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        key = api_key if api_key is not None else settings.anthropic_api_key
+        if not key:
+            raise RuntimeError("Anthropic API key is not set. Add it in Settings → Models.")
+        self._client = anthropic.AsyncAnthropic(api_key=key)
+        self._model = model or settings.chat.model
 
     @property
     def model_name(self) -> str:

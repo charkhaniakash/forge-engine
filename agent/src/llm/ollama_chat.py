@@ -42,18 +42,18 @@ _DEFAULT_BASE_URL = "http://localhost:11434/v1"
 class OllamaChatProvider:
     """Streams chat completions from a locally-running Ollama instance."""
 
-    def __init__(self) -> None:
-        base_url = os.getenv("OLLAMA_BASE_URL", _DEFAULT_BASE_URL)
+    def __init__(self, api_key: str | None = None, model: str | None = None) -> None:
+        base_url = os.getenv("OLLAMA_BASE_URL", settings.ollama_base_url or _DEFAULT_BASE_URL)
         # Ensure the path ends with /v1 (Ollama's OpenAI-compat prefix).
         if not base_url.rstrip("/").endswith("/v1"):
             base_url = base_url.rstrip("/") + "/v1"
 
         # Ollama doesn't require a real API key; the SDK still needs a non-empty string.
         self._client = AsyncOpenAI(
-            api_key="ollama",
+            api_key=api_key or "ollama",
             base_url=base_url,
         )
-        self._model = settings.chat.model
+        self._model = model or settings.chat.model
         self._force_json_prompt: bool = (
             os.getenv("OLLAMA_FORCE_JSON_PROMPT", "false").lower() == "true"
         )

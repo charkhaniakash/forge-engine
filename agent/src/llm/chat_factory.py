@@ -1,67 +1,69 @@
 """
-Factory for the ChatProvider selected by CHAT__PROVIDER.
-
-The only place in the codebase that branches on the chat provider name.
-Adding a new provider: implement ChatProvider and add a case here.
+Factory for the ChatProvider selected by request-scoped credentials
+(or CHAT__PROVIDER as a local/dev fallback).
 """
 from __future__ import annotations
 
-from src.config import settings
 from src.llm.chat_provider import ChatProvider
+from src.llm.runtime import LLMRuntime, resolve_runtime
 
-# Module-level singleton — avoids recreating API clients (and their connection
-# pools) on every LLM call. Safe in asyncio (single-threaded event loop).
-_instance: ChatProvider | None = None
+# Env-based singleton only. Per-request BYOK instances are never cached.
+_env_instance: ChatProvider | None = None
+_env_fingerprint: str | None = None
 
 
 def get_chat_provider() -> ChatProvider:
-    """Return the shared ChatProvider instance for the configured CHAT__PROVIDER."""
-    global _instance
-    if _instance is not None:
-        return _instance
+    runtime = resolve_runtime()
+    if not runtime.provider:
+        raise RuntimeError(
+            "No LLM provider configured. Add an API key in Settings → Models, "
+            "or set CHAT__PROVIDER for local development."
+        )
+    return create_chat_provider(runtime)
 
-    provider = settings.chat.provider.lower()
+
+def create_chat_provider(runtime: LLMRuntime) -> ChatProvider:
+    provider = runtime.provider.lower()
+    model = runtime.model
+    api_key = runtime.api_key
 
     if provider == "openai":
         from src.llm.openai_chat import OpenAIChatProvider
-        _instance = OpenAIChatProvider()
+        return OpenAIChatProvider(api_key=api_key, model=model)
 
-    elif provider == "gemini":
+    if provider == "gemini":
         from src.llm.gemini_chat import GeminiChatProvider
-        _instance = GeminiChatProvider()
+        return GeminiChatProvider(api_key=api_key, model=model)
 
-    elif provider == "anthropic":
+    if provider == "anthropic":
         from src.llm.anthropic_chat import AnthropicChatProvider
-        _instance = AnthropicChatProvider()
+        return AnthropicChatProvider(api_key=api_key, model=model)
 
-    elif provider == "ollama":
+    if provider == "ollama":
         from src.llm.ollama_chat import OllamaChatProvider
-        _instance = OllamaChatProvider()
+        return OllamaChatProvider(model=model)
 
-    elif provider == "groq":
+    if provider == "groq":
         from src.llm.groq_chat import GroqChatProvider
-        _instance = GroqChatProvider()
+        return GroqChatProvider(api_key=api_key, model=model)
 
-    elif provider == "openrouter":
+    if provider == "openrouter":
         from src.llm.openrouter_chat import OpenRouterChatProvider
-        _instance = OpenRouterChatProvider()
+        return OpenRouterChatProvider(api_key=api_key, model=model)
 
-    elif provider == "tokenrouter":
+    if provider == "tokenrouter":
         from src.llm.tokenrouter_chat import TokenRouterChatProvider
-        _instance = TokenRouterChatProvider()
+        return TokenRouterChatProvider(api_key=api_key, model=model)
 
-    elif provider == "mistral":
+    if provider == "mistral":
         from src.llm.mistral_chat import MistralChatProvider
-        _instance = MistralChatProvider()
+        return MistralChatProvider(api_key=api_key, model=model)
 
-    elif provider == "cohere":
+    if provider == "cohere":
         from src.llm.cohere_chat import CohereChatProvider
-        _instance = CohereChatProvider()
+        return CohereChatProvider(api_key=api_key, model=model)
 
-    else:
-        raise ValueError(
-            f"Unknown CHAT__PROVIDER '{provider}'. "
-            "Supported values: openai, gemini, anthropic, ollama, groq, openrouter, tokenrouter, mistral, cohere"
-        )
-
-    return _instance
+    raise ValueError(
+        f"Unknown chat provider '{provider}'. "
+        "Supported: openai, gemini, anthropic, ollama, groq, openrouter, tokenrouter, mistral, cohere"
+    )

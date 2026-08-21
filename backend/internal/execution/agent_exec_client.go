@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
+	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
 )
 
@@ -90,6 +91,7 @@ func (c *AgentExecClient) ExecuteStep(
 	if traceID := ingestion.GetTraceID(ctx); traceID != "" {
 		httpReq.Header.Set("X-Trace-ID", traceID)
 	}
+	llmcreds.ApplyHeadersFromContext(ctx, httpReq)
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {

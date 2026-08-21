@@ -225,10 +225,11 @@ func (ps *PreviewService) runDevServer(ctx context.Context, session *PreviewSess
 		WorkingDir:     ".",
 		TimeoutSeconds: 0, // no timeout — runs until cancelled
 		Env: map[string]string{
-			// Root fs is read-only; point HOME/caches at the writable volume so
-			// the dev server (vite/webpack) can write its own caches.
-			"HOME":             "/workspace",
-			"NPM_CONFIG_CACHE": "/workspace/.forge-npm-cache",
+			// Root fs is read-only; override HOME for any tools that write to
+			// $HOME directly. NPM_CONFIG_CACHE is already set to /home/forge/.npm
+			// by the forge-sandbox-node Dockerfile and the volume mount makes it
+			// persistent — no need to override it here.
+			"HOME": "/workspace",
 		},
 	})
 	if err != nil {
@@ -407,8 +408,10 @@ func (ps *PreviewService) ensureDependencies(
 		WorkingDir:     ".",
 		TimeoutSeconds: 600,
 		Env: map[string]string{
-			"NPM_CONFIG_CACHE":  "/workspace/.forge-npm-cache",
-			"YARN_CACHE_FOLDER": "/workspace/.forge-yarn-cache",
+			// NPM_CONFIG_CACHE is already /home/forge/.npm via the Dockerfile ENV
+			// and the shared volume makes it persistent. Override HOME so that
+			// any tool that writes $HOME/... ends up in /workspace (writable).
+			"YARN_CACHE_FOLDER": "/home/forge/.yarn-cache",
 			"HOME":              "/workspace",
 		},
 	})

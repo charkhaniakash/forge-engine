@@ -287,7 +287,7 @@ func RegisterNodeProviders(r *Registry) {
 	r.Register(nodeTestRunnerProvider{id: "node.vitest", dep: "vitest",
 		command: localBin("vitest", "run")})
 	r.Register(nodeTestRunnerProvider{id: "node.reactscripts", dep: "react-scripts",
-		command: localBin("react-scripts", "test", "--watchAll=false")})
+		command: localBin("react-scripts", "test", "--watchAll=false", "--passWithNoTests")})
 	r.Register(nodeTestRunnerProvider{id: "node.mocha", dep: "mocha",
 		command: localBin("mocha")})
 }

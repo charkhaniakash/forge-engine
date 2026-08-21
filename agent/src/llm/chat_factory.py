@@ -50,10 +50,18 @@ def get_chat_provider() -> ChatProvider:
         from src.llm.tokenrouter_chat import TokenRouterChatProvider
         _instance = TokenRouterChatProvider()
 
+    elif provider == "mistral":
+        from src.llm.mistral_chat import MistralChatProvider
+        _instance = MistralChatProvider()
+
+    elif provider == "cohere":
+        from src.llm.cohere_chat import CohereChatProvider
+        _instance = CohereChatProvider()
+
     else:
         raise ValueError(
             f"Unknown CHAT__PROVIDER '{provider}'. "
-            "Supported values: openai, gemini, anthropic, ollama, groq, openrouter, tokenrouter"
+            "Supported values: openai, gemini, anthropic, ollama, groq, openrouter, tokenrouter, mistral, cohere"
         )
 
     return _instance

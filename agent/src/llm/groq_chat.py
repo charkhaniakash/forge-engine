@@ -10,9 +10,9 @@ a hosted service and DOES require an API key.
 Get a key at https://console.groq.com/keys and set GROQ_API_KEY.
 
 Recommended models for planning / code tasks (as of 2026):
-  llama-3.3-70b-versatile   — strong general model, good JSON adherence
+  qwen/qwen3.6-27b   — strong general model, good JSON adherence
   llama-3.1-8b-instant      — fastest, cheapest, weaker on strict schemas
-  openai/gpt-oss-120b       — high quality, larger context
+  qwen/qwen3.6-27b       — high quality, larger context
   qwen-2.5-coder-32b        — code-focused (if available on your account)
 
 JSON mode:
@@ -21,7 +21,7 @@ JSON mode:
 
 Configuration (via .env.local or environment):
   CHAT__PROVIDER=groq
-  CHAT__MODEL=llama-3.3-70b-versatile
+  CHAT__MODEL=qwen/qwen3.6-27b
   GROQ_API_KEY=gsk_...                       # required
   GROQ_BASE_URL=https://api.groq.com/openai/v1   # default; rarely changed
 """

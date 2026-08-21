@@ -131,8 +131,8 @@ services:
       # CHAT__MODEL: gpt-4o-mini
 
       # Groq (hosted, OpenAI-compatible). Set GROQ_API_KEY in agent/.env.local.
-      CHAT__PROVIDER: groq
-      CHAT__MODEL: llama-3.3-70b-versatile
+      # CHAT__PROVIDER: groq
+      # CHAT__MODEL: qwen/qwen3.6-27b
 
       # OpenRouter (OpenAI-compatible, supports many models including NVIDIA)
       # CHAT__PROVIDER: openrouter
@@ -142,6 +142,16 @@ services:
       # TokenRouter (OpenAI-compatible, supports various models)
       # CHAT__PROVIDER: tokenrouter
       # CHAT__MODEL: moonshotai/kimi-k3-free
+
+      # Mistral (OpenAI-compatible, supports various models)
+      # CHAT__PROVIDER: mistral
+      # CHAT__MODEL: mistral-medium-latest
+      # CHAT__MODEL: codestral-latest
+
+      # Cohere (native API, supports various models)
+      CHAT__PROVIDER: cohere
+      CHAT__MODEL: command-a-plus-05-2026
+      # CHAT__MODEL: command-r-plus-08-2024
 
       # Phase 4 — retrieval
       RETRIEVAL__CANDIDATE_K: 50
@@ -246,6 +256,10 @@ services:
 volumes:
   postgres_data:
   clone_storage:
+  # Shared npm cache across all workspace containers.
+  # Populated on first install; reused on every subsequent workspace.
+  # Reduces `npm install` time from ~2min (cold) to ~15-30s (warm cache).
+  forge-npm-cache:
 
 networks:
   forge-network:

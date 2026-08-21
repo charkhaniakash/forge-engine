@@ -108,8 +108,10 @@ export function TaskWorkspace() {
   const execLive = EXEC_LIVE.has(execution?.status ?? '')
   // Execution finished → the backend auto-triggers validation ~1s later. Used to
   // proactively connect the validation socket + poll for the run so the UI flips
-  // to "Validating" on its own (no manual refresh).
-  const execCompleted = execution?.status === 'completed'
+  // to "Validating" on its own (no manual refresh). Includes the
+  // "completed_with_deviations" status (a finished run that still validates).
+  const execCompleted =
+    execution?.status === 'completed' || execution?.status === 'completed_with_deviations'
 
   const { data: diffsData, refetch: refetchDiffs } = useGetExecutionDiffsQuery(
     { repoId, taskId },
@@ -128,6 +130,9 @@ export function TaskWorkspace() {
   // Validation finishing with a non-passed result auto-triggers a repair session
   // server-side — used to discover repair without a manual refresh.
   const valFailed = valRun?.overall_result != null && valRun.overall_result !== 'passed'
+  // Validation passing → in auto-run the backend auto-publishes; used to discover
+  // that publish session (and its PR url) without a refresh.
+  const valPassed = valRun?.overall_result === 'passed'
 
   const { data: repairSession, refetch: refetchRepair } = useGetRepairSessionByTaskQuery(taskExecutionId, {
     skip: !taskExecutionId,
@@ -167,6 +172,8 @@ export function TaskWorkspace() {
     publishSession != null &&
     ['completed', 'failed', 'cancelled'].includes(publishSession.status)
   const publishActive = publishSession != null && !publishTerminal
+  // The PR is fully materialized — used to stop the publish discovery poll.
+  const prReady = publishSession?.status === 'completed' && !!publishSession.pr_url
 
   // Optimistic live state — set to true immediately when a follow-up is sent,
   // so the UI shows "Forge is thinking..." before the poll picks up the new
@@ -294,12 +301,14 @@ export function TaskWorkspace() {
   // Discovery poll: the auto-triggered validation run is created ~1s after
   // execution completes. Poll briefly until it appears so the UI surfaces
   // "Validating" on its own; stops the moment the run exists (the socket then
-  // drives live stage updates). This is the belt to the socket's suspenders.
+  // drives live stage updates). `taskActive` bounds it — a run that made no
+  // changes (or failed) never validates and goes terminal, which stops the poll
+  // instead of hammering the endpoint forever.
   useEffect(() => {
-    if (!execCompleted || valRun) return
+    if (!execCompleted || valRun || !taskActive) return
     const id = setInterval(() => refetchVal(), 1500)
     return () => clearInterval(id)
-  }, [execCompleted, valRun, refetchVal])
+  }, [execCompleted, valRun, taskActive, refetchVal])
 
   const lastRepair = repairEvents[repairEvents.length - 1]?.event
   useEffect(() => {
@@ -334,6 +343,21 @@ export function TaskWorkspace() {
       refetchTask() // pick up final done / pr_url transition
     }
   }, [lastPub, pubEvents.length, refetchPublish, refetchTask])
+
+  // Discovery poll for the publish session + its PR url. Covers the auto-run case
+  // where the backend publishes automatically after validation passes — the
+  // frontend otherwise never discovers that session (the publish socket needs an
+  // id it never gets) and stays stuck on the "Proceed" gate until a manual refresh.
+  // Polls while a publish is running OR an auto-run publish is expected, and stops
+  // the instant the PR url is materialized or the publish reaches a terminal state.
+  useEffect(() => {
+    const publishExpected =
+      publishActive ||
+      (valPassed && (taskData?.autoRun ?? false) && diffs.length > 0 && !publishTerminal)
+    if (!publishExpected || prReady) return
+    const id = setInterval(() => refetchPublish(), 1500)
+    return () => clearInterval(id)
+  }, [publishActive, valPassed, taskData?.autoRun, diffs.length, publishTerminal, prReady, refetchPublish])
 
   // ── Normalize ──────────────────────────────────────────────────────────────
   const validationStages = useMemo(

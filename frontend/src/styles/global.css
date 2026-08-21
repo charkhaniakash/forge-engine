@@ -16,8 +16,8 @@
 
    shadcn/ui components use the semantic names below (bg-background, text-foreground,
    bg-primary, bg-muted, border-border, ring-ring…). We map each to a Forge token so
-   shadcn inherits dark-slate + green with zero per-component theming.
-   Brand green = `primary`. shadcn's `accent` = a subtle hover surface. */
+   shadcn inherits neutral dark + blue with zero per-component theming.
+   Brand blue = `primary`. shadcn's `accent` = a subtle hover surface. */
 @theme inline {
   /* ── shadcn semantic tokens → Forge tokens ── */
   --color-background: var(--surface-base);
@@ -251,4 +251,14 @@ input::placeholder {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ── Console page — minimal centered stage ───────────────────────────── */
+.console-page {
+  background: var(--surface-base);
+}
+
+.console-composer textarea {
+  field-sizing: content;
+  min-height: 72px;
 }

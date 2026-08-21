@@ -17,6 +17,8 @@ export { EmptyState } from './EmptyState/EmptyState'
 export { Icon } from './Icon/Icon'
 export type { IconName, IconProps } from './Icon/Icon'
 
+export { ForgeMark } from './ForgeMark/ForgeMark'
+
 export { Tabs } from './Tabs/Tabs'
 export type { TabItem, TabsProps } from './Tabs/Tabs'
 

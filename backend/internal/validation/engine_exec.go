@@ -217,8 +217,13 @@ func (p *persistObserver) OnStageComplete(stage engine.StageSpec, res engine.Sta
 	//     all tool outputs, and the engine's Origin classification is authoritative).
 	//   - Falls back to the engine's bare diagnostics when the parser is
 	//     unavailable, returns empty, or the context deadline expires.
+	//   - OutcomeNoTests is advisory (react-scripts exits 1 with no test files).
+	//     The stage is already marked passed — do NOT parse that output into
+	//     error diagnostics or the overall run becomes failed_repairable and
+	//     we skip publishing a green build.
 	var diags []AgentDiagnostic
-	needsParse := res.ExitCode != 0 || len(res.Diagnostics) > 0
+	needsParse := res.Outcome != engine.OutcomeNoTests &&
+		(res.ExitCode != 0 || len(res.Diagnostics) > 0)
 	if needsParse {
 		parseCtx, parseCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		parseResp, parseErr := p.o.parseClient.ParseStage(parseCtx, ParseStageRequest{

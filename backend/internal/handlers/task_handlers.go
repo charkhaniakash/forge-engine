@@ -16,7 +16,9 @@ import (
 	"github.com/charkhaniakash/forge-engine/backend/internal/ingestion"
 	"github.com/charkhaniakash/forge-engine/backend/internal/llmcreds"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
+	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
 
 // planTimeout is the maximum wall-clock time for a single planning call.
@@ -41,6 +43,9 @@ type TaskHandlers struct {
 	llm            *llmcreds.Service
 	jwtSecret      string
 	logger         *zap.SugaredLogger
+	wsRepo         *repository.WorkspaceRepository
+	wsManager      *workspace.WorkspaceManager
+	publishRepo    *publishing.Repository
 
 	// autoRunHook, when set, is invoked (in a goroutine) once a task's plan is
 	// ready AND the task is flagged auto_run. It performs the server-side
@@ -88,6 +93,12 @@ func NewTaskHandlers(
 
 func (h *TaskHandlers) SetLLM(svc *llmcreds.Service) {
 	h.llm = svc
+}
+
+func (h *TaskHandlers) SetWorkingTree(wsRepo *repository.WorkspaceRepository, wsManager *workspace.WorkspaceManager, publishRepo *publishing.Repository) {
+	h.wsRepo = wsRepo
+	h.wsManager = wsManager
+	h.publishRepo = publishRepo
 }
 
 // SetAutoRunHook wires the server-side auto-run sequence (approve → provision →
@@ -176,6 +187,7 @@ func (h *TaskHandlers) CreateTask(c *fiber.Ctx) error {
 		nil, // no prior plan for first-time planning
 		"",  // no refinement note
 		nil, // no history for initial planning
+		nil,
 	)
 
 	return c.Status(fiber.StatusCreated).JSON(item)
@@ -403,6 +415,7 @@ func (h *TaskHandlers) Replan(c *fiber.Ctx) error {
 		priorPlanBody,
 		"", // replan is a fresh cycle, not a refinement
 		nil, // no history for replan
+		h.collectWorkingTree(context.Background(), item.ID),
 	)
 
 	// Return the updated item (now in 'planning' status).
@@ -475,6 +488,7 @@ func (h *TaskHandlers) RefinePlan(c *fiber.Ctx) error {
 		priorPlanBody,
 		req.Note,
 		nil, // no history for plan refinement (uses refinement_note instead)
+		h.collectWorkingTree(context.Background(), item.ID),
 	)
 
 	item.Status = models.WorkItemStatusPlanning
@@ -593,6 +607,7 @@ func (h *TaskHandlers) FollowUp(c *fiber.Ctx) error {
 		priorPlanBody,
 		"", // no single refinement note — full history is passed instead
 		history,
+		h.collectWorkingTree(context.Background(), item.ID),
 	)
 
 	item.Status = models.WorkItemStatusPlanning
@@ -705,6 +720,27 @@ func (h *TaskHandlers) StreamWS(c *websocket.Conn) {
 	}
 }
 
+func (h *TaskHandlers) collectWorkingTree(ctx context.Context, workItemID string) []ingestion.WorkingFile {
+	if h.wsManager == nil || h.wsRepo == nil {
+		return nil
+	}
+	ws, err := h.wsRepo.GetByWorkItemID(ctx, workItemID)
+	if err != nil || ws == nil || ws.Status != models.WorkspaceStatusReady {
+		return nil
+	}
+	snaps, err := h.wsManager.SnapshotChangedFiles(ctx, ws.ID)
+	if err != nil || len(snaps) == 0 {
+		return nil
+	}
+	out := make([]ingestion.WorkingFile, 0, len(snaps))
+	for _, s := range snaps {
+		out = append(out, ingestion.WorkingFile{Path: s.Path, Content: s.Content})
+	}
+	h.logger.Infow("planning_working_tree_attached",
+		"work_item_id", workItemID, "files", len(out), "workspace_id", ws.ID)
+	return out
+}
+
 // ── Planning orchestration ────────────────────────────────────────────────────
 
 // runPlanning is called as a goroutine. It orchestrates the full planning call:
@@ -719,6 +755,7 @@ func (h *TaskHandlers) runPlanning(
 	priorPlanBody json.RawMessage,
 	refinementNote string,
 	history []ingestion.HistoryTurn,
+	workingTree []ingestion.WorkingFile,
 ) {
 	log := h.logger.With("task_id", taskID, "trace_id", traceID)
 
@@ -745,6 +782,7 @@ func (h *TaskHandlers) runPlanning(
 		PriorPlanBody:  priorPlanBody,
 		RefinementNote: refinementNote,
 		History:        history,
+		WorkingTree:    workingTree,
 		RequestID:      fmt.Sprintf("plan-%s", taskID[:8]),
 	}
 

@@ -597,10 +597,26 @@ func main() {
 						return
 					}
 
-					// Advisory (default): always finish in a publishable state —
-					// validation is advisory and must never block. The UI shows the
-					// advisory verdict + logs from the validation run itself.
-					log.Infow("validation_advisory_marking_done", "advisory_result", overallResult)
+					// Auto-repair ran (or validation already passed). Only mark done
+					// and auto-publish when the tree is green. Incomplete repair used
+					// to ForceToDone + open a PR with the remaining build error.
+					if !treeGreen {
+						log.Warnw("auto_publish_skipped_not_green", "overall_result", overallResult)
+						if bwGateway != nil {
+							bwGateway.Publish(workspaceID, browserworkspace.ChTimeline, "phase_completed", map[string]interface{}{
+								"phase": "publish", "status": "blocked", "reason": "validation still failing",
+							})
+							bwGateway.Publish(workspaceID, browserworkspace.ChCollaboration, "state_changed", map[string]interface{}{
+								"status": "failed", "message": "Validation still failing after repair",
+							})
+						}
+						if failErr := workItemRepo.TransitionToFailed(ctx, workItemID, "validation still failing; auto-publish skipped"); failErr != nil {
+							log.Warnw("failed_after_ungreen_validation", "error", failErr)
+						}
+						return
+					}
+
+					log.Infow("validation_green_marking_done", "overall_result", overallResult)
 					if doneErr := workItemRepo.ForceToDone(ctx, workItemID); doneErr != nil {
 						log.Errorw("force_to_done_failed", "error", doneErr)
 					}
@@ -681,7 +697,10 @@ func main() {
 					workItemRepo, wsRepo, wsManager, githubRepoRepo,
 					githubInstallationRepo, ingestionJobRepo, execRepo, execOrchestrator, sugar,
 				)
+				autoRunner.SetPublishRepo(publishingRepo)
 				taskHandlers.SetAutoRunHook(autoRunner.Run)
+				taskHandlers.SetWorkingTree(wsRepo, wsManager, publishingRepo)
+				workspaceHandlers.SetPublishRepo(publishingRepo)
 
 				// Phase 11: Forward planning events to EventStore for durable persistence.
 				// When a workspace exists for the task (follow-up scenarios), events

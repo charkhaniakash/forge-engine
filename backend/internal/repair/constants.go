@@ -9,5 +9,5 @@ const (
 	DefaultAgentVersion    = "repair_graph_v1"
 	DefaultModel           = "" // empty = let the agent use its own CHAT__MODEL config
 	DefaultTemperature     = 0.1
-	DefaultMaxTokens       = 4096
+	DefaultMaxTokens       = 16384
 )

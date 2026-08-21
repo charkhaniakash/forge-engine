@@ -198,6 +198,9 @@ class RepairPipeline:
                 args=pending["args"],
                 reasoning=pending.get("reasoning", ""),
             )
+            # Go's read_file result is {content, bytes} with no path. Stash the
+            # call args so receive_context_result can key the file cache.
+            tool_result["args"] = pending.get("args") or {}
 
             yield _ev("tool_result", request_id,
                       tool=tool_result["tool"],

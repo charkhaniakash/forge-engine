@@ -436,55 +436,28 @@ func (o *Orchestrator) Run(
 
 		case "improved":
 			log.Info("repair_improved_continuing")
-			// Check pause/cancel between repair attempts before continuing
-			if pauseChecker != nil && execID != "" {
-				if pauseChecker.IsCancelled(sessionCtx, execID) {
-					o.markCancelledFresh(session.ID, "cancelled_by_user")
-					return fmt.Errorf("execution cancelled by user")
-				}
-				if pauseChecker.IsPaused(sessionCtx, execID) {
-					o.publish(session.ID, "repair_paused", map[string]interface{}{"phase": "between_attempts"})
-					if cancelled := pauseChecker.WaitForResume(sessionCtx, execID); cancelled {
-						o.markCancelledFresh(session.ID, "cancelled_while_paused")
-						return fmt.Errorf("execution cancelled while paused")
-					}
-					o.publish(session.ID, "repair_resumed", nil)
-				}
+			if contErr := o.continueRepairIfBudget(sessionCtx, session, workItemID, execID, pauseChecker, postRepairRun, attemptNum, &currentDiags, log); contErr != nil {
+				return contErr
 			}
-
-			// Re-target the NEXT attempt at what STILL fails after this repair,
-			// instead of the original trigger diagnostics. Without this the agent
-			// is handed the same already-fixed errors every attempt, re-applies the
-			// same fix (a no-op write), and never addresses the remaining failure.
-			nextDecision := o.policy.Evaluate(postRepairRun)
-			if len(nextDecision.RepairableDiags) == 0 {
-				// Nothing left that we're allowed to auto-fix (e.g. the only
-				// remaining failure is non-repairable). Spinning another attempt
-				// would just repeat a no-op — escalate now.
-				log.Warnw("repair_no_repairable_diagnostics_remain_escalating",
-					"remaining_diagnostics", len(postRepairRun.Diagnostics))
-				reason := "no auto-fixable diagnostics remain after partial repair"
-				_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, reason)
-				_ = o.workItemRepo.TransitionToFailed(sessionCtx, workItemID, "repair escalated: "+reason)
-				o.publish(session.ID, "repair_escalated", map[string]interface{}{"reason": reason})
-				return fmt.Errorf("repair escalated: %s (after attempt %d)", reason, attemptNum)
-			}
-			currentDiags = nextDecision.RepairableDiags
-			log.Infow("repair_retargeted_next_attempt",
-				"attempt_number", attemptNum,
-				"remaining_repairable", len(currentDiags),
-			)
-			// Continue to next attempt
 
 		case "no_change":
-			log.Warn("repair_no_change_escalating")
-			reason := "repair strategy ineffective (no change)"
-			_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, reason)
-			_ = o.workItemRepo.TransitionToFailed(sessionCtx, workItemID, "repair escalated: no improvement")
-			o.publish(session.ID, "repair_escalated", map[string]interface{}{
-				"reason": reason,
-			})
-			return fmt.Errorf("repair escalated: no improvement after attempt %d", attemptNum)
+			// A no-op write is not proof the remaining error is unfixable.
+			// Attempt 1 often rewrites the file without applying the diagnosed
+			// one-line change. Retry with previous-attempt feedback until budget.
+			if attemptNum >= session.MaxAttempts {
+				log.Warn("repair_no_change_escalating")
+				reason := "repair strategy ineffective (no change)"
+				_ = o.repairRepo.MarkEscalated(sessionCtx, session.ID, reason)
+				_ = o.workItemRepo.TransitionToFailed(sessionCtx, workItemID, "repair escalated: no improvement")
+				o.publish(session.ID, "repair_escalated", map[string]interface{}{
+					"reason": reason,
+				})
+				return fmt.Errorf("repair escalated: no improvement after attempt %d", attemptNum)
+			}
+			log.Warnw("repair_no_change_retrying", "next_attempt", attemptNum+1)
+			if contErr := o.continueRepairIfBudget(sessionCtx, session, workItemID, execID, pauseChecker, postRepairRun, attemptNum, &currentDiags, log); contErr != nil {
+				return contErr
+			}
 
 		case "regressed":
 			log.Warn("repair_regressed_escalating")
@@ -517,6 +490,49 @@ func (o *Orchestrator) Run(
 	_ = o.repairRepo.MarkExhausted(sessionCtx, session.ID, lastValidationRunID)
 	_ = o.workItemRepo.TransitionToFailed(sessionCtx, workItemID, "repair budget exhausted (max attempts)")
 	return fmt.Errorf("repair budget exhausted after %d attempts", session.MaxAttempts)
+}
+
+func (o *Orchestrator) continueRepairIfBudget(
+	ctx context.Context,
+	session *models.RepairSession,
+	workItemID, execID string,
+	pauseChecker pipeline.PauseChecker,
+	postRepairRun *models.ValidationRun,
+	attemptNum int,
+	currentDiags *[]*models.ValidationDiagnostic,
+	log *zap.SugaredLogger,
+) error {
+	if pauseChecker != nil && execID != "" {
+		if pauseChecker.IsCancelled(ctx, execID) {
+			o.markCancelledFresh(session.ID, "cancelled_by_user")
+			return fmt.Errorf("execution cancelled by user")
+		}
+		if pauseChecker.IsPaused(ctx, execID) {
+			o.publish(session.ID, "repair_paused", map[string]interface{}{"phase": "between_attempts"})
+			if cancelled := pauseChecker.WaitForResume(ctx, execID); cancelled {
+				o.markCancelledFresh(session.ID, "cancelled_while_paused")
+				return fmt.Errorf("execution cancelled while paused")
+			}
+			o.publish(session.ID, "repair_resumed", nil)
+		}
+	}
+
+	nextDecision := o.policy.Evaluate(postRepairRun)
+	if len(nextDecision.RepairableDiags) == 0 {
+		log.Warnw("repair_no_repairable_diagnostics_remain_escalating",
+			"remaining_diagnostics", len(postRepairRun.Diagnostics))
+		reason := "no auto-fixable diagnostics remain after partial repair"
+		_ = o.repairRepo.MarkEscalated(ctx, session.ID, reason)
+		_ = o.workItemRepo.TransitionToFailed(ctx, workItemID, "repair escalated: "+reason)
+		o.publish(session.ID, "repair_escalated", map[string]interface{}{"reason": reason})
+		return fmt.Errorf("repair escalated: %s (after attempt %d)", reason, attemptNum)
+	}
+	*currentDiags = nextDecision.RepairableDiags
+	log.Infow("repair_retargeted_next_attempt",
+		"attempt_number", attemptNum,
+		"remaining_repairable", len(*currentDiags),
+	)
+	return nil
 }
 
 // RepairAttemptResult holds the structured output from one RepairGraph invocation.

@@ -43,6 +43,9 @@ Do not include any prose, markdown fences, or explanation outside the JSON.
 
 CRITICAL CONSTRAINT — CHECK EXISTING CODE BEFORE CREATING STEPS:
 The code context below contains the ACTUAL current state of the repository.
+If a WORKING TREE section is present, it is the live workspace AFTER the previous
+mission (including the last PR). It OVERRIDES any older indexed snippets.
+Before creating any step, check whether the change already exists.
 Before creating any step, check whether the change already exists in the code context.
 
 Rules for step inclusion:
@@ -142,7 +145,7 @@ class ImplementationPlanner:
 
         context_block = _build_context_block(context)
         user_message = _build_user_message(
-            req.intent, context_block, prior_plan, req.refinement_note
+            req.intent, context_block, prior_plan, req.refinement_note, req.working_tree
         )
 
         yield "Generating implementation plan..."
@@ -310,8 +313,23 @@ def _build_user_message(
     context_block: str,
     prior_plan: PlanBody | None,
     refinement_note: str | None = None,
+    working_tree: list | None = None,
 ) -> str:
     parts = [f"Intent: {intent}"]
+
+    if working_tree:
+        overlay = []
+        for f in working_tree:
+            path = getattr(f, "path", None) or (f.get("path") if isinstance(f, dict) else "")
+            content = getattr(f, "content", None) or (f.get("content") if isinstance(f, dict) else "")
+            if path and content:
+                overlay.append(f"// LIVE FILE (after previous mission): {path}\n```\n{content}\n```")
+        if overlay:
+            parts.append(
+                "\nWORKING TREE — this is the current code on the mission branch / workspace. "
+                "Indexed snippets below may be STALE. Prefer this tree.\n\n"
+                + "\n\n".join(overlay)
+            )
 
     if context_block:
         parts.append(

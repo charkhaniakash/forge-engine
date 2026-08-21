@@ -9,6 +9,7 @@ import (
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/execution"
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
@@ -48,6 +49,7 @@ type AutoRunner struct {
 	jobRepo      *repository.IngestionJobRepository
 	execRepo     *repository.ExecutionRepository
 	orchestrator *execution.ExecutionOrchestrator
+	publishRepo  *publishing.Repository
 	logger       *zap.SugaredLogger
 }
 
@@ -73,6 +75,10 @@ func NewAutoRunner(
 		orchestrator: orchestrator,
 		logger:       logger,
 	}
+}
+
+func (a *AutoRunner) SetPublishRepo(repo *publishing.Repository) {
+	a.publishRepo = repo
 }
 
 // Run drives an approved-less task from plan_ready straight through execution.
@@ -110,8 +116,19 @@ func (a *AutoRunner) Run(taskID string) {
 		return
 	}
 
-	ws, err := a.wsManager.Provision(
-		ctx, item.ID, repo.ID, repo.RepoFullName, doneJob.CommitSHA, installation.GitHubInstallationID,
+	branchName, branchHead := "", ""
+	if a.publishRepo != nil {
+		if b, bErr := a.publishRepo.GetBranchForWorkItem(ctx, item.ID); bErr == nil && b != nil {
+			branchName = b.BranchName
+			if b.HeadCommitSHA != nil {
+				branchHead = *b.HeadCommitSHA
+			}
+		}
+	}
+
+	ws, err := a.wsManager.ReuseOrProvision(
+		ctx, item.ID, repo.ID, repo.RepoFullName, doneJob.CommitSHA,
+		branchName, branchHead, installation.GitHubInstallationID,
 	)
 	if err != nil {
 		log.Errorw("auto_run_provision_failed", "error", err)

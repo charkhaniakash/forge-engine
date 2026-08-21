@@ -160,6 +160,7 @@ def build_repair_graph(
             "call_tool_fix":   "call_tool_fix",
             "apply_fix":       "apply_fix",
             "complete_repair": "complete_repair",
+            "escalate_repair": "escalate_repair",
         },
     )
     graph.add_edge("call_tool_fix", "receive_fix_result")
@@ -167,9 +168,10 @@ def build_repair_graph(
         "receive_fix_result",
         nodes.route_apply_loop,
         {
-            "call_tool_fix":   "call_tool_fix",   # shouldn't happen but safe
+            "call_tool_fix":   "call_tool_fix",
             "apply_fix":       "apply_fix",
             "complete_repair": "complete_repair",
+            "escalate_repair": "escalate_repair",
         },
     )
 

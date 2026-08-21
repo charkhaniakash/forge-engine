@@ -231,7 +231,7 @@ func worseVerdict(current, stage Outcome) Outcome {
 // records. Passed / Cached / Unsupported / Skipped carry no signal.
 func repairSignalFor(sr StageResult) (RepairSignal, bool) {
 	switch sr.Outcome {
-	case OutcomeFailed, OutcomeInfraError, OutcomeMisconfigured, OutcomeNoTests:
+	case OutcomeFailed, OutcomeInfraError, OutcomeMisconfigured:
 		return RepairSignal{
 			Capability:  sr.Capability,
 			Outcome:     sr.Outcome,

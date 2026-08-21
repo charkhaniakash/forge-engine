@@ -98,6 +98,26 @@ func TestExecute_NoTestsIsNotFailure(t *testing.T) {
 	if res.Verdict != OutcomePassed {
 		t.Fatalf("no-tests must not fail the verdict, got %s", res.Verdict)
 	}
+	if len(res.RepairSignals) != 0 {
+		t.Fatalf("no-tests must not emit repair signals, got %+v", res.RepairSignals)
+	}
+}
+
+func TestExecute_NoTestsExit1IsNotFailure(t *testing.T) {
+	plan := planWith(supported(CapInstall), supported(CapTest, CapInstall))
+	runner := &fakeRunner{results: map[Capability]CommandResult{
+		CapTest: {ExitCode: 1, Stdout: "No tests found related to files changed since last commit.\n"},
+	}}
+	res := Execute(context.Background(), plan, runner, Options{})
+	if outcomeOf(res, CapTest) != OutcomeNoTests {
+		t.Fatalf("expected NoTests, got %s", outcomeOf(res, CapTest))
+	}
+	if res.Verdict != OutcomePassed {
+		t.Fatalf("react-scripts exit 1 with no tests must not fail the verdict, got %s", res.Verdict)
+	}
+	if len(res.RepairSignals) != 0 {
+		t.Fatalf("no-tests must not emit repair signals, got %+v", res.RepairSignals)
+	}
 }
 
 func TestExecute_MisconfiguredAndUnsupportedNeverRun(t *testing.T) {

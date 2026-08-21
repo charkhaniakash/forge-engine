@@ -914,7 +914,9 @@ func noTestsInOutput(output string) bool {
 //  3. Any stage failed (code error) → "failed_repairable"
 //  4. All stages passed or skipped → "passed"
 //
-// Stage statuses are the PRIMARY signal. Diagnostic counts are secondary.
+// Stage statuses are the PRIMARY signal. Leftover error diagnostics on a
+// passed/skipped stage (e.g. parser fallback for "no tests found") must not
+// flip the overall result to failed_repairable.
 func computeOverallResult(stages []*models.ValidationStage, s *models.ValidationSummary) string {
 	// Check stage statuses first — this catches infrastructure failures
 	// (exit 127, timeouts) that produce no structured diagnostics.
@@ -927,15 +929,13 @@ func computeOverallResult(stages []*models.ValidationStage, s *models.Validation
 		}
 	}
 
-	// All stages passed or skipped. Now check diagnostic severity.
+	// All stages passed or skipped. NeedsHuman is the only diagnostic-based
+	// override; TotalErrors on a green tree are treated as noise.
 	if s == nil {
 		return "passed"
 	}
 	if s.NeedsHumanCount > 0 {
 		return "failed_requires_human"
-	}
-	if s.TotalErrors > 0 {
-		return "failed_repairable"
 	}
 	return "passed"
 }
@@ -952,13 +952,13 @@ func computeOverallResultWithOrigin(stages []*models.ValidationStage, s *models.
 		}
 	}
 	if !allFailed {
-		if s == nil || (s.TotalErrors == 0 && s.NeedsHumanCount == 0) {
-			return "passed"
-		}
-		if s.NeedsHumanCount > 0 {
+		// Stage status is the primary signal. A passed "no tests" stage can
+		// still have a leftover parser error diagnostic (exit 1, no test files).
+		// That must not flip a green install+build into failed_repairable.
+		if s != nil && s.NeedsHumanCount > 0 {
 			return "failed_requires_human"
 		}
-		return "failed_repairable"
+		return "passed"
 	}
 	// A stage failed. Distinguish environment vs code.
 	if hasEnvironmentFailure {

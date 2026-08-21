@@ -9,6 +9,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/charkhaniakash/forge-engine/backend/internal/models"
+	"github.com/charkhaniakash/forge-engine/backend/internal/publishing"
 	"github.com/charkhaniakash/forge-engine/backend/internal/repository"
 	"github.com/charkhaniakash/forge-engine/backend/internal/workspace"
 )
@@ -25,6 +26,7 @@ type WorkspaceHandlers struct {
 	repoRepo     *repository.GitHubRepoRepository
 	installRepo  *repository.GitHubInstallationRepository
 	jobRepo      *repository.IngestionJobRepository
+	publishRepo  *publishing.Repository
 	logger       *zap.SugaredLogger
 }
 
@@ -47,6 +49,10 @@ func NewWorkspaceHandlers(
 		jobRepo:      jobRepo,
 		logger:       logger,
 	}
+}
+
+func (h *WorkspaceHandlers) SetPublishRepo(repo *publishing.Repository) {
+	h.publishRepo = repo
 }
 
 // ── POST /v1/repos/:repoID/tasks/:taskID/workspace ────────────────────────────
@@ -104,12 +110,24 @@ func (h *WorkspaceHandlers) ProvisionWorkspace(c *fiber.Ctx) error {
 		"task_id", taskID, "repo_id", repoID,
 		"commit_sha", commitSHA[:8], "trace_id", traceID)
 
-	ws, err := h.manager.Provision(
+	branchName, branchHead := "", ""
+	if h.publishRepo != nil {
+		if b, bErr := h.publishRepo.GetBranchForWorkItem(ctx, item.ID); bErr == nil && b != nil {
+			branchName = b.BranchName
+			if b.HeadCommitSHA != nil {
+				branchHead = *b.HeadCommitSHA
+			}
+		}
+	}
+
+	ws, err := h.manager.ReuseOrProvision(
 		ctx,
 		item.ID,
 		repo.ID,
 		repo.RepoFullName,
 		commitSHA,
+		branchName,
+		branchHead,
 		installation.GitHubInstallationID,
 	)
 	if err != nil {

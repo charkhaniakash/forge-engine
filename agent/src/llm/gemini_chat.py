@@ -52,6 +52,9 @@ class GeminiChatProvider:
         gen_config: dict[str, Any] = {}
         if response_format and response_format.get("type") == "json_object":
             gen_config["response_mime_type"] = "application/json"
+        max_tokens = payload.get("max_tokens") if isinstance(payload, dict) else None
+        if max_tokens:
+            gen_config["max_output_tokens"] = int(max_tokens)
 
         # Retry logic for connection errors
         last_error = None

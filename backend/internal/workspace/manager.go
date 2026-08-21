@@ -227,6 +227,154 @@ func (m *WorkspaceManager) provision(
 	return nil
 }
 
+// FileSnapshot is a workspace file as it currently exists on disk (post-mission).
+type FileSnapshot struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
+}
+
+const (
+	maxOverlayFiles = 40
+	maxOverlayBytes = 100_000
+)
+
+// ReuseOrProvision returns a ready workspace with the latest mission code.
+// Follow-ups must not re-clone the original indexed SHA — that discards the
+// previous PR/workspace and the agent re-discovers the same bugs.
+func (m *WorkspaceManager) ReuseOrProvision(
+	ctx context.Context,
+	workItemID, repoID, repoFullName, fallbackSHA, branchName, branchHeadSHA string,
+	installationID int64,
+) (*models.Workspace, error) {
+	existing, err := m.wsRepo.GetByWorkItemID(ctx, workItemID)
+	if err == nil && existing != nil &&
+		existing.Status == models.WorkspaceStatusReady &&
+		existing.ContainerID != nil {
+		ping, pingErr := m.execAndLog(ctx, existing.ID, *existing.ContainerID, ExecRequest{
+			Command:        []string{"git", "-C", "/workspace", "rev-parse", "--is-inside-work-tree"},
+			TimeoutSeconds: 15,
+			User:           "forge",
+		}, m.logger.With("workspace_id", existing.ID))
+		if pingErr == nil && ping != nil && ping.ExitCode == 0 {
+			m.logger.Infow("reusing_existing_workspace",
+				"workspace_id", existing.ID, "work_item_id", workItemID)
+			return existing, nil
+		}
+		m.logger.Warnw("existing_workspace_unusable_reprovisioning",
+			"workspace_id", existing.ID, "error", pingErr)
+	}
+
+	commit := fallbackSHA
+	if branchHeadSHA != "" {
+		commit = branchHeadSHA
+	}
+	ws, err := m.Provision(ctx, workItemID, repoID, repoFullName, commit, installationID)
+	if err != nil && commit != fallbackSHA && fallbackSHA != "" {
+		m.logger.Warnw("provision_branch_head_failed_falling_back",
+			"head", commit[:min(8, len(commit))], "error", err)
+		ws, err = m.Provision(ctx, workItemID, repoID, repoFullName, fallbackSHA, installationID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if branchName != "" {
+		if coErr := m.CheckoutRemoteBranch(ctx, ws.ID, branchName); coErr != nil {
+			m.logger.Warnw("checkout_mission_branch_failed",
+				"branch", branchName, "error", coErr)
+		}
+	}
+	return ws, nil
+}
+
+// CheckoutRemoteBranch fetches a previously pushed forge branch and checks it out.
+func (m *WorkspaceManager) CheckoutRemoteBranch(ctx context.Context, workspaceID, branchName string) error {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return fmt.Errorf("workspace not ready: %w", err)
+	}
+	log := m.logger.With("workspace_id", workspaceID, "branch", branchName)
+	fetch, err := m.execAndLog(ctx, ws.ID, *ws.ContainerID, ExecRequest{
+		Command: []string{
+			"git", "-C", "/workspace", "fetch", "origin",
+			"+refs/heads/" + branchName + ":refs/remotes/origin/" + branchName,
+			"--depth=1",
+		},
+		TimeoutSeconds: 60,
+		User:           "forge",
+	}, log)
+	if err != nil {
+		return fmt.Errorf("fetch branch: %w", err)
+	}
+	if fetch.ExitCode != 0 {
+		return fmt.Errorf("fetch branch failed: %s", fetch.Stderr)
+	}
+	co, err := m.execAndLog(ctx, ws.ID, *ws.ContainerID, ExecRequest{
+		Command: []string{
+			"git", "-C", "/workspace", "checkout", "-B", branchName,
+			"origin/" + branchName,
+		},
+		TimeoutSeconds: 30,
+		User:           "forge",
+	}, log)
+	if err != nil {
+		return fmt.Errorf("checkout branch: %w", err)
+	}
+	if co.ExitCode != 0 {
+		return fmt.Errorf("checkout branch failed: %s", co.Stderr)
+	}
+	log.Infow("checked_out_mission_branch")
+	return nil
+}
+
+// SnapshotChangedFiles returns the current contents of files that differ from
+// the SHA the workspace was originally cloned at (plus uncommitted files).
+func (m *WorkspaceManager) SnapshotChangedFiles(ctx context.Context, workspaceID string) ([]FileSnapshot, error) {
+	ws, err := m.wsRepo.GetByID(ctx, workspaceID)
+	if err != nil || ws.ContainerID == nil {
+		return nil, fmt.Errorf("workspace not ready: %w", err)
+	}
+	log := m.logger.With("workspace_id", workspaceID)
+	names := map[string]struct{}{}
+	collect := func(cmd []string) {
+		res, e := m.execAndLog(ctx, ws.ID, *ws.ContainerID, ExecRequest{
+			Command: cmd, TimeoutSeconds: 30, User: "forge",
+		}, log)
+		if e != nil || res == nil || res.ExitCode != 0 {
+			return
+		}
+		for _, line := range strings.Split(res.Stdout, "\n") {
+			p := strings.TrimSpace(line)
+			if p == "" || strings.HasPrefix(p, ".git/") {
+				continue
+			}
+			names[p] = struct{}{}
+		}
+	}
+	if ws.CommitSHA != "" {
+		collect([]string{"git", "-C", "/workspace", "diff", "--name-only", ws.CommitSHA})
+	}
+	collect([]string{"git", "-C", "/workspace", "diff", "--name-only"})
+	collect([]string{"git", "-C", "/workspace", "diff", "--name-only", "--cached"})
+	collect([]string{"git", "-C", "/workspace", "ls-files", "--others", "--exclude-standard"})
+	collect([]string{"git", "-C", "/workspace", "diff", "--name-only", "HEAD~1"})
+
+	out := make([]FileSnapshot, 0, len(names))
+	for path := range names {
+		if len(out) >= maxOverlayFiles {
+			break
+		}
+		data, readErr := m.ReadFile(ctx, workspaceID, path)
+		if readErr != nil || len(data) == 0 {
+			continue
+		}
+		if len(data) > maxOverlayBytes {
+			data = data[:maxOverlayBytes]
+		}
+		out = append(out, FileSnapshot{Path: path, Content: string(data)})
+	}
+	return out, nil
+}
+
 // Exec runs a command inside a ready workspace and streams ExecutionEvents.
 // The caller is responsible for draining the returned channel.
 // Execution is logged to execution_logs automatically.

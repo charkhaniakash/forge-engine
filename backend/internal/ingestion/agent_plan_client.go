@@ -22,7 +22,14 @@ type PlanRequest struct {
 	PriorPlanBody   json.RawMessage `json:"prior_plan_body,omitempty"`  // JSON of previous plan for re-plans (raw JSON, not base64)
 	RefinementNote  string          `json:"refinement_note,omitempty"`  // user follow-up to refine the prior plan (Tier 1)
 	History         []HistoryTurn   `json:"history,omitempty"`          // accumulated chat history for follow-ups
+	WorkingTree     []WorkingFile   `json:"working_tree,omitempty"`     // current files after the previous mission
 	RequestID       string          `json:"request_id"`
+}
+
+// WorkingFile is a file from the live workspace / last PR, not the stale index.
+type WorkingFile struct {
+	Path    string `json:"path"`
+	Content string `json:"content"`
 }
 
 // HistoryTurn is a single message in the mission chat history passed to the agent.

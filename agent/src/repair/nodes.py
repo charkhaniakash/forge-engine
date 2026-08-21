@@ -67,9 +67,10 @@ async def _call_llm(messages: list[dict], ctx, request_tag: str) -> str:
 
     model_override = getattr(ctx, "model", None) or None
 
+    max_tokens = getattr(ctx, "max_tokens", None) or 16384
     async for event in provider.stream(
         messages=messages,
-        payload={},
+        payload={"max_tokens": max_tokens},
         request_id=f"repair-{ctx.repair_session_id[:8]}-{request_tag}",
         response_format={"type": "json_object"},
         model=model_override,
@@ -278,6 +279,26 @@ Repair rules:
   "dependency", "environment", "configuration" groups cannot be fixed by editing code.
   If repair_scope is "too_large", treat the group as non-repairable.
 
+CRITICAL CLASSIFICATION RULES:
+  Each diagnostic carries a "repair_category" field set by the validation parser.
+  Use it as a strong signal:
+    auto_fixable         → classify as code_error (high confidence)
+    environment_limitation → classify as environment (do NOT attempt code repair)
+
+  These errors are ALWAYS code_error (classify with 0.9+ confidence):
+    - "Module not found" / "Cannot resolve" / "Can't resolve" — wrong import path
+    - SyntaxError, ReferenceError, TypeError — code bugs
+    - ESLint / Prettier violations — formatting or code issues
+    - Test assertion failures — logic bugs
+
+  These are NEVER the cause of a build failure (treat as informational noise):
+    - "Browserslist: browsers data (caniuse-lite) is N months old" — advisory warning, not an error
+    - "WARNING: audit" / "WARN" lines before "Failed to compile" — npm advisories
+    - Deprecation warnings that do not cause exit code != 0
+  Do NOT classify a diagnostic as environment just because a browserslist or
+  deprecation warning appears in the build output. Focus on the ACTUAL error
+  that caused the non-zero exit code.
+
 Confidence guide:
   0.9+ — obvious syntactic/type error with a clear fix
   0.7   — logic error with a likely fix
@@ -317,13 +338,15 @@ STRICT CONSTRAINTS:
 - NEVER disable linting rules or add suppression comments
 - NEVER change build configuration to bypass failures
 - NEVER add TODO placeholders
-- Output ONLY complete file content for files that must change
+- Prefer a surgical replace (old_string/new_string) over rewriting the whole file.
+- old_string MUST match the file EXACTLY (including whitespace) and appear once.
+- Only use full-file "content" when a surgical replace is not possible.
 
 Respond with JSON:
 {
   "edits": [
-    {"path": "relative/path/to/file.ext", "content": "<complete new file content>"},
-    ...
+    {"path": "relative/path/to/file.ext", "old_string": "<exact snippet to replace>", "new_string": "<replacement>"},
+    {"path": "other/file.ext", "content": "<complete new file content only if rewrite is required>"}
   ],
   "explanation": "<one sentence describing the change>"
 }
@@ -456,9 +479,16 @@ async def receive_context_result(state: dict) -> dict:
 
     if success:
         if tool == "read_file":
-            path = data.get("path") or result.get("args", {}).get("path", "")
+            args = result.get("args") or {}
+            path = (
+                data.get("path")
+                or args.get("path")
+                or ""
+            )
+            path = _strip_workspace_prefix(path) if path else ""
             content = data.get("content", "")
-            file_cache[path] = content
+            if path:
+                file_cache[path] = content
             retrieved_context.append({
                 "type": "file",
                 "path": path,
@@ -760,8 +790,10 @@ async def generate_fix(state: dict) -> dict:
     retrieved_context = state.get("retrieved_context") or []
     root_cause = state.get("root_cause", "")
     strategy = state.get("strategy", "targeted_fix")
+    previous_attempts = state.get("previous_attempt_summaries") or []
+    file_cache: dict = dict(state.get("_file_cache") or {})
 
-    context_block = _format_context_for_llm(retrieved_context)
+    context_block = _format_files_for_fix(file_cache, retrieved_context)
     diag_text = _format_diagnostics(diagnostics)
     diag_paths = _extract_diagnostic_paths(diagnostics)
     paths_hint = ""
@@ -772,6 +804,15 @@ async def generate_fix(state: dict) -> dict:
             + "\n  ".join(diag_paths)
             + "\n\n"
         )
+    prev_text = _format_previous_attempts(previous_attempts)
+    prev_block = ""
+    if prev_text:
+        prev_block = (
+            "Previous repair attempts did NOT change the remaining error. "
+            "Do not repeat the same rewrite. Use a surgical old_string/new_string "
+            "edit that removes the exact failing syntax.\n"
+            f"{prev_text}\n\n"
+        )
 
     messages = [
         {"role": "system", "content": _GENERATE_FIX_SYSTEM},
@@ -780,6 +821,7 @@ async def generate_fix(state: dict) -> dict:
             f"Root cause: {root_cause}\n\n"
             f"Diagnostics:\n{diag_text}\n\n"
             + paths_hint
+            + prev_block
             + f"Repository context:\n{context_block}\n\n"
             "Generate the minimal edit plan to fix this."
         )},
@@ -808,8 +850,8 @@ async def generate_fix(state: dict) -> dict:
             feedback = (
                 f"Your previous response was not usable: {last_attempt_reason}. "
                 "Please respond with a valid JSON object containing an 'edits' array. "
-                "Each edit MUST have 'path' (relative to workspace root, e.g. 'src/App.tsx') "
-                "and 'content' (the complete new file content as a string). "
+                "Each edit MUST have 'path' and either "
+                "'old_string'+'new_string' (preferred) or 'content' (full file). "
                 "Do not return an empty edits array."
             )
             active_messages = active_messages + [
@@ -836,11 +878,19 @@ async def generate_fix(state: dict) -> dict:
         # Validate edits — must have path and content — and normalize each path
         # to be workspace-relative so apply_fix, receive_fix_result, and
         # modified_files all carry clean paths.
-        valid_edits = [
-            {**e, "path": _strip_workspace_prefix(e["path"])}
-            for e in edits
-            if isinstance(e, dict) and e.get("path") and e.get("content") is not None
-        ]
+        valid_edits = []
+        for e in edits:
+            if not isinstance(e, dict) or not e.get("path"):
+                continue
+            path = _strip_workspace_prefix(e["path"])
+            if e.get("old_string"):
+                valid_edits.append({
+                    "path": path,
+                    "old_string": e.get("old_string"),
+                    "new_string": e.get("new_string") or "",
+                })
+            elif e.get("content") is not None:
+                valid_edits.append({"path": path, "content": e["content"]})
 
         if valid_edits:
             break  # Got real edits — exit retry loop
@@ -886,22 +936,58 @@ async def apply_fix(state: dict) -> dict:
         return {"_pending_tool_call": None}
 
     edit = edit_plan[apply_index]
-    path = edit["path"]
-    content = edit["content"]
+    path = _strip_workspace_prefix(edit["path"])
+    content = edit.get("content")
+    old_string = edit.get("old_string")
+    new_string = edit.get("new_string") if edit.get("new_string") is not None else ""
 
-    # Check if file exists to decide write_file vs create_file
-    # We use write_file as default; Go handles create-or-overwrite at the workspace layer
+    if old_string:
+        file_cache: dict = dict(state.get("_file_cache") or {})
+        current = _lookup_file_cache(file_cache, path)
+        if current is None:
+            logger.warning("apply_fix_cache_miss", path=path)
+            return {
+                "cannot_repair": True,
+                "cannot_repair_reason": (
+                    f"Cannot apply surgical edit to {path}: file was not read into cache"
+                ),
+                "_pending_tool_call": None,
+            }
+        if old_string not in current:
+            logger.warning("apply_fix_old_string_missing", path=path)
+            return {
+                "cannot_repair": True,
+                "cannot_repair_reason": (
+                    f"old_string not found in {path} — refusing a guessed full-file rewrite"
+                ),
+                "_pending_tool_call": None,
+            }
+        content = current.replace(old_string, new_string, 1)
+
+    if content is None:
+        return {
+            "cannot_repair": True,
+            "cannot_repair_reason": f"Edit for {path} has neither content nor old_string",
+            "_pending_tool_call": None,
+        }
+
     tool = "write_file"
 
     logger.info("apply_fix_enqueue", path=path, edit_index=apply_index)
 
+    updated_plan = list(edit_plan)
+    updated = dict(edit)
+    updated["path"] = path
+    updated["content"] = content
+    updated_plan[apply_index] = updated
+
     return {
+        "edit_plan": updated_plan,
         "_pending_tool_call": {
             "tool": tool,
             "args": {"path": path, "content": content},
             "reasoning": f"Applying fix edit {apply_index + 1}/{len(edit_plan)}: {path}",
         },
-        # _apply_index is advanced by receive_fix_result after tool completes
     }
 
 
@@ -933,7 +1019,20 @@ async def receive_fix_result(state: dict) -> dict:
     if success:
         if path and path not in modified_files:
             modified_files.append(path)
+        file_cache = dict(state.get("_file_cache") or {})
+        if apply_index < len(edit_plan):
+            written = edit_plan[apply_index].get("content")
+            if path and written is not None:
+                file_cache[_strip_workspace_prefix(path)] = written
         logger.info("apply_fix_write_ok", path=path)
+        return {
+            "modified_files": modified_files,
+            "confidence": confidence,
+            "_apply_index": apply_index + 1,
+            "_pending_tool_call": None,
+            "_last_tool_result": None,
+            "_file_cache": file_cache,
+        }
     else:
         # Lower confidence on write failure
         confidence = max(0.0, confidence - 0.15)
@@ -1073,7 +1172,9 @@ def _format_diagnostics(diagnostics: list) -> str:
         sev = d.get("severity", "error")
         msg = d.get("message", "")
         path = d.get("file_path", "")
-        parts.append(f"  {path}:{line} [{sev}] {msg}")
+        repair_cat = d.get("repair_category", "")
+        cat_tag = f" [repair:{repair_cat}]" if repair_cat and repair_cat != "unknown" else ""
+        parts.append(f"  {path}:{line} [{sev}]{cat_tag} {msg}")
     return "\n".join(parts) if parts else "(none)"
 
 
@@ -1086,7 +1187,9 @@ def _format_diagnostics_indexed(diagnostics: list) -> str:
         msg = d.get("message", "")
         path = d.get("file_path", "")
         stage = d.get("stage", "")
-        parts.append(f"  [{i}] {stage} {path}:{line} [{sev}] {msg}")
+        repair_cat = d.get("repair_category", "")
+        cat_tag = f" [repair:{repair_cat}]" if repair_cat and repair_cat != "unknown" else ""
+        parts.append(f"  [{i}] {stage} {path}:{line} [{sev}]{cat_tag} {msg}")
     return "\n".join(parts) if parts else "(none)"
 
 
@@ -1113,6 +1216,40 @@ def _format_context_for_llm(retrieved_context: list) -> str:
     return "\n\n".join(parts) if parts else "(no context yet)"
 
 
+def _lookup_file_cache(file_cache: dict, path: str) -> str | None:
+    if not path:
+        return None
+    want = _strip_workspace_prefix(path)
+    if want in file_cache:
+        return file_cache[want]
+    for key, value in file_cache.items():
+        if _strip_workspace_prefix(key) == want:
+            return value
+    return None
+
+
+def _format_files_for_fix(file_cache: dict, retrieved_context: list) -> str:
+    """Full file contents for generate_fix — do not truncate, the LLM must match exact snippets."""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for path, content in file_cache.items():
+        clean = _strip_workspace_prefix(path) if path else ""
+        if not clean or not content:
+            continue
+        seen.add(clean)
+        parts.append(f"// File: {clean}\n```\n{content}\n```")
+    for entry in retrieved_context:
+        if entry.get("type") != "file":
+            continue
+        path = _strip_workspace_prefix(entry.get("path") or "")
+        content = entry.get("content") or ""
+        if not path or path in seen or not content:
+            continue
+        seen.add(path)
+        parts.append(f"// File: {path}\n```\n{content}\n```")
+    return "\n\n".join(parts) if parts else "(no file contents in cache)"
+
+
 def _format_previous_attempts(previous_attempts: list) -> str:
     if not previous_attempts:
         return ""
@@ -1121,5 +1258,10 @@ def _format_previous_attempts(previous_attempts: list) -> str:
         num = att.get("attempt_number", "?")
         strategy = att.get("strategy", "?")
         outcome = att.get("outcome", "?")
-        parts.append(f"  Attempt {num}: strategy={strategy} outcome={outcome}")
+        files = att.get("modified_files") or []
+        extra = f" files={files}" if files else ""
+        parts.append(f"  Attempt {num}: strategy={strategy} outcome={outcome}{extra}")
+        reasoning = att.get("reasoning") or {}
+        if isinstance(reasoning, dict) and reasoning.get("summary"):
+            parts.append(f"    summary: {reasoning['summary']}")
     return "\n".join(parts)

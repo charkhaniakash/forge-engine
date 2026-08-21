@@ -75,6 +75,11 @@ class PlanBody(BaseModel):
 
 # ── Pipeline I/O ─────────────────────────────────────────────────────────────
 
+class WorkingFile(BaseModel):
+    path: str
+    content: str
+
+
 class PlanningRequest(BaseModel):
     work_item_id: str
     repo_id: str
@@ -83,6 +88,8 @@ class PlanningRequest(BaseModel):
     planner_hint: str = "implementation"
     prior_plan_body: dict[str, Any] | None = None   # for re-plans
     refinement_note: str | None = None              # user follow-up to refine the prior plan
+    history: list[dict[str, Any]] | None = None
+    working_tree: list[WorkingFile] = Field(default_factory=list)
     request_id: str
 
 
